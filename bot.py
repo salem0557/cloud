@@ -21,7 +21,7 @@ from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-from scanner import config, engine
+from scanner import config, engine, universe
 from scanner.indicators import FILTERS
 from scanner.state import State
 
@@ -82,34 +82,48 @@ async def broadcast(app: Application, text: str):
 # ------------------------------------------------------------------ scans
 
 async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
+    """Scan batch by batch, pushing each matching stock the moment it's found."""
     if scan_lock.locked():
         log.info("Scan already running; skipping")
         return
     async with scan_lock:
         started = dt.datetime.now(NY)
         log.info("Scan started")
-        matches, stats = await asyncio.to_thread(engine.run_scan)
-        log.info("Scan done: %d matches, stats=%s", len(matches), stats)
+        symbols = await asyncio.to_thread(universe.get_universe)
+        stats = engine.new_stats(len(symbols))
+        matched_symbols: set[str] = set()
+        sent_count = 0
 
-        to_send = state.diff_alerts(matches) if only_changes else matches
+        for batch in engine.make_batches(symbols):
+            matches = await asyncio.to_thread(engine.scan_batch, batch, stats)
+            matched_symbols.update(m.symbol for m in matches)
+            to_send = state.fresh_matches(matches) if only_changes else matches
+            state.record(matches)
+            if to_send:
+                sent_count += len(to_send)
+                header = f"⚡ إشارة فورية — {dt.datetime.now(NY):%H:%M} ET"
+                for chunk in build_messages(header, to_send):
+                    await broadcast(app, chunk)
+                state.save()  # crash-safe: never re-alert what was already sent
+
+        state.prune(matched_symbols)
         state.save()
+        log.info("Scan done: %d matched, %d sent, stats=%s",
+                 len(matched_symbols), sent_count, stats)
 
-        stamp = started.strftime("%H:%M")
-        if not to_send:
-            if notify_empty:
-                await broadcast(
-                    app,
-                    f"🔎 مسح {stamp} ET: لا توجد أسهم جديدة تحقق "
-                    f"{config.FILTERS_REQUIRED}/4 من الفلاتر "
-                    f"({stats['liquid']} سهم مفحوص).",
-                )
-            return
-        kind = "إشارات جديدة/متغيرة" if only_changes else "كل النتائج"
-        header = (f"🔎 *مسح السوق الأمريكي* — {stamp} ET\n"
-                  f"{kind}: {len(to_send)} سهم "
-                  f"(من أصل {stats['liquid']} سهم مفحوص)")
-        for chunk in build_messages(header, to_send):
-            await broadcast(app, chunk)
+        if sent_count == 0 and notify_empty:
+            await broadcast(
+                app,
+                f"🔎 اكتمل المسح ({started:%H:%M} ET): لا توجد أسهم تحقق "
+                f"{config.FILTERS_REQUIRED}/4 من الفلاتر "
+                f"({stats['liquid']} سهم مفحوص).",
+            )
+        elif not only_changes:
+            await broadcast(
+                app,
+                f"✅ اكتمل المسح: {sent_count} سهم مطابق "
+                f"من أصل {stats['liquid']} سهم مفحوص.",
+            )
 
 
 async def hourly_job(context: ContextTypes.DEFAULT_TYPE):
@@ -152,8 +166,9 @@ async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state.subscribers.add(update.effective_chat.id)
     state.save()
     await update.message.reply_text(
-        "🔎 بدأ المسح اليدوي لكل الأسهم الأمريكية... قد يستغرق 15-40 دقيقة، "
-        "سأرسل النتائج كاملة عند الانتهاء."
+        "🔎 بدأ المسح اليدوي لكل الأسهم الأمريكية... "
+        "سأرسل كل سهم مطابق فور اكتشافه، ثم رسالة عند اكتمال المسح "
+        "(المسح الكامل يستغرق 15-40 دقيقة)."
     )
     await do_scan(context.application, only_changes=False, notify_empty=True)
 

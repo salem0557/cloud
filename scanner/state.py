@@ -43,10 +43,19 @@ class State:
                 pass
 
     # ------------------------------------------------------------- dedup
-    def diff_alerts(self, matches) -> list:
-        """Return only matches that are new or whose matched-filter set changed
-        since the last scan, then remember the current scan as the baseline."""
-        fresh = [m for m in matches
-                 if self.last_alerts.get(m.symbol) != m.signature()]
-        self.last_alerts = {m.symbol: m.signature() for m in matches}
-        return fresh
+    # Alerts are streamed batch-by-batch during a scan: fresh_matches picks
+    # what to send now, record remembers it, and prune (at scan end) forgets
+    # symbols that stopped matching so they re-alert if the signal returns.
+
+    def fresh_matches(self, matches) -> list:
+        """Matches that are new or whose matched-filter set changed."""
+        return [m for m in matches
+                if self.last_alerts.get(m.symbol) != m.signature()]
+
+    def record(self, matches):
+        for m in matches:
+            self.last_alerts[m.symbol] = m.signature()
+
+    def prune(self, still_matching: set[str]):
+        self.last_alerts = {s: sig for s, sig in self.last_alerts.items()
+                            if s in still_matching}
