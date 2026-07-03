@@ -44,6 +44,12 @@ WEDGE_MIN_BARS = _int("WEDGE_MIN_BARS", 20)
 FILTERS_REQUIRED = _int("FILTERS_REQUIRED", 3)     # minimum matched filters (out of 4)
 
 # --- Files ---
-STATE_FILE = os.environ.get("STATE_FILE", "state.json")
-UNIVERSE_CACHE = os.environ.get("UNIVERSE_CACHE", "universe.json")
+# On Railway, attaching a volume sets RAILWAY_VOLUME_MOUNT_PATH automatically,
+# so state survives redeploys with no extra configuration.
+DATA_DIR = (os.environ.get("DATA_DIR")
+            or os.environ.get("RAILWAY_VOLUME_MOUNT_PATH")
+            or ".")
+os.makedirs(DATA_DIR, exist_ok=True)
+STATE_FILE = os.environ.get("STATE_FILE", os.path.join(DATA_DIR, "state.json"))
+UNIVERSE_CACHE = os.environ.get("UNIVERSE_CACHE", os.path.join(DATA_DIR, "universe.json"))
 UNIVERSE_MAX_AGE_HOURS = _int("UNIVERSE_MAX_AGE_HOURS", 24)
