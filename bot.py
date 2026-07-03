@@ -113,10 +113,9 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
 
 
 async def hourly_job(context: ContextTypes.DEFAULT_TYPE):
+    # Runs around the clock; outside market hours prices barely move, so the
+    # dedup layer keeps the chat quiet unless something actually changed.
     if not state.subscribers:
-        return
-    if not market_is_open():
-        log.info("Market closed; skipping hourly scan")
         return
     await do_scan(context.application, only_changes=True, notify_empty=False)
 
@@ -128,7 +127,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state.save()
     await update.message.reply_text(
         "أهلاً! ✅ تم تفعيل الاشتراك.\n\n"
-        "سأمسح كل الأسهم الأمريكية كل ساعة أثناء جلسة السوق (فريم الساعة) "
+        "سأمسح كل الأسهم الأمريكية كل ساعة على مدار اليوم (فريم الساعة) "
         "وأرسل لك فقط الأسهم *الجديدة أو المتغيرة* التي تحقق "
         f"{config.FILTERS_REQUIRED} فلاتر من 4:\n"
         "1️⃣ السعر عند الحد السفلي لبولينجر باند\n"
