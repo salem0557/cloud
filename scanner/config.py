@@ -22,6 +22,14 @@ BATCH_SIZE = _int("BATCH_SIZE", 200)               # symbols per yfinance reques
 MIN_PRICE = _float("MIN_PRICE", 2.0)               # USD
 MIN_AVG_VOLUME = _int("MIN_AVG_VOLUME", 30_000)    # avg volume per hourly bar
 
+# --- Crypto ---
+CRYPTO_ENABLED = os.environ.get("CRYPTO_ENABLED", "1") == "1"
+# Coins are priced from cents to thousands of dollars, so liquidity is
+# judged in dollar volume per hourly bar instead of price/share-count.
+MIN_CRYPTO_DOLLAR_VOLUME = _float("MIN_CRYPTO_DOLLAR_VOLUME", 50_000)
+CRYPTO_EXTRA = [s.strip().upper() for s in
+                os.environ.get("CRYPTO_EXTRA", "").split(",") if s.strip()]
+
 # --- Filter parameters ---
 BB_PERIOD = _int("BB_PERIOD", 20)
 BB_STD = _float("BB_STD", 2.0)

@@ -10,6 +10,13 @@ import pandas as pd
 from . import config
 
 
+def fmt_price(p: float) -> str:
+    """189.20$ for stocks, 61,250.00$ for BTC, 0.000012$ for micro-cap coins."""
+    if p >= 1:
+        return f"{p:,.2f}$"
+    return f"{p:.6f}".rstrip("0").rstrip(".") + "$"
+
+
 # ---------------------------------------------------------------- indicators
 
 def rsi(close: pd.Series, period: int = 14) -> pd.Series:
@@ -59,7 +66,7 @@ def check_bollinger_lower(df: pd.DataFrame):
         return False, "بيانات غير كافية"
     touched = (last_close <= last_lower * (1 + config.BB_TOUCH_TOLERANCE)
                or df["Low"].iloc[-1] <= last_lower)
-    return bool(touched), f"الحد السفلي {last_lower:.2f}$"
+    return bool(touched), f"الحد السفلي {fmt_price(last_lower)}"
 
 
 def check_rsi_oversold(df: pd.DataFrame):
@@ -97,7 +104,7 @@ def check_support(df: pd.DataFrame):
         near_above = 0 <= (close - level) / level <= config.SUPPORT_PROXIMITY
         slight_break = 0 <= (level - close) / level <= config.SUPPORT_BREAK_TOL
         if near_above or slight_break:
-            return True, f"دعم عند {level:.2f}$"
+            return True, f"دعم عند {fmt_price(level)}"
     return False, "بعيد عن الدعم"
 
 

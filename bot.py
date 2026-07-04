@@ -22,7 +22,7 @@ from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from scanner import config, engine, universe
-from scanner.indicators import FILTERS
+from scanner.indicators import FILTERS, fmt_price
 from scanner.state import State
 
 logging.basicConfig(
@@ -49,8 +49,15 @@ def market_is_open(now: dt.datetime | None = None) -> bool:
 
 # ------------------------------------------------------------- formatting
 
+KIND_HEADERS = {
+    "stock": "⚡ إشارة فورية — 📈 أسهم أمريكية",
+    "crypto": "⚡ إشارة فورية — 🪙 عملات رقمية",
+}
+
+
 def format_match(m) -> str:
-    lines = [f"*{m.symbol}* — {m.score}/4 — {m.price:.2f}$"]
+    icon = "🪙 " if m.is_crypto else ""
+    lines = [f"{icon}*{m.display_symbol}* — {m.score}/4 — {fmt_price(m.price)}"]
     for key, (name, _) in FILTERS.items():
         mark = "✅" if key in m.matched else "❌"
         lines.append(f"  {mark} {name}: {m.details.get(key, '-')}")
@@ -89,19 +96,25 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
     async with scan_lock:
         started = dt.datetime.now(NY)
         log.info("Scan started")
-        symbols = await asyncio.to_thread(universe.get_universe)
-        stats = engine.new_stats(len(symbols))
+        stock_symbols = await asyncio.to_thread(universe.get_universe)
+        crypto_symbols = universe.get_crypto_universe() if config.CRYPTO_ENABLED else []
+        stats = engine.new_stats(len(stock_symbols) + len(crypto_symbols))
         matched_symbols: set[str] = set()
         sent_count = 0
 
-        for batch in engine.make_batches(symbols):
+        # Crypto first: it is a single quick batch, so those alerts go out
+        # within seconds; stocks and coins are never mixed in one message.
+        plan = [("crypto", batch) for batch in engine.make_batches(crypto_symbols)]
+        plan += [("stock", batch) for batch in engine.make_batches(stock_symbols)]
+
+        for kind, batch in plan:
             matches = await asyncio.to_thread(engine.scan_batch, batch, stats)
             matched_symbols.update(m.symbol for m in matches)
             to_send = state.fresh_matches(matches) if only_changes else matches
             state.record(matches)
             if to_send:
                 sent_count += len(to_send)
-                header = f"⚡ إشارة فورية — {dt.datetime.now(NY):%H:%M} ET"
+                header = f"{KIND_HEADERS[kind]} — {dt.datetime.now(NY):%H:%M} ET"
                 for chunk in build_messages(header, to_send):
                     await broadcast(app, chunk)
                 state.save()  # crash-safe: never re-alert what was already sent
@@ -141,8 +154,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state.save()
     await update.message.reply_text(
         "أهلاً! ✅ تم تفعيل الاشتراك.\n\n"
-        "سأمسح كل الأسهم الأمريكية كل ساعة على مدار اليوم (فريم الساعة) "
-        "وأرسل لك فقط الأسهم *الجديدة أو المتغيرة* التي تحقق "
+        "سأمسح كل الأسهم الأمريكية 📈 وأهم 100 عملة رقمية 🪙 "
+        "كل ساعة على مدار اليوم (فريم الساعة) "
+        "وأرسل لك فقط الإشارات *الجديدة أو المتغيرة* التي تحقق "
         f"{config.FILTERS_REQUIRED} فلاتر من 4:\n"
         "1️⃣ السعر عند الحد السفلي لبولينجر باند\n"
         "2️⃣ RSI أقل من 30 (تشبع بيعي)\n"
@@ -166,8 +180,8 @@ async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state.subscribers.add(update.effective_chat.id)
     state.save()
     await update.message.reply_text(
-        "🔎 بدأ المسح اليدوي لكل الأسهم الأمريكية... "
-        "سأرسل كل سهم مطابق فور اكتشافه، ثم رسالة عند اكتمال المسح "
+        "🔎 بدأ المسح اليدوي (العملات الرقمية أولاً ثم كل الأسهم الأمريكية)... "
+        "سأرسل كل إشارة فور اكتشافها، ثم رسالة عند اكتمال المسح "
         "(المسح الكامل يستغرق 15-40 دقيقة)."
     )
     await do_scan(context.application, only_changes=False, notify_empty=True)

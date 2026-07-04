@@ -19,6 +19,44 @@ log = logging.getLogger(__name__)
 NASDAQ_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
 OTHER_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
 
+# Top cryptocurrencies by market cap, as Yahoo Finance symbols. Curated
+# instead of fetched: Yahoo appends a CoinMarketCap id to coins whose ticker
+# collides with another asset (e.g. Uniswap is UNI7083-USD), so a naive
+# SYMBOL-USD list would silently hit the wrong asset. Unknown symbols simply
+# return no data and are skipped, which is safe. Extend via CRYPTO_EXTRA.
+CRYPTO_SYMBOLS = [
+    # majors
+    "BTC-USD", "ETH-USD", "XRP-USD", "BNB-USD", "SOL-USD", "DOGE-USD",
+    "ADA-USD", "TRX-USD", "AVAX-USD", "LINK-USD", "XLM-USD", "SHIB-USD",
+    "DOT-USD", "HBAR-USD", "BCH-USD", "LTC-USD", "NEAR-USD", "ICP-USD",
+    "AAVE-USD", "ETC-USD", "XMR-USD", "VET-USD", "ATOM-USD", "ALGO-USD",
+    "FIL-USD", "OP-USD", "FET-USD", "INJ-USD", "LDO-USD", "RUNE-USD",
+    "QNT-USD", "EGLD-USD", "FLOW-USD", "XTZ-USD", "CRV-USD", "MKR-USD",
+    "SNX-USD", "COMP-USD", "YFI-USD", "SUSHI-USD", "1INCH-USD", "CAKE-USD",
+    "THETA-USD", "KAVA-USD", "MINA-USD", "AXS-USD", "DYDX-USD", "AR-USD",
+    "ROSE-USD", "CELO-USD", "ANKR-USD", "GALA-USD", "SAND-USD", "MANA-USD",
+    "ENJ-USD", "CHZ-USD", "ZEC-USD", "DASH-USD", "EOS-USD", "NEO-USD",
+    "KSM-USD", "ZIL-USD", "BAT-USD", "IOTA-USD", "UMA-USD", "BAND-USD",
+    "COTI-USD", "OCEAN-USD", "STORJ-USD", "SKL-USD", "GLM-USD", "LRC-USD",
+    # tickers that collide with other assets: Yahoo id-suffixed forms
+    "TON11419-USD",   # Toncoin
+    "UNI7083-USD",    # Uniswap
+    "GRT6719-USD",    # The Graph
+    "PEPE24478-USD",  # Pepe
+    "SUI20947-USD",   # Sui
+    "APT21794-USD",   # Aptos
+    "ARB11841-USD",   # Arbitrum
+    "IMX10603-USD",   # Immutable
+    "STX4847-USD",    # Stacks
+    "SEI23149-USD",   # Sei
+    "TIA22861-USD",   # Celestia
+    "TAO22974-USD",   # Bittensor
+    "BONK23095-USD",  # Bonk
+    "FLOKI10804-USD", # Floki
+    "MNT27075-USD",   # Mantle
+    "BEAM28298-USD",  # Beam
+]
+
 
 def _fetch_file(url: str) -> pd.DataFrame:
     resp = requests.get(url, timeout=60)
@@ -50,6 +88,12 @@ def fetch_universe() -> list[str]:
     symbols = sorted(set(_clean(nasdaq["Symbol"]) + _clean(other["ACT Symbol"])))
     log.info("Universe: %d symbols", len(symbols))
     return symbols
+
+
+def get_crypto_universe() -> list[str]:
+    """Top coins (Yahoo symbols) plus any user-added CRYPTO_EXTRA symbols."""
+    extra = [s if s.endswith("-USD") else f"{s}-USD" for s in config.CRYPTO_EXTRA]
+    return sorted(set(CRYPTO_SYMBOLS + extra))
 
 
 def get_universe() -> list[str]:
