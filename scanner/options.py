@@ -8,13 +8,20 @@ bid/ask spread — then presents them cheapest-premium first.
 import datetime as dt
 import logging
 import math
+import re
 import time
 
+import requests
 import yfinance as yf
 
 from . import config
 
 log = logging.getLogger(__name__)
+
+# Fallback provider: CBOE publishes full delayed option chains (all expiries
+# in ONE request) with no API key. Independent of Yahoo, so it keeps working
+# when our scan traffic gets Yahoo's options endpoint rate-limited.
+CBOE_URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/{symbol}.json"
 
 
 class OptionsFetchError(Exception):
@@ -32,7 +39,7 @@ def _expiries_with_retry(ticker, symbol: str) -> list[str]:
     an empty expiry list for stocks that do have options (e.g. DDD); retry
     before concluding anything, and raise on persistent failure."""
     last_exc = None
-    for attempt in range(3):
+    for attempt in range(2):
         try:
             expiries = list(ticker.options or [])
             if expiries:
@@ -40,7 +47,8 @@ def _expiries_with_retry(ticker, symbol: str) -> list[str]:
             last_exc = None  # clean empty answer
         except Exception as exc:
             last_exc = exc
-        time.sleep(2 * (attempt + 1))
+        if attempt == 0:
+            time.sleep(2)
     if last_exc is not None:
         raise OptionsFetchError(symbol) from last_exc
     return []
@@ -82,24 +90,30 @@ def _score(row, spot: float):
     return score, premium, estimated
 
 
-def best_options(symbol: str, spot: float) -> dict[str, list[dict]]:
-    """{'call': [top picks cheapest-first], 'put': [...]}.
+def _add_candidate(candidates, side, row, spot, expiry, days):
+    scored = _score(row, spot)
+    if scored is None:
+        return
+    score, premium, estimated = scored
+    candidates[side].append({
+        "strike": float(row["strike"]),
+        "expiry": expiry,
+        "days": days,
+        "premium": round(premium, 2),
+        "estimated": estimated,
+        "score": score,
+        "activity": int(row.get("openInterest") or 0)
+                    + int(row.get("volume") or 0),
+    })
 
-    Empty lists mean the stock genuinely has no suitable contracts; a fetch
-    problem raises OptionsFetchError instead so the caller can say so.
-    """
-    out = {"call": [], "put": []}
-    if _no_options.get(symbol, 0) > time.time() - NO_OPTIONS_TTL:
-        return out
+
+def _yahoo_candidates(symbol, spot, today, cutoff):
+    """Provider 1. Returns (candidates, has_options); raises OptionsFetchError."""
     ticker = yf.Ticker(symbol)
     expiries = _expiries_with_retry(ticker, symbol)
     if not expiries:
-        _no_options[symbol] = time.time()
-        log.info("%s has no listed options (confirmed after retries)", symbol)
-        return out
+        return {"call": [], "put": []}, False
 
-    today = dt.date.today()
-    cutoff = today + dt.timedelta(weeks=config.OPTIONS_MAX_WEEKS)
     upcoming = []
     for exp in expiries:
         try:
@@ -122,30 +136,96 @@ def best_options(symbol: str, spot: float) -> dict[str, list[dict]]:
                 if attempt == 0:
                     time.sleep(2)
         if chain is None:
-            log.warning("Option chain fetch failed: %s %s", symbol, exp)
+            log.warning("Yahoo option chain failed: %s %s", symbol, exp)
             continue
         fetched += 1
         for side, df in (("call", chain.calls), ("put", chain.puts)):
             for _, row in df.iterrows():
-                scored = _score(row, spot)
-                if scored is None:
-                    continue
-                score, premium, estimated = scored
-                candidates[side].append({
-                    "strike": float(row["strike"]),
-                    "expiry": exp,
-                    "days": days,
-                    "premium": round(premium, 2),
-                    "estimated": estimated,
-                    "score": score,
-                    "activity": int(row.get("openInterest") or 0)
-                                + int(row.get("volume") or 0),
-                })
+                _add_candidate(candidates, side, row, spot, exp, days)
 
     if upcoming and fetched == 0:
         raise OptionsFetchError(symbol)
+    return candidates, True
 
-    for side, rows in candidates.items():
-        top = sorted(rows, key=lambda c: -c["score"])[:config.OPTIONS_TOP_N]
-        out[side] = sorted(top, key=lambda c: c["premium"])
+
+def _cboe_candidates(symbol, spot, today, cutoff):
+    """Provider 2 (fallback): whole chain in one keyless request from CBOE."""
+    try:
+        resp = requests.get(CBOE_URL.format(symbol=symbol.upper()), timeout=20,
+                            headers={"User-Agent": "Mozilla/5.0"})
+        if resp.status_code == 404:
+            return {"call": [], "put": []}, False  # not an optionable symbol
+        resp.raise_for_status()
+        contracts = resp.json()["data"].get("options") or []
+    except OptionsFetchError:
+        raise
+    except Exception as exc:
+        raise OptionsFetchError(symbol) from exc
+    if not contracts:
+        return {"call": [], "put": []}, False
+
+    # Contract names look like DDD261218C00005000: yymmdd, C/P, strike*1000
+    pat = re.compile(rf"^{re.escape(symbol.upper())}(\d{{6}})([CP])(\d{{8}})$")
+    candidates = {"call": [], "put": []}
+    for c in contracts:
+        m = pat.match(c.get("option", ""))
+        if not m:
+            continue
+        try:
+            exp_date = dt.datetime.strptime(m.group(1), "%y%m%d").date()
+        except ValueError:
+            continue
+        if not today <= exp_date <= cutoff:
+            continue
+        side = "call" if m.group(2) == "C" else "put"
+        row = {
+            "strike": int(m.group(3)) / 1000,
+            "bid": c.get("bid"),
+            "ask": c.get("ask"),
+            "lastPrice": c.get("last_trade_price"),
+            "openInterest": c.get("open_interest"),
+            "volume": c.get("volume"),
+        }
+        _add_candidate(candidates, side, row, spot,
+                       exp_date.isoformat(), (exp_date - today).days)
+    return candidates, True
+
+
+def best_options(symbol: str, spot: float) -> dict[str, list[dict]]:
+    """{'call': [top picks cheapest-first], 'put': [...]}.
+
+    Tries Yahoo first, then CBOE's free delayed chain as an independent
+    fallback. Empty lists mean the stock genuinely has no suitable
+    contracts; OptionsFetchError means both providers failed.
+    """
+    out = {"call": [], "put": []}
+    if _no_options.get(symbol, 0) > time.time() - NO_OPTIONS_TTL:
+        return out
+
+    today = dt.date.today()
+    cutoff = today + dt.timedelta(weeks=config.OPTIONS_MAX_WEEKS)
+    providers = (_yahoo_candidates, _cboe_candidates)
+    last_error = None
+    failures = 0
+    for provider in providers:
+        try:
+            candidates, has_options = provider(symbol, spot, today, cutoff)
+        except OptionsFetchError as exc:
+            log.warning("Options provider %s failed for %s",
+                        provider.__name__, symbol)
+            last_error = exc
+            failures += 1
+            continue
+        if has_options:
+            for side, rows in candidates.items():
+                top = sorted(rows, key=lambda c: -c["score"])[:config.OPTIONS_TOP_N]
+                out[side] = sorted(top, key=lambda c: c["premium"])
+            return out
+        # This provider cleanly reports no options; ask the next one to
+        # confirm — a throttled Yahoo sometimes answers with emptiness.
+
+    if failures == len(providers):
+        raise last_error
+    _no_options[symbol] = time.time()
+    log.info("%s has no listed options", symbol)
     return out
