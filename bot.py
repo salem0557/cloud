@@ -1,4 +1,4 @@
-"""Telegram bot: hourly scanner for US stocks.
+"""Telegram bot: continuous scanner for US stocks and top cryptocurrencies.
 
 Filters (a stock is reported when >= FILTERS_REQUIRED of them match):
   1. Price at the lower Bollinger Band
@@ -140,9 +140,11 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
             await broadcast(app, f"✅ اكتمل المسح:\n{breakdown}")
 
 
-async def hourly_job(context: ContextTypes.DEFAULT_TYPE):
-    # Runs around the clock; outside market hours prices barely move, so the
-    # dedup layer keeps the chat quiet unless something actually changed.
+async def scan_loop_job(context: ContextTypes.DEFAULT_TYPE):
+    # Continuous scanning: this job ticks frequently, and do_scan's lock makes
+    # each tick a no-op while a cycle is still running — so a new cycle starts
+    # within SCAN_PAUSE_SECONDS of the previous one finishing. The dedup layer
+    # ensures only new or changed signals are ever sent.
     if not state.subscribers:
         return
     await do_scan(context.application, only_changes=True, notify_empty=False)
@@ -156,7 +158,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "أهلاً! ✅ تم تفعيل الاشتراك.\n\n"
         "سأمسح كل الأسهم الأمريكية 📈 وأهم 100 عملة رقمية 🪙 "
-        "كل ساعة على مدار اليوم (فريم الساعة) "
+        "بشكل متواصل على مدار اليوم (فريم الساعة): فور انتهاء الدورة تبدأ التالية، "
         "وأرسل لك فقط الإشارات *الجديدة أو المتغيرة* التي تحقق "
         f"{config.FILTERS_REQUIRED} فلاتر من 4:\n"
         "1️⃣ السعر عند الحد السفلي لبولينجر باند\n"
@@ -213,7 +215,8 @@ def main():
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("scan", cmd_scan))
     app.add_handler(CommandHandler("status", cmd_status))
-    app.job_queue.run_repeating(hourly_job, interval=3600, first=30)
+    app.job_queue.run_repeating(scan_loop_job,
+                                interval=config.SCAN_PAUSE_SECONDS, first=10)
     log.info("Bot starting (polling)")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 

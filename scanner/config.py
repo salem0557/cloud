@@ -17,6 +17,7 @@ BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 INTERVAL = os.environ.get("SCAN_INTERVAL", "1h")   # candle timeframe
 PERIOD = os.environ.get("SCAN_PERIOD", "3mo")      # history depth per symbol
 BATCH_SIZE = _int("BATCH_SIZE", 200)               # symbols per yfinance request
+SCAN_PAUSE_SECONDS = _int("SCAN_PAUSE_SECONDS", 60)  # breather between cycles
 
 # --- Liquidity pre-filter (skip dead/penny stocks) ---
 MIN_PRICE = _float("MIN_PRICE", 2.0)               # USD
