@@ -23,7 +23,7 @@ from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-from scanner import config, engine, universe
+from scanner import config, engine, options, universe
 from scanner.indicators import FILTERS, fmt_price
 from scanner.state import State
 from scanner.throttle import Throttle
@@ -67,7 +67,45 @@ def format_match(m) -> str:
     for key, (name, _) in FILTERS.items():
         mark = "✅" if key in m.matched else "❌"
         lines.append(f"  {mark} {name}: {m.details.get(key, '-')}")
+    if m.options_text:
+        lines.append(m.options_text)
     return "\n".join(lines)
+
+
+SIDE_LABELS = {"call": "🟢📈 CALL", "put": "🔴📉 PUT"}
+
+
+def format_options(picks: dict) -> str:
+    """Best-contracts block: top picks per side, cheapest premium first."""
+    if not picks or not (picks.get("call") or picks.get("put")):
+        return ""
+    lines = ["  📊 أفضل عقود الأوبشنز (الأرخص أولاً):"]
+    for side in ("call", "put"):
+        contracts = picks.get(side) or []
+        if not contracts:
+            continue
+        lines.append(f"  {SIDE_LABELS[side]}:")
+        for i, c in enumerate(contracts, 1):
+            lines.append(
+                f"    {i}) تنفيذ {c['strike']:.2f}$ • ينتهي {c['expiry']}"
+                f" ({c['days']} يوم) • بريميوم {c['premium']:.2f}$"
+                f" = {c['premium'] * 100:.0f}$/عقد"
+            )
+    return "\n".join(lines)
+
+
+async def attach_options(matches):
+    """Fill options_text on stock matches (coins have no listed options)."""
+    if not config.OPTIONS_ENABLED:
+        return
+    for m in matches:
+        if m.is_crypto or m.options_text:
+            continue
+        try:
+            picks = await asyncio.to_thread(options.best_options, m.symbol, m.price)
+            m.options_text = format_options(picks)
+        except Exception:
+            log.exception("Options lookup failed for %s", m.symbol)
 
 
 def build_messages(header: str, matches) -> list[str]:
@@ -95,6 +133,8 @@ async def broadcast(app: Application, text: str):
 # ------------------------------------------------------------------ scans
 
 async def send_matches(app, kind: str, to_send, hot: bool = False):
+    if kind == "stock":
+        await attach_options(to_send)
     flame = "🔥 " if hot else ""
     header = f"{flame}{KIND_HEADERS[kind]} — {dt.datetime.now(NY):%H:%M} ET"
     for chunk in build_messages(header, to_send):

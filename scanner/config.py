@@ -78,6 +78,14 @@ HOTLIST_MAX = _int("HOTLIST_MAX", 300)                 # safety cap per fast pas
 # --- Adaptive throttle (temporary: backs off on Yahoo rejections, recovers) ---
 THROTTLE_MAX_DELAY = _float("THROTTLE_MAX_DELAY", 600)  # seconds between batches
 
+# --- Options picks (attached to each alerted stock) ---
+OPTIONS_ENABLED = os.environ.get("OPTIONS_ENABLED", "1") == "1"
+OPTIONS_MAX_WEEKS = _int("OPTIONS_MAX_WEEKS", 6)      # nearest expiry .. 6 weeks
+OPTIONS_MAX_EXPIRIES = _int("OPTIONS_MAX_EXPIRIES", 4)  # chain requests per stock
+OPTIONS_TOP_N = _int("OPTIONS_TOP_N", 3)              # picks per side (call/put)
+OPTIONS_MIN_ACTIVITY = _int("OPTIONS_MIN_ACTIVITY", 20)  # min OI+volume per contract
+OPTIONS_MONEYNESS_WINDOW = _float("OPTIONS_MONEYNESS_WINDOW", 0.25)  # strike within 25% of spot
+
 # --- Alerting ---
 FILTERS_REQUIRED = _int("FILTERS_REQUIRED", 3)     # minimum matched filters (out of 4)
 ALERT_MEMORY_HOURS = _int("ALERT_MEMORY_HOURS", 24)  # identical alert not resent unless

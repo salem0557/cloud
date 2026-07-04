@@ -19,6 +19,7 @@ class Match:
     price: float
     matched: list[str]                     # filter keys that passed
     details: dict[str, str] = field(default_factory=dict)
+    options_text: str = ""                 # best-contracts block, filled at send time
 
     @property
     def score(self) -> int:
