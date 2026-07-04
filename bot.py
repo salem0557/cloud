@@ -161,6 +161,10 @@ async def attach_options(matches):
             picks = await asyncio.to_thread(options.best_options, m.symbol, m.price)
             m.options_text = (format_options(picks)
                               or "  📊 لا تتوفر عقود أوبشنز سائلة لهذا السهم")
+        except options.OptionsFetchError:
+            log.warning("Options fetch failed for %s (rate limit?)", m.symbol)
+            m.options_text = ("  📊 تعذر جلب عقود الأوبشنز مؤقتاً "
+                              "(ضغط على مزود البيانات)")
         except Exception:
             log.exception("Options lookup failed for %s", m.symbol)
 

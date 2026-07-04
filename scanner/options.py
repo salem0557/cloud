@@ -8,12 +8,42 @@ bid/ask spread — then presents them cheapest-premium first.
 import datetime as dt
 import logging
 import math
+import time
 
 import yfinance as yf
 
 from . import config
 
 log = logging.getLogger(__name__)
+
+
+class OptionsFetchError(Exception):
+    """Yahoo could not be reached/answered — distinct from 'no options exist'."""
+
+
+# Symbols confirmed (after retries) to have no listed options; re-checked
+# after a few hours so a fetch glitch can't mislabel a stock for long.
+_no_options: dict[str, float] = {}
+NO_OPTIONS_TTL = 6 * 3600
+
+
+def _expiries_with_retry(ticker, symbol: str) -> list[str]:
+    """Yahoo rate-limiting right after a scan burst often returns errors or
+    an empty expiry list for stocks that do have options (e.g. DDD); retry
+    before concluding anything, and raise on persistent failure."""
+    last_exc = None
+    for attempt in range(3):
+        try:
+            expiries = list(ticker.options or [])
+            if expiries:
+                return expiries
+            last_exc = None  # clean empty answer
+        except Exception as exc:
+            last_exc = exc
+        time.sleep(2 * (attempt + 1))
+    if last_exc is not None:
+        raise OptionsFetchError(symbol) from last_exc
+    return []
 
 
 def _score(row, spot: float):
@@ -53,13 +83,19 @@ def _score(row, spot: float):
 
 
 def best_options(symbol: str, spot: float) -> dict[str, list[dict]]:
-    """{'call': [top picks cheapest-first], 'put': [...]}; empty lists on failure."""
+    """{'call': [top picks cheapest-first], 'put': [...]}.
+
+    Empty lists mean the stock genuinely has no suitable contracts; a fetch
+    problem raises OptionsFetchError instead so the caller can say so.
+    """
     out = {"call": [], "put": []}
-    try:
-        ticker = yf.Ticker(symbol)
-        expiries = list(ticker.options or [])
-    except Exception:
-        log.warning("No options data for %s", symbol)
+    if _no_options.get(symbol, 0) > time.time() - NO_OPTIONS_TTL:
+        return out
+    ticker = yf.Ticker(symbol)
+    expiries = _expiries_with_retry(ticker, symbol)
+    if not expiries:
+        _no_options[symbol] = time.time()
+        log.info("%s has no listed options (confirmed after retries)", symbol)
         return out
 
     today = dt.date.today()
@@ -75,12 +111,20 @@ def best_options(symbol: str, spot: float) -> dict[str, list[dict]]:
     upcoming = upcoming[:config.OPTIONS_MAX_EXPIRIES]
 
     candidates = {"call": [], "put": []}
+    fetched = 0
     for exp, days in upcoming:
-        try:
-            chain = ticker.option_chain(exp)
-        except Exception:
+        chain = None
+        for attempt in range(2):
+            try:
+                chain = ticker.option_chain(exp)
+                break
+            except Exception:
+                if attempt == 0:
+                    time.sleep(2)
+        if chain is None:
             log.warning("Option chain fetch failed: %s %s", symbol, exp)
             continue
+        fetched += 1
         for side, df in (("call", chain.calls), ("put", chain.puts)):
             for _, row in df.iterrows():
                 scored = _score(row, spot)
@@ -97,6 +141,9 @@ def best_options(symbol: str, spot: float) -> dict[str, list[dict]]:
                     "activity": int(row.get("openInterest") or 0)
                                 + int(row.get("volume") or 0),
                 })
+
+    if upcoming and fetched == 0:
+        raise OptionsFetchError(symbol)
 
     for side, rows in candidates.items():
         top = sorted(rows, key=lambda c: -c["score"])[:config.OPTIONS_TOP_N]
