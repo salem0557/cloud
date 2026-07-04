@@ -1,13 +1,28 @@
 """Central configuration, overridable via environment variables."""
+import logging
 import os
+
+log = logging.getLogger(__name__)
 
 
 def _int(name: str, default: int) -> int:
-    return int(os.environ.get(name, default))
+    # A malformed env value (e.g. "@username" in ADMIN_CHAT_ID) must not
+    # crash the whole bot — warn loudly and fall back to the default.
+    try:
+        return int(os.environ.get(name, default))
+    except ValueError:
+        log.error("Env %s=%r is not a number; using default %r",
+                  name, os.environ.get(name), default)
+        return default
 
 
 def _float(name: str, default: float) -> float:
-    return float(os.environ.get(name, default))
+    try:
+        return float(os.environ.get(name, default))
+    except ValueError:
+        log.error("Env %s=%r is not a number; using default %r",
+                  name, os.environ.get(name), default)
+        return default
 
 
 # --- Telegram ---
