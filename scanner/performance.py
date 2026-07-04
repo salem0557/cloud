@@ -152,6 +152,21 @@ def resolve_due():
     _save(data)
 
 
+def compact_summary() -> str | None:
+    """One-line blurb for embedding directly in every alert (the full
+    breakdown lives in the dedicated /performance command). Withheld until
+    a horizon has at least PERFORMANCE_MIN_SAMPLE resolved signals, so a
+    lucky early streak doesn't get advertised as a real track record."""
+    data = _load()
+    for h in sorted(data["summary"], key=int):
+        b = data["summary"][h]
+        if b["count"] >= config.PERFORMANCE_MIN_SAMPLE:
+            win_rate = b["wins"] / b["count"] * 100
+            return (f"📊 سجل الأداء: تفوق على السوق في {win_rate:.0f}% من آخر "
+                    f"{b['count']} إشارة (بعد {h} ساعة) — التفاصيل: /performance")
+    return None
+
+
 def summary_text() -> str:
     """Human-readable (Arabic) track record for the /performance command."""
     data = _load()

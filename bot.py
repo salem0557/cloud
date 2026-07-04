@@ -31,7 +31,7 @@ from telegram.constants import ParseMode
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes)
 
-from scanner import chart, config, engine, market_calendar, options, performance, universe
+from scanner import chart, config, engine, market_calendar, options, performance, sentiment, universe
 from scanner.indicators import FILTERS, fmt_price
 from scanner.state import State
 from scanner.throttle import Throttle
@@ -148,6 +148,8 @@ def format_match(m) -> str:
         lines.append(f"  {mark} {name}: {m.details.get(key, '-')}")
     if m.options_text:
         lines.append(m.options_text)
+    if m.sentiment_text:
+        lines.append(f"  💬 وجهة نظر البوت (ملخص لما يُتداول من أخبار وآراء):\n  {m.sentiment_text}")
     return "\n".join(lines)
 
 
@@ -193,6 +195,24 @@ async def attach_options(matches):
         except Exception:
             log.exception("Options lookup failed for %s", m.symbol)
             m.options_text = no_options_line
+
+
+async def attach_sentiment(matches):
+    """Fill sentiment_text on each match: news + StockTwits merged into one
+    short paragraph by Gemini. Silently skipped (no key, no data, or the
+    call failing) — never blocks the rest of the alert."""
+    if not config.SENTIMENT_ENABLED or not config.GEMINI_API_KEY:
+        return
+    for m in matches:
+        if m.sentiment_text:
+            continue
+        try:
+            summary = await asyncio.to_thread(sentiment.get_sentiment_summary, m.symbol)
+        except Exception:
+            log.exception("Sentiment summary failed for %s", m.symbol)
+            summary = None
+        if summary:
+            m.sentiment_text = summary
 
 
 CHART_CAPTION_LIMIT = 1024  # Telegram's hard cap on photo captions
@@ -278,11 +298,15 @@ async def send_matches(app, to_send, hot: bool = False):
     """
     await attach_options(to_send)
     await attach_charts(to_send)
+    await attach_sentiment(to_send)
     await asyncio.to_thread(performance.track_alerts, to_send)
+    perf_line = await asyncio.to_thread(performance.compact_summary)
     flame = "🔥 " if hot else ""
     header = f"{flame}{ALERT_HEADER} — {dt.datetime.now(NY):%H:%M} ET"
     for m in to_send:
         text = f"{header}\n\n{format_match(m)}\n\n{ALERT_FOOTER}"
+        if perf_line:
+            text += f"\n{perf_line}"
         if not m.chart_png:
             await broadcast(app, text)
         elif len(text) <= CHART_CAPTION_LIMIT:

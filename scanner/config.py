@@ -126,6 +126,20 @@ def _int_list(name: str, default: str) -> list[int]:
 
 PERFORMANCE_HORIZONS_HOURS = _int_list("PERFORMANCE_HORIZONS_HOURS", "24,72")
 PERFORMANCE_CHECK_INTERVAL_SECONDS = _int("PERFORMANCE_CHECK_INTERVAL_SECONDS", 1800)
+# Below this many resolved signals for a horizon, the one-line summary is
+# withheld from alerts (a "100% win rate" off 1 signal is misleading).
+PERFORMANCE_MIN_SAMPLE = _int("PERFORMANCE_MIN_SAMPLE", 5)
+
+# --- "وجهة نظر البوت": news headlines + StockTwits chatter merged into one
+# --- short paragraph by a single cheap Gemini call per alert. Pure
+# --- consolidation of external sources, not the bot's own analysis. Both
+# --- data sources are free/keyless; only the summarization call needs a key.
+SENTIMENT_ENABLED = os.environ.get("SENTIMENT_ENABLED", "1") == "1"
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+SENTIMENT_NEWS_LIMIT = _int("SENTIMENT_NEWS_LIMIT", 5)
+SENTIMENT_SOCIAL_LIMIT = _int("SENTIMENT_SOCIAL_LIMIT", 20)
+SENTIMENT_MAX_CHARS = _int("SENTIMENT_MAX_CHARS", 500)
 
 # --- Files ---
 # On Railway, attaching a volume sets RAILWAY_VOLUME_MOUNT_PATH automatically,
