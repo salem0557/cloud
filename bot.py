@@ -157,16 +157,16 @@ async def attach_options(matches):
     for m in matches:
         if m.is_crypto or m.options_text:
             continue
+        no_options_line = "  📊 لا يوجد أوبشن لهذا السهم"
         try:
             picks = await asyncio.to_thread(options.best_options, m.symbol, m.price)
-            m.options_text = (format_options(picks)
-                              or "  📊 لا تتوفر عقود أوبشنز سائلة لهذا السهم")
+            m.options_text = format_options(picks) or no_options_line
         except options.OptionsFetchError:
-            log.warning("Options fetch failed for %s (rate limit?)", m.symbol)
-            m.options_text = ("  📊 تعذر جلب عقود الأوبشنز مؤقتاً "
-                              "(ضغط على مزود البيانات)")
+            log.warning("Options fetch failed for %s (both providers)", m.symbol)
+            m.options_text = no_options_line
         except Exception:
             log.exception("Options lookup failed for %s", m.symbol)
+            m.options_text = no_options_line
 
 
 def build_messages(header: str, matches) -> list[str]:
