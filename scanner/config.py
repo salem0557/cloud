@@ -115,6 +115,18 @@ FILTERS_REQUIRED = _int("FILTERS_REQUIRED", 3)     # minimum matched filters (ou
 ALERT_MEMORY_HOURS = _int("ALERT_MEMORY_HOURS", 24)  # identical alert not resent unless
                                                      # its signal was gone this long
 
+# --- Performance tracking: each alert's return vs SPY over fixed horizons,
+# --- building a real track record (pure price math, no LLM/extra cost) ---
+PERFORMANCE_ENABLED = os.environ.get("PERFORMANCE_ENABLED", "1") == "1"
+
+
+def _int_list(name: str, default: str) -> list[int]:
+    return [int(x.strip()) for x in os.environ.get(name, default).split(",") if x.strip()]
+
+
+PERFORMANCE_HORIZONS_HOURS = _int_list("PERFORMANCE_HORIZONS_HOURS", "24,72")
+PERFORMANCE_CHECK_INTERVAL_SECONDS = _int("PERFORMANCE_CHECK_INTERVAL_SECONDS", 1800)
+
 # --- Files ---
 # On Railway, attaching a volume sets RAILWAY_VOLUME_MOUNT_PATH automatically,
 # so state survives redeploys with no extra configuration.
@@ -126,3 +138,4 @@ STATE_FILE = os.environ.get("STATE_FILE", os.path.join(DATA_DIR, "state.json"))
 UNIVERSE_CACHE = os.environ.get("UNIVERSE_CACHE", os.path.join(DATA_DIR, "universe.json"))
 QUALIFIED_FILE = os.environ.get("QUALIFIED_FILE", os.path.join(DATA_DIR, "qualified.json"))
 UNIVERSE_MAX_AGE_HOURS = _int("UNIVERSE_MAX_AGE_HOURS", 24)
+PERFORMANCE_FILE = os.environ.get("PERFORMANCE_FILE", os.path.join(DATA_DIR, "performance.json"))

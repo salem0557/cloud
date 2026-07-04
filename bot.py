@@ -31,7 +31,7 @@ from telegram.constants import ParseMode
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes)
 
-from scanner import chart, config, engine, market_calendar, options, universe
+from scanner import chart, config, engine, market_calendar, options, performance, universe
 from scanner.indicators import FILTERS, fmt_price
 from scanner.state import State
 from scanner.throttle import Throttle
@@ -278,6 +278,7 @@ async def send_matches(app, to_send, hot: bool = False):
     """
     await attach_options(to_send)
     await attach_charts(to_send)
+    await asyncio.to_thread(performance.track_alerts, to_send)
     flame = "🔥 " if hot else ""
     header = f"{flame}{ALERT_HEADER} — {dt.datetime.now(NY):%H:%M} ET"
     for m in to_send:
@@ -399,6 +400,12 @@ async def scan_loop_job(context: ContextTypes.DEFAULT_TYPE):
     delay = (config.NIGHT_SCAN_PAUSE_SECONDS if market_calendar.is_night_hours()
              else config.SCAN_PAUSE_SECONDS)
     context.application.job_queue.run_once(scan_loop_job, when=delay)
+
+
+async def performance_job(context: ContextTypes.DEFAULT_TYPE):
+    """Settle any due performance checks (pure price lookups, cheap and
+    independent of subscriber count or market hours)."""
+    await asyncio.to_thread(performance.resolve_due)
 
 
 # --------------------------------------------------------------- commands
@@ -613,6 +620,12 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def cmd_performance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Public track record: each alert's return vs SPY (pure price math)."""
+    text = await asyncio.to_thread(performance.summary_text)
+    await update.message.reply_text(text)
+
+
 async def on_error(update, context: ContextTypes.DEFAULT_TYPE):
     log.error("Unhandled error", exc_info=context.error)
 
@@ -622,6 +635,7 @@ PUBLIC_COMMANDS = [
     BotCommand("scan", "مسح فوري لكل السوق"),
     BotCommand("status", "حالة البوت واشتراكك"),
     BotCommand("disclaimer", "عرض إخلاء المسؤولية"),
+    BotCommand("performance", "سجل أداء الإشارات مقابل السوق"),
     BotCommand("stop", "إيقاف التنبيهات"),
 ]
 ADMIN_COMMANDS = PUBLIC_COMMANDS + [
@@ -662,11 +676,14 @@ def main():
     app.add_handler(CommandHandler("revoke", cmd_revoke))
     app.add_handler(CommandHandler("subs", cmd_subs))
     app.add_handler(CommandHandler("reset", cmd_reset))
+    app.add_handler(CommandHandler("performance", cmd_performance))
     app.add_handler(CallbackQueryHandler(on_accept, pattern="^accept_disclaimer$"))
     # Self-rescheduling jobs (see scan_loop_job/hot_job) so the pace can
     # widen at night; just kick off the first run of each here.
     app.job_queue.run_once(scan_loop_job, when=10)
     app.job_queue.run_once(hot_job, when=90)
+    app.job_queue.run_repeating(performance_job,
+                                interval=config.PERFORMANCE_CHECK_INTERVAL_SECONDS, first=120)
     log.info("Bot starting (polling)")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
