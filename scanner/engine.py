@@ -100,6 +100,15 @@ def scan_batch(batch: list[str], stats: dict) -> BatchResult:
     return result
 
 
+def scan_batch_task(batch: list[str]) -> tuple[BatchResult, dict]:
+    """Self-contained batch scan for a worker process: pandas/yfinance memory
+    accumulates in the parent otherwise (container OOM'd around 950MB), so
+    batches run in a recycled subprocess that gives memory back to the OS."""
+    stats = new_stats(len(batch))
+    result = scan_batch(batch, stats)
+    return result, stats
+
+
 def make_batches(symbols: list[str]) -> list[list[str]]:
     return [symbols[i:i + config.BATCH_SIZE]
             for i in range(0, len(symbols), config.BATCH_SIZE)]

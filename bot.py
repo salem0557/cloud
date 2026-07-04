@@ -9,9 +9,11 @@ Filters (a stock is reported when >= FILTERS_REQUIRED of them match):
 Run:  TELEGRAM_BOT_TOKEN=xxx python bot.py
 """
 import asyncio
+import concurrent.futures
 import datetime as dt
 import gc
 import logging
+import multiprocessing
 import os
 import resource
 from zoneinfo import ZoneInfo
@@ -47,6 +49,32 @@ scan_lock = asyncio.Lock()
 hot_lock = asyncio.Lock()
 throttle = Throttle()
 hotlist: set[str] = set()  # near-signal symbols, rebuilt every full cycle
+
+# Batches run in a single recycled worker process ("spawn" to stay safe with
+# the bot's own threads): pandas/yfinance memory otherwise accumulates in the
+# main process until the container is OOM-killed.
+_scan_pool = None
+
+
+def _get_scan_pool():
+    global _scan_pool
+    if _scan_pool is None:
+        _scan_pool = concurrent.futures.ProcessPoolExecutor(
+            max_workers=1, max_tasks_per_child=40,
+            mp_context=multiprocessing.get_context("spawn"))
+    return _scan_pool
+
+
+async def scan_batch_async(batch):
+    """Run one batch in the worker process; returns (BatchResult, stats)."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_get_scan_pool(),
+                                      engine.scan_batch_task, batch)
+
+
+def merge_stats(target: dict, delta: dict):
+    for key in ("with_data", "liquid", "errors"):
+        target[key] += delta[key]
 
 
 def market_is_open(now: dt.datetime | None = None) -> bool:
@@ -244,7 +272,8 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
         plan += [("stock", batch) for batch in engine.make_batches(stock_symbols)]
 
         for kind, batch in plan:
-            result = await asyncio.to_thread(engine.scan_batch, batch, kstats[kind])
+            result, delta = await scan_batch_async(batch)
+            merge_stats(kstats[kind], delta)
             matched[kind] += len(result.matches)
             new_hot.update(result.hot)
             if kind == "stock":
@@ -294,9 +323,8 @@ async def do_hot_scan(app: Application):
         return  # Yahoo is pushing back; don't add fast-lane pressure
     async with hot_lock:
         symbols = sorted(hotlist)[:config.HOTLIST_MAX]
-        stats = engine.new_stats(len(symbols))
         for batch in engine.make_batches(symbols):
-            result = await asyncio.to_thread(engine.scan_batch, batch, stats)
+            result, _ = await scan_batch_async(batch)
             throttle.report(result.data_ratio)
             to_send = state.fresh_matches(result.matches)
             if not to_send:
