@@ -12,6 +12,7 @@ import asyncio
 import datetime as dt
 import gc
 import logging
+import os
 import resource
 from zoneinfo import ZoneInfo
 
@@ -457,6 +458,27 @@ async def cmd_revoke(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🚫 أُلغي اشتراك {target}")
 
 
+async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/reset — wipe scan memory (dedup + hot list + qualified list) so the
+    next cycle is a fresh full pass and everything alerts again (admin)."""
+    global hotlist
+    if not is_admin(update.effective_chat.id):
+        return
+    state.last_alerts = {}
+    state.save()
+    hotlist = set()
+    try:
+        os.remove(config.QUALIFIED_FILE)
+    except FileNotFoundError:
+        pass
+    await update.message.reply_text(
+        "🧹 مُسحت ذاكرة المسح بالكامل (التنبيهات السابقة + القائمة الساخنة + "
+        "القائمة المؤهلة).\nالدورة القادمة ستكون دورة كاملة على كل الأسهم "
+        "وستصلك كل الإشارات الحالية من جديد خلال دقائق. "
+        "المشتركون وموافقاتهم لم يتأثروا.")
+    log.info("Scan memory reset by admin")
+
+
 async def cmd_subs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/subs — list active subscriptions (admin)."""
     if not is_admin(update.effective_chat.id):
@@ -522,6 +544,7 @@ def main():
     app.add_handler(CommandHandler("approve", cmd_approve))
     app.add_handler(CommandHandler("revoke", cmd_revoke))
     app.add_handler(CommandHandler("subs", cmd_subs))
+    app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(CallbackQueryHandler(on_accept, pattern="^accept_disclaimer$"))
     app.job_queue.run_repeating(scan_loop_job,
                                 interval=config.SCAN_PAUSE_SECONDS, first=10)
