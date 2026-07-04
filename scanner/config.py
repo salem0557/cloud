@@ -43,6 +43,14 @@ SCAN_PAUSE_SECONDS = _int("SCAN_PAUSE_SECONDS", 60)  # breather between cycles
 DOWNLOAD_THREADS = _int("DOWNLOAD_THREADS", 12)     # parallel requests per batch
 BATCH_INTERVAL_SECONDS = _float("BATCH_INTERVAL_SECONDS", 2.0)  # floor between batches
 
+# --- Off-peak savings: slower pace overnight, no stock scanning on weekends
+# --- and market holidays (crypto keeps its normal pace at all times) ---
+WEEKEND_HOLIDAY_PAUSE_ENABLED = os.environ.get("WEEKEND_HOLIDAY_PAUSE_ENABLED", "1") == "1"
+NIGHT_START_HOUR = _int("NIGHT_START_HOUR", 20)     # 8pm ET: overnight session opens
+NIGHT_END_HOUR = _int("NIGHT_END_HOUR", 4)          # 4am ET: overnight session ends
+NIGHT_SCAN_PAUSE_SECONDS = _int("NIGHT_SCAN_PAUSE_SECONDS", 240)
+NIGHT_HOTLIST_INTERVAL_SECONDS = _int("NIGHT_HOTLIST_INTERVAL_SECONDS", 300)
+
 # --- Liquidity pre-filter (skip dead/penny stocks) ---
 MIN_PRICE = _float("MIN_PRICE", 2.0)               # USD
 MIN_AVG_VOLUME = _int("MIN_AVG_VOLUME", 30_000)    # avg volume per hourly bar

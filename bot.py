@@ -30,7 +30,7 @@ from telegram.constants import ParseMode
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes)
 
-from scanner import config, engine, options, universe
+from scanner import config, engine, market_calendar, options, universe
 from scanner.indicators import FILTERS, fmt_price
 from scanner.state import State
 from scanner.throttle import Throttle
@@ -254,11 +254,16 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
         return
     async with scan_lock:
         started = dt.datetime.now(NY)
-        # A fresh daily "qualified" list keeps continuous cycles small; when
-        # it's stale, this cycle covers the whole universe and rebuilds it.
-        full_pass, stock_symbols = await asyncio.to_thread(universe.stock_scan_list)
+        # No US stock can move over the weekend/a market holiday, so skip
+        # the stock side entirely and save the requests; crypto never closes.
+        stocks_paused = market_calendar.stocks_scan_paused()
+        if stocks_paused:
+            full_pass, stock_symbols = False, []
+        else:
+            full_pass, stock_symbols = await asyncio.to_thread(universe.stock_scan_list)
         crypto_symbols = universe.get_crypto_universe() if config.CRYPTO_ENABLED else []
-        log.info("Scan started (full_pass=%s, %d stocks)", full_pass, len(stock_symbols))
+        log.info("Scan started (stocks_paused=%s, full_pass=%s, %d stocks)",
+                 stocks_paused, full_pass, len(stock_symbols))
         kstats = {"stock": engine.new_stats(len(stock_symbols)),
                   "crypto": engine.new_stats(len(crypto_symbols))}
         matched = {"stock": 0, "crypto": 0}
@@ -290,6 +295,10 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
 
         if full_pass and qualified:
             await asyncio.to_thread(universe.save_qualified, qualified)
+        if stocks_paused:
+            # Keep prior stock hot-symbols so the fast lane resumes instantly
+            # when trading reopens instead of waiting for a fresh full pass.
+            new_hot |= {s for s in hotlist if not engine.is_crypto_symbol(s)}
         hotlist = new_hot
         state.prune()
         state.save()
@@ -298,8 +307,11 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
         log.info("Scan done: matched=%s sent=%d hot=%d peak_rss=%.0fMB stats=%s",
                  matched, sent_count, len(hotlist), rss_mb, kstats)
 
-        breakdown = (f"📈 الأسهم: {matched['stock']} مطابق "
-                     f"من {kstats['stock']['liquid']} مفحوص")
+        if stocks_paused:
+            breakdown = "📈 الأسهم: متوقف مؤقتاً (نهاية أسبوع/عطلة رسمية)"
+        else:
+            breakdown = (f"📈 الأسهم: {matched['stock']} مطابق "
+                         f"من {kstats['stock']['liquid']} مفحوص")
         if config.CRYPTO_ENABLED:
             breakdown += (f"\n🪙 العملات الرقمية: {matched['crypto']} مطابق "
                           f"من {kstats['crypto']['liquid']} مفحوص")
@@ -323,6 +335,8 @@ async def do_hot_scan(app: Application):
         return  # Yahoo is pushing back; don't add fast-lane pressure
     async with hot_lock:
         symbols = sorted(hotlist)[:config.HOTLIST_MAX]
+        if market_calendar.stocks_scan_paused():
+            symbols = [s for s in symbols if engine.is_crypto_symbol(s)]
         for batch in engine.make_batches(symbols):
             result, _ = await scan_batch_async(batch)
             throttle.report(result.data_ratio)
@@ -338,19 +352,24 @@ async def do_hot_scan(app: Application):
 
 
 async def hot_job(context: ContextTypes.DEFAULT_TYPE):
-    if not state.subscribers:
-        return
-    await do_hot_scan(context.application)
+    if state.subscribers:
+        await do_hot_scan(context.application)
+    delay = (config.NIGHT_HOTLIST_INTERVAL_SECONDS if market_calendar.is_night_hours()
+             else config.HOTLIST_INTERVAL_SECONDS)
+    context.application.job_queue.run_once(hot_job, when=delay)
 
 
 async def scan_loop_job(context: ContextTypes.DEFAULT_TYPE):
-    # Continuous scanning: this job ticks frequently, and do_scan's lock makes
-    # each tick a no-op while a cycle is still running — so a new cycle starts
-    # within SCAN_PAUSE_SECONDS of the previous one finishing. The dedup layer
-    # ensures only new or changed signals are ever sent.
-    if not state.subscribers:
-        return
-    await do_scan(context.application, only_changes=True, notify_empty=False)
+    # Self-rescheduling: each run queues the next one after it finishes, so a
+    # new cycle starts SCAN_PAUSE_SECONDS after the previous one ends (not a
+    # fixed wall-clock interval) — and that gap widens overnight to save
+    # compute/requests during the quietest hours. The dedup layer ensures
+    # only new or changed signals are ever sent regardless of pace.
+    if state.subscribers:
+        await do_scan(context.application, only_changes=True, notify_empty=False)
+    delay = (config.NIGHT_SCAN_PAUSE_SECONDS if market_calendar.is_night_hours()
+             else config.SCAN_PAUSE_SECONDS)
+    context.application.job_queue.run_once(scan_loop_job, when=delay)
 
 
 # --------------------------------------------------------------- commands
@@ -550,9 +569,15 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      else "دورة تأهيل كاملة (كل الأسهم)")
     throttle_line = (f"نشطة مؤقتاً ({throttle.delay:.0f} ثانية بين الدفعات)"
                      if throttle.active else "غير نشطة")
+    pace_line = ("ليلي 🌙 (بطيء لتوفير الاستهلاك)" if market_calendar.is_night_hours()
+                else "نهاري (عادي)")
+    stock_scan_line = ("متوقف 🚫 (نهاية أسبوع/عطلة رسمية)"
+                       if market_calendar.stocks_scan_paused() else "نشط ✅")
     await update.message.reply_text(
         f"اشتراكك: {sub_line}\n"
         f"السوق الأمريكي الآن: {open_now}\n"
+        f"مسح الأسهم: {stock_scan_line}\n"
+        f"وتيرة المسح: {pace_line}\n"
         f"العملات الرقمية: {crypto_line}\n"
         f"نطاق الأسهم: {universe_line}\n"
         f"القائمة الساخنة 🔥: {len(hotlist)} رمز (فحص كل {config.HOTLIST_INTERVAL_SECONDS // 60} دقيقة)\n"
@@ -614,10 +639,10 @@ def main():
     app.add_handler(CommandHandler("subs", cmd_subs))
     app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(CallbackQueryHandler(on_accept, pattern="^accept_disclaimer$"))
-    app.job_queue.run_repeating(scan_loop_job,
-                                interval=config.SCAN_PAUSE_SECONDS, first=10)
-    app.job_queue.run_repeating(hot_job,
-                                interval=config.HOTLIST_INTERVAL_SECONDS, first=90)
+    # Self-rescheduling jobs (see scan_loop_job/hot_job) so the pace can
+    # widen at night; just kick off the first run of each here.
+    app.job_queue.run_once(scan_loop_job, when=10)
+    app.job_queue.run_once(hot_job, when=90)
     log.info("Bot starting (polling)")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
