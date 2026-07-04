@@ -98,6 +98,10 @@ HOTLIST_MAX = _int("HOTLIST_MAX", 300)                 # safety cap per fast pas
 # --- Adaptive throttle (temporary: backs off on Yahoo rejections, recovers) ---
 THROTTLE_MAX_DELAY = _float("THROTTLE_MAX_DELAY", 600)  # seconds between batches
 
+# --- Chart image (candles + Bollinger + support + RSI, one per alert) ---
+CHART_ENABLED = os.environ.get("CHART_ENABLED", "1") == "1"
+CHART_BARS = _int("CHART_BARS", 80)     # most recent hourly bars plotted
+
 # --- Options picks (attached to each alerted stock) ---
 OPTIONS_ENABLED = os.environ.get("OPTIONS_ENABLED", "1") == "1"
 OPTIONS_MAX_WEEKS = _int("OPTIONS_MAX_WEEKS", 6)      # nearest expiry .. 6 weeks

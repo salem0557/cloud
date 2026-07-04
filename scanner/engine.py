@@ -15,6 +15,10 @@ class Match:
     matched: list[str]                     # filter keys that passed
     details: dict[str, str] = field(default_factory=dict)
     options_text: str = ""                 # best-contracts block, filled at send time
+    # Transient (never persisted/compared): the OHLCV history used to evaluate
+    # this symbol, kept only long enough to render the alert's chart image.
+    chart_df: object = field(default=None, repr=False, compare=False)
+    chart_png: object = field(default=None, repr=False, compare=False)
 
     @property
     def score(self) -> int:
@@ -36,7 +40,7 @@ def evaluate_symbol(symbol: str, df) -> Match:
         details[key] = detail
         if ok:
             matched.append(key)
-    return Match(symbol, float(df["Close"].iloc[-1]), matched, details)
+    return Match(symbol, float(df["Close"].iloc[-1]), matched, details, chart_df=df)
 
 
 @dataclass

@@ -79,13 +79,15 @@ def check_rsi_oversold(df: pd.DataFrame):
     return bool(value < config.RSI_OVERSOLD), f"RSI={value:.1f}"
 
 
-def check_support(df: pd.DataFrame):
-    """Price sitting on a support level formed by clustered pivot lows."""
+def find_nearest_support(df: pd.DataFrame):
+    """The clustered pivot-low support level the price is sitting on or just
+    broke below, if any. Shared by check_support and the chart renderer so
+    the plotted line always matches the filter's own reasoning."""
     lows = df["Low"].to_numpy()[-config.SUPPORT_LOOKBACK:]
     close = float(df["Close"].iloc[-1])
     pivots = find_pivots(lows, order=config.WEDGE_PIVOT_ORDER, highs=False)
     if len(pivots) < config.SUPPORT_MIN_TOUCHES:
-        return False, "لا توجد قيعان كافية"
+        return None
 
     # Cluster pivot lows whose prices are within SUPPORT_CLUSTER_TOL of each other
     prices = sorted(lows[i] for i in pivots)
@@ -104,8 +106,20 @@ def check_support(df: pd.DataFrame):
         near_above = 0 <= (close - level) / level <= config.SUPPORT_PROXIMITY
         slight_break = 0 <= (level - close) / level <= config.SUPPORT_BREAK_TOL
         if near_above or slight_break:
-            return True, f"دعم عند {fmt_price(level)}"
-    return False, "بعيد عن الدعم"
+            return level
+    return None
+
+
+def check_support(df: pd.DataFrame):
+    """Price sitting on a support level formed by clustered pivot lows."""
+    lows = df["Low"].to_numpy()[-config.SUPPORT_LOOKBACK:]
+    pivots = find_pivots(lows, order=config.WEDGE_PIVOT_ORDER, highs=False)
+    if len(pivots) < config.SUPPORT_MIN_TOUCHES:
+        return False, "لا توجد قيعان كافية"
+    level = find_nearest_support(df)
+    if level is None:
+        return False, "بعيد عن الدعم"
+    return True, f"دعم عند {fmt_price(level)}"
 
 
 def check_falling_wedge(df: pd.DataFrame):

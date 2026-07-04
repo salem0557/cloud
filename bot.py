@@ -12,6 +12,7 @@ import asyncio
 import concurrent.futures
 import datetime as dt
 import gc
+import io
 import logging
 import multiprocessing
 import os
@@ -30,7 +31,7 @@ from telegram.constants import ParseMode
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes)
 
-from scanner import config, engine, market_calendar, options, universe
+from scanner import chart, config, engine, market_calendar, options, universe
 from scanner.indicators import FILTERS, fmt_price
 from scanner.state import State
 from scanner.throttle import Throttle
@@ -194,6 +195,25 @@ async def attach_options(matches):
             m.options_text = no_options_line
 
 
+CHART_CAPTION_LIMIT = 1024  # Telegram's hard cap on photo captions
+
+
+async def attach_charts(matches):
+    """Fill chart_png on each match, then drop the OHLCV frame — it only
+    exists to render the chart and must not linger in memory afterward."""
+    if not config.CHART_ENABLED:
+        return
+    for m in matches:
+        if m.chart_df is None:
+            continue
+        try:
+            m.chart_png = await asyncio.to_thread(
+                chart.render_chart, m.symbol, m.chart_df, m.details)
+        except Exception:
+            log.exception("Chart render failed for %s", m.symbol)
+        m.chart_df = None
+
+
 def build_messages(header: str, matches) -> list[str]:
     """Assemble alert text, split into Telegram-sized chunks."""
     chunks, current = [], header
@@ -208,22 +228,28 @@ def build_messages(header: str, matches) -> list[str]:
     return [c + f"\n\n{ALERT_FOOTER}" for c in chunks]
 
 
-async def broadcast(app: Application, text: str):
+async def handle_expired_subscribers(app: Application):
+    """Remove and notify subscribers whose paid term has lapsed. Called once
+    per scan cycle, independent of whether alerts use text or photos."""
+    now = time.time()
     for chat_id in list(state.subscribers):
         expiry = sub_expiry(chat_id)
+        if expiry and expiry != 0 and expiry <= now:
+            state.subscribers.discard(chat_id)
+            state.approved.pop(str(chat_id), None)
+            state.save()
+            try:
+                await app.bot.send_message(
+                    chat_id,
+                    "⏰ انتهت مدة اشتراكك وتوقفت التنبيهات. "
+                    f"للتجديد تواصل مع {config.SUBSCRIBE_CONTACT}.")
+            except Exception:
+                log.warning("Expiry notice to %s failed", chat_id)
+
+
+async def broadcast(app: Application, text: str):
+    for chat_id in list(state.subscribers):
         if not eligible(chat_id):
-            # Notify once when a subscription lapses, then stop sending
-            if expiry and expiry != 0 and expiry <= time.time():
-                state.subscribers.discard(chat_id)
-                state.approved.pop(str(chat_id), None)
-                state.save()
-                try:
-                    await app.bot.send_message(
-                        chat_id,
-                        "⏰ انتهت مدة اشتراكك وتوقفت التنبيهات. "
-                        f"للتجديد تواصل مع {config.SUBSCRIBE_CONTACT}.")
-                except Exception:
-                    log.warning("Expiry notice to %s failed", chat_id)
             continue
         try:
             await app.bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN)
@@ -231,14 +257,38 @@ async def broadcast(app: Application, text: str):
             log.exception("Send to %s failed", chat_id)
 
 
+async def broadcast_photo(app: Application, photo: bytes, caption: str):
+    for chat_id in list(state.subscribers):
+        if not eligible(chat_id):
+            continue
+        try:
+            await app.bot.send_photo(chat_id, photo=io.BytesIO(photo), caption=caption,
+                                     parse_mode=ParseMode.MARKDOWN)
+        except Exception:
+            log.exception("Send photo to %s failed", chat_id)
+
+
 # ------------------------------------------------------------------ scans
 
 async def send_matches(app, to_send, hot: bool = False):
+    """Push each match as its own message: a chart photo (when available)
+    carrying the full detail as its caption, or plain text otherwise —
+    Telegram caps photo captions at 1024 chars, so an overlong detail block
+    (rare, e.g. many option picks) falls back to a short caption + full text.
+    """
     await attach_options(to_send)
+    await attach_charts(to_send)
     flame = "🔥 " if hot else ""
     header = f"{flame}{ALERT_HEADER} — {dt.datetime.now(NY):%H:%M} ET"
-    for chunk in build_messages(header, to_send):
-        await broadcast(app, chunk)
+    for m in to_send:
+        text = f"{header}\n\n{format_match(m)}\n\n{ALERT_FOOTER}"
+        if not m.chart_png:
+            await broadcast(app, text)
+        elif len(text) <= CHART_CAPTION_LIMIT:
+            await broadcast_photo(app, m.chart_png, text)
+        else:
+            await broadcast_photo(app, m.chart_png, f"{header}\n\n*{m.symbol}* — {m.score}/4")
+            await broadcast(app, text)
 
 
 async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
@@ -248,6 +298,7 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
         log.info("Scan already running; skipping")
         return
     async with scan_lock:
+        await handle_expired_subscribers(app)
         started = dt.datetime.now(NY)
         # No US stock can move over the weekend/a market holiday, so skip
         # the whole scan and save the requests.
