@@ -52,7 +52,7 @@ def market_is_open(now: dt.datetime | None = None) -> bool:
 def format_match(m) -> str:
     lines = [f"*{m.symbol}* — {m.score}/4 — {m.price:.2f}$"]
     for key, (name, _) in FILTERS.items():
-        mark = "✅" if key in m.matched else "▫️"
+        mark = "✅" if key in m.matched else "❌"
         lines.append(f"  {mark} {name}: {m.details.get(key, '-')}")
     return "\n".join(lines)
 
