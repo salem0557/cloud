@@ -24,6 +24,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from scanner import config, engine, universe
 from scanner.indicators import FILTERS, fmt_price
 from scanner.state import State
+from scanner.throttle import Throttle
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO
@@ -36,6 +37,9 @@ MSG_LIMIT = 3800  # keep below Telegram's 4096-char cap
 
 state = State()
 scan_lock = asyncio.Lock()
+hot_lock = asyncio.Lock()
+throttle = Throttle()
+hotlist: set[str] = set()  # near-signal symbols, rebuilt every full cycle
 
 
 def market_is_open(now: dt.datetime | None = None) -> bool:
@@ -88,20 +92,32 @@ async def broadcast(app: Application, text: str):
 
 # ------------------------------------------------------------------ scans
 
+async def send_matches(app, kind: str, to_send, hot: bool = False):
+    flame = "🔥 " if hot else ""
+    header = f"{flame}{KIND_HEADERS[kind]} — {dt.datetime.now(NY):%H:%M} ET"
+    for chunk in build_messages(header, to_send):
+        await broadcast(app, chunk)
+
+
 async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
     """Scan batch by batch, pushing each matching stock the moment it's found."""
+    global hotlist
     if scan_lock.locked():
         log.info("Scan already running; skipping")
         return
     async with scan_lock:
         started = dt.datetime.now(NY)
-        log.info("Scan started")
-        stock_symbols = await asyncio.to_thread(universe.get_universe)
+        # A fresh daily "qualified" list keeps continuous cycles small; when
+        # it's stale, this cycle covers the whole universe and rebuilds it.
+        full_pass, stock_symbols = await asyncio.to_thread(universe.stock_scan_list)
         crypto_symbols = universe.get_crypto_universe() if config.CRYPTO_ENABLED else []
+        log.info("Scan started (full_pass=%s, %d stocks)", full_pass, len(stock_symbols))
         kstats = {"stock": engine.new_stats(len(stock_symbols)),
                   "crypto": engine.new_stats(len(crypto_symbols))}
         matched = {"stock": 0, "crypto": 0}
         sent_count = 0
+        new_hot: set[str] = set()
+        qualified: list[str] = []
 
         # Crypto first: it is a single quick batch, so those alerts go out
         # within seconds; stocks and coins are never mixed in one message.
@@ -109,20 +125,28 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
         plan += [("stock", batch) for batch in engine.make_batches(stock_symbols)]
 
         for kind, batch in plan:
-            matches = await asyncio.to_thread(engine.scan_batch, batch, kstats[kind])
-            matched[kind] += len(matches)
-            to_send = state.fresh_matches(matches) if only_changes else matches
-            state.record(matches)
+            result = await asyncio.to_thread(engine.scan_batch, batch, kstats[kind])
+            matched[kind] += len(result.matches)
+            new_hot.update(result.hot)
+            if kind == "stock":
+                qualified.extend(result.liquid)
+            to_send = state.fresh_matches(result.matches) if only_changes else result.matches
+            state.record(result.matches)
             if to_send:
                 sent_count += len(to_send)
-                header = f"{KIND_HEADERS[kind]} — {dt.datetime.now(NY):%H:%M} ET"
-                for chunk in build_messages(header, to_send):
-                    await broadcast(app, chunk)
+                await send_matches(app, kind, to_send)
                 state.save()  # crash-safe: never re-alert what was already sent
+            throttle.report(result.data_ratio)
+            if throttle.active:
+                await asyncio.sleep(throttle.delay)
 
+        if full_pass and qualified:
+            await asyncio.to_thread(universe.save_qualified, qualified)
+        hotlist = new_hot
         state.prune()
         state.save()
-        log.info("Scan done: matched=%s sent=%d stats=%s", matched, sent_count, kstats)
+        log.info("Scan done: matched=%s sent=%d hot=%d stats=%s",
+                 matched, sent_count, len(hotlist), kstats)
 
         breakdown = (f"📈 الأسهم: {matched['stock']} مطابق "
                      f"من {kstats['stock']['liquid']} مفحوص")
@@ -138,6 +162,36 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
             )
         elif not only_changes:
             await broadcast(app, f"✅ اكتمل المسح:\n{breakdown}")
+
+
+async def do_hot_scan(app: Application):
+    """Fast lane: re-check near-signal symbols (>=2 filters) every couple of
+    minutes so a setup completing between full cycles is caught immediately."""
+    if not hotlist or hot_lock.locked():
+        return
+    if throttle.delay >= 60:
+        return  # Yahoo is pushing back; don't add fast-lane pressure
+    async with hot_lock:
+        symbols = sorted(hotlist)[:config.HOTLIST_MAX]
+        stats = engine.new_stats(len(symbols))
+        for batch in engine.make_batches(symbols):
+            result = await asyncio.to_thread(engine.scan_batch, batch, stats)
+            throttle.report(result.data_ratio)
+            to_send = state.fresh_matches(result.matches)
+            if not to_send:
+                continue
+            state.record(result.matches)
+            for kind in ("crypto", "stock"):
+                group = [m for m in to_send if (kind == "crypto") == m.is_crypto]
+                if group:
+                    await send_matches(app, kind, group, hot=True)
+            state.save()
+
+
+async def hot_job(context: ContextTypes.DEFAULT_TYPE):
+    if not state.subscribers:
+        return
+    await do_hot_scan(context.application)
 
 
 async def scan_loop_job(context: ContextTypes.DEFAULT_TYPE):
@@ -197,9 +251,17 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         crypto_line = f"مفعّلة 🪙 ({len(universe.get_crypto_universe())} عملة)"
     else:
         crypto_line = "معطلة"
+    qualified = universe.load_qualified()
+    universe_line = (f"قائمة مؤهلة ({len(qualified)} سهم)" if qualified
+                     else "دورة تأهيل كاملة (كل الأسهم)")
+    throttle_line = (f"نشطة مؤقتاً ({throttle.delay:.0f} ثانية بين الدفعات)"
+                     if throttle.active else "غير نشطة")
     await update.message.reply_text(
         f"السوق الأمريكي الآن: {open_now}\n"
         f"العملات الرقمية: {crypto_line}\n"
+        f"نطاق الأسهم: {universe_line}\n"
+        f"القائمة الساخنة 🔥: {len(hotlist)} رمز (فحص كل {config.HOTLIST_INTERVAL_SECONDS // 60} دقيقة)\n"
+        f"التهدئة التلقائية: {throttle_line}\n"
         f"مسح قيد التنفيذ: {scanning}\n"
         f"عدد المشتركين: {len(state.subscribers)}\n"
         f"إشارات في الذاكرة: {len(state.last_alerts)}\n"
@@ -217,6 +279,8 @@ def main():
     app.add_handler(CommandHandler("status", cmd_status))
     app.job_queue.run_repeating(scan_loop_job,
                                 interval=config.SCAN_PAUSE_SECONDS, first=10)
+    app.job_queue.run_repeating(hot_job,
+                                interval=config.HOTLIST_INTERVAL_SECONDS, first=90)
     log.info("Bot starting (polling)")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 

@@ -49,6 +49,18 @@ WEDGE_LOOKBACK = _int("WEDGE_LOOKBACK", 120)
 WEDGE_PIVOT_ORDER = _int("WEDGE_PIVOT_ORDER", 3)
 WEDGE_MIN_BARS = _int("WEDGE_MIN_BARS", 20)
 
+# --- Qualified list (daily full pass qualifies liquid symbols; continuous
+# --- cycles then scan only those, cutting request volume drastically) ---
+QUALIFY_MAX_AGE_HOURS = _int("QUALIFY_MAX_AGE_HOURS", 24)
+
+# --- Hot list: near-signal symbols get re-checked on a fast lane ---
+HOTLIST_MIN_SCORE = _int("HOTLIST_MIN_SCORE", 2)       # filters needed to be "hot"
+HOTLIST_INTERVAL_SECONDS = _int("HOTLIST_INTERVAL_SECONDS", 120)
+HOTLIST_MAX = _int("HOTLIST_MAX", 300)                 # safety cap per fast pass
+
+# --- Adaptive throttle (temporary: backs off on Yahoo rejections, recovers) ---
+THROTTLE_MAX_DELAY = _float("THROTTLE_MAX_DELAY", 600)  # seconds between batches
+
 # --- Alerting ---
 FILTERS_REQUIRED = _int("FILTERS_REQUIRED", 3)     # minimum matched filters (out of 4)
 ALERT_MEMORY_HOURS = _int("ALERT_MEMORY_HOURS", 24)  # identical alert not resent unless
@@ -63,4 +75,5 @@ DATA_DIR = (os.environ.get("DATA_DIR")
 os.makedirs(DATA_DIR, exist_ok=True)
 STATE_FILE = os.environ.get("STATE_FILE", os.path.join(DATA_DIR, "state.json"))
 UNIVERSE_CACHE = os.environ.get("UNIVERSE_CACHE", os.path.join(DATA_DIR, "universe.json"))
+QUALIFIED_FILE = os.environ.get("QUALIFIED_FILE", os.path.join(DATA_DIR, "qualified.json"))
 UNIVERSE_MAX_AGE_HOURS = _int("UNIVERSE_MAX_AGE_HOURS", 24)

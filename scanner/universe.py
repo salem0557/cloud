@@ -90,6 +90,34 @@ def fetch_universe() -> list[str]:
     return symbols
 
 
+def load_qualified() -> list[str] | None:
+    """Liquid symbols qualified by the last daily full pass, if still fresh."""
+    try:
+        with open(config.QUALIFIED_FILE) as f:
+            cache = json.load(f)
+        age_hours = (time.time() - cache["built_at"]) / 3600
+        if age_hours < config.QUALIFY_MAX_AGE_HOURS and cache["symbols"]:
+            return cache["symbols"]
+    except (OSError, KeyError, ValueError):
+        pass
+    return None
+
+
+def save_qualified(symbols: list[str]):
+    with open(config.QUALIFIED_FILE, "w") as f:
+        json.dump({"built_at": time.time(), "symbols": sorted(set(symbols))}, f)
+    log.info("Qualified list saved: %d symbols", len(symbols))
+
+
+def stock_scan_list() -> tuple[bool, list[str]]:
+    """(full_pass, symbols): the fresh qualified list when available, else the
+    whole universe — that full pass rebuilds the qualified list as it runs."""
+    qualified = load_qualified()
+    if qualified is not None:
+        return False, qualified
+    return True, get_universe()
+
+
 def get_crypto_universe() -> list[str]:
     """Top coins (Yahoo symbols) plus any user-added CRYPTO_EXTRA symbols."""
     extra = [s if s.endswith("-USD") else f"{s}-USD" for s in config.CRYPTO_EXTRA]
