@@ -22,7 +22,8 @@ load_dotenv()  # must run before scanner.config reads the environment
 
 import time
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (BotCommand, BotCommandScopeChat, BotCommandScopeDefault,
+                      InlineKeyboardButton, InlineKeyboardMarkup, Update)
 from telegram.constants import ParseMode
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes)
@@ -539,10 +540,41 @@ async def on_error(update, context: ContextTypes.DEFAULT_TYPE):
     log.error("Unhandled error", exc_info=context.error)
 
 
+PUBLIC_COMMANDS = [
+    BotCommand("start", "التسجيل والموافقة على إخلاء المسؤولية"),
+    BotCommand("scan", "مسح فوري لكل السوق"),
+    BotCommand("status", "حالة البوت واشتراكك"),
+    BotCommand("disclaimer", "عرض إخلاء المسؤولية"),
+    BotCommand("stop", "إيقاف التنبيهات"),
+]
+ADMIN_COMMANDS = PUBLIC_COMMANDS + [
+    BotCommand("approve", "تفعيل مشترك: /approve <id> <أيام>"),
+    BotCommand("revoke", "إلغاء اشتراك: /revoke <id>"),
+    BotCommand("subs", "قائمة المشتركين"),
+    BotCommand("reset", "مسح ذاكرة المسح والبدء من جديد"),
+]
+
+
+async def post_init(app: Application):
+    """Telegram command menus by scope: everyone sees the public commands;
+    the admin commands appear only in the admin's own chat menu."""
+    try:
+        await app.bot.set_my_commands(PUBLIC_COMMANDS,
+                                      scope=BotCommandScopeDefault())
+        if config.ADMIN_CHAT_ID:
+            await app.bot.set_my_commands(
+                ADMIN_COMMANDS,
+                scope=BotCommandScopeChat(chat_id=config.ADMIN_CHAT_ID))
+        log.info("Command menus set (admin scope: %s)", bool(config.ADMIN_CHAT_ID))
+    except Exception:
+        log.exception("Failed to set command menus")
+
+
 def main():
     if not config.BOT_TOKEN:
         raise SystemExit("Set TELEGRAM_BOT_TOKEN environment variable")
-    app = Application.builder().token(config.BOT_TOKEN).build()
+    app = (Application.builder().token(config.BOT_TOKEN)
+           .post_init(post_init).build())
     app.add_error_handler(on_error)
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("stop", cmd_stop))
