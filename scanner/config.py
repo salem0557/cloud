@@ -51,8 +51,11 @@ WEDGE_MIN_BARS = _int("WEDGE_MIN_BARS", 20)
 
 # --- Qualified list (full passes qualify liquid symbols; continuous cycles
 # --- then scan only those, cutting request volume drastically) ---
-# Rebuilt on a schedule (ET times, comma-separated): right after the regular
-# session close (16:00), and just before the overnight session opens (20:00).
+# Rebuilt on a schedule (ET times, comma-separated), following the trading
+# day's natural order — the overnight session opens the day (20:00 ET, the
+# first session after a weekend), then pre-market, regular hours, and the
+# close. First rebuild 19:30 (just before overnight opens, including Sunday
+# night after the weekend), second 16:30 (right after the regular close).
 def _times(name: str, default: str) -> list[tuple[int, int]]:
     out = []
     for part in os.environ.get(name, default).split(","):
@@ -61,7 +64,7 @@ def _times(name: str, default: str) -> list[tuple[int, int]]:
     return out
 
 
-QUALIFY_REBUILD_TIMES = _times("QUALIFY_REBUILD_TIMES", "16:30,19:30")
+QUALIFY_REBUILD_TIMES = _times("QUALIFY_REBUILD_TIMES", "19:30,16:30")
 
 # --- Hot list: near-signal symbols get re-checked on a fast lane ---
 HOTLIST_MIN_SCORE = _int("HOTLIST_MIN_SCORE", 2)       # filters needed to be "hot"
