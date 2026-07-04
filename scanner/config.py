@@ -16,8 +16,12 @@ BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 # --- Data fetching ---
 INTERVAL = os.environ.get("SCAN_INTERVAL", "1h")   # candle timeframe
 PERIOD = os.environ.get("SCAN_PERIOD", "3mo")      # history depth per symbol
-BATCH_SIZE = _int("BATCH_SIZE", 200)               # symbols per yfinance request
+BATCH_SIZE = _int("BATCH_SIZE", 100)               # symbols per yfinance request
 SCAN_PAUSE_SECONDS = _int("SCAN_PAUSE_SECONDS", 60)  # breather between cycles
+# Pacing guards: unbounded parallel downloads ballooned memory and hammered
+# Yahoo (a 3265-stock cycle finished in 66s), crashing the container.
+DOWNLOAD_THREADS = _int("DOWNLOAD_THREADS", 12)     # parallel requests per batch
+BATCH_INTERVAL_SECONDS = _float("BATCH_INTERVAL_SECONDS", 2.0)  # floor between batches
 
 # --- Liquidity pre-filter (skip dead/penny stocks) ---
 MIN_PRICE = _float("MIN_PRICE", 2.0)               # USD

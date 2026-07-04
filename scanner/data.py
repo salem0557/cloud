@@ -22,7 +22,7 @@ def fetch_batch(symbols: list[str]) -> dict[str, pd.DataFrame]:
         period=config.PERIOD,
         group_by="ticker",
         auto_adjust=True,
-        threads=True,
+        threads=min(len(symbols), config.DOWNLOAD_THREADS),
         progress=False,
     )
     out: dict[str, pd.DataFrame] = {}

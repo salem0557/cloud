@@ -10,7 +10,9 @@ Run:  TELEGRAM_BOT_TOKEN=xxx python bot.py
 """
 import asyncio
 import datetime as dt
+import gc
 import logging
+import resource
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
@@ -137,16 +139,18 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
                 await send_matches(app, kind, to_send)
                 state.save()  # crash-safe: never re-alert what was already sent
             throttle.report(result.data_ratio)
-            if throttle.active:
-                await asyncio.sleep(throttle.delay)
+            # Always pace batches; unpaced cycles crashed the container
+            await asyncio.sleep(max(throttle.delay, config.BATCH_INTERVAL_SECONDS))
 
         if full_pass and qualified:
             await asyncio.to_thread(universe.save_qualified, qualified)
         hotlist = new_hot
         state.prune()
         state.save()
-        log.info("Scan done: matched=%s sent=%d hot=%d stats=%s",
-                 matched, sent_count, len(hotlist), kstats)
+        gc.collect()  # drop per-cycle DataFrames before the next cycle starts
+        rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+        log.info("Scan done: matched=%s sent=%d hot=%d peak_rss=%.0fMB stats=%s",
+                 matched, sent_count, len(hotlist), rss_mb, kstats)
 
         breakdown = (f"📈 الأسهم: {matched['stock']} مطابق "
                      f"من {kstats['stock']['liquid']} مفحوص")
@@ -269,10 +273,15 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def on_error(update, context: ContextTypes.DEFAULT_TYPE):
+    log.error("Unhandled error", exc_info=context.error)
+
+
 def main():
     if not config.BOT_TOKEN:
         raise SystemExit("Set TELEGRAM_BOT_TOKEN environment variable")
     app = Application.builder().token(config.BOT_TOKEN).build()
+    app.add_error_handler(on_error)
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("scan", cmd_scan))
