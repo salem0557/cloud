@@ -13,6 +13,11 @@ def _float(name: str, default: float) -> float:
 # --- Telegram ---
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
+# --- Paid subscription gate ---
+ADMIN_CHAT_ID = _int("ADMIN_CHAT_ID", 0)   # your own Telegram chat id (always eligible)
+SUBSCRIBE_CONTACT = os.environ.get("SUBSCRIBE_CONTACT", "مشغّل البوت")
+DEFAULT_SUB_DAYS = _int("DEFAULT_SUB_DAYS", 30)
+
 # --- Data fetching ---
 INTERVAL = os.environ.get("SCAN_INTERVAL", "1h")   # candle timeframe
 PERIOD = os.environ.get("SCAN_PERIOD", "3mo")      # history depth per symbol

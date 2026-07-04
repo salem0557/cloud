@@ -14,6 +14,8 @@ class State:
     def __init__(self, path: str = None):
         self.path = path or config.STATE_FILE
         self.subscribers: set[int] = set()
+        self.accepted: dict[str, float] = {}   # chat id -> disclaimer accept time
+        self.approved: dict[str, float] = {}   # chat id -> sub expiry ts (0 = lifetime)
         # symbol -> {"sig": alert signature, "ts": last time it matched}
         self.last_alerts: dict[str, dict] = {}
         self._load()
@@ -23,6 +25,8 @@ class State:
             with open(self.path) as f:
                 raw = json.load(f)
             self.subscribers = set(raw.get("subscribers", []))
+            self.accepted = dict(raw.get("accepted", {}))
+            self.approved = dict(raw.get("approved", {}))
             now = time.time()
             for sym, entry in dict(raw.get("last_alerts", {})).items():
                 if isinstance(entry, str):  # legacy format: bare signature
@@ -34,6 +38,8 @@ class State:
     def save(self):
         payload = {
             "subscribers": sorted(self.subscribers),
+            "accepted": self.accepted,
+            "approved": self.approved,
             "last_alerts": self.last_alerts,
         }
         fd, tmp = tempfile.mkstemp(dir=os.path.dirname(self.path) or ".")

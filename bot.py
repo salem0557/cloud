@@ -19,9 +19,12 @@ from dotenv import load_dotenv
 
 load_dotenv()  # must run before scanner.config reads the environment
 
-from telegram import Update
+import time
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
+                          ContextTypes)
 
 from scanner import config, engine, options, universe
 from scanner.indicators import FILTERS, fmt_price
@@ -59,6 +62,55 @@ KIND_HEADERS = {
     "stock": "⚡ إشارة فورية — 📈 أسهم أمريكية",
     "crypto": "⚡ إشارة فورية — 🪙 عملات رقمية",
 }
+
+ALERT_FOOTER = "⚠️ تحليل فني آلي — ليس توصية بشراء أو بيع"
+
+DISCLAIMER = (
+    "⚠️ *إخلاء مسؤولية — يُرجى القراءة بعناية*\n\n"
+    "هذه الخدمة *أداة تحليل فني آلية* تعتمد على مؤشرات رياضية "
+    "(بولينجر باند، مؤشر القوة النسبية RSI، مستويات الدعم، الأنماط السعرية) "
+    "لرصد الحالات الفنية في سوق الأسهم الأمريكية والعملات الرقمية، "
+    "وعرض بيانات عقود الخيارات الأنشط سيولةً وفق معايير آلية بحتة.\n\n"
+    "1️⃣ ما تقدمه هذه الخدمة *ليس توصية ولا مشورة استثمارية* ولا دعوة أو تحريضاً "
+    "على شراء أو بيع أي ورقة مالية أو أصل رقمي أو عقد مشتقات، ولا يجوز تفسيره "
+    "أو الاعتماد عليه بهذه الصفة.\n\n"
+    "2️⃣ الخدمة ومشغّلها *غير مرخصين من هيئة السوق المالية في المملكة العربية "
+    "السعودية* ولا من أي جهة تنظيمية أخرى لمزاولة أعمال الأوراق المالية أو تقديم "
+    "المشورة الاستثمارية، ولا تقدم الخدمة أي عمل من الأعمال الخاضعة للترخيص.\n\n"
+    "3️⃣ المؤشرات الفنية أدوات إحصائية *قد تخطئ*، والنتائج السابقة لا تضمن "
+    "الأداء المستقبلي، والبيانات المعروضة قد يشوبها تأخير أو خطأ من مصادرها.\n\n"
+    "4️⃣ التداول في الأسهم وعقود الخيارات والعملات الرقمية *ينطوي على مخاطر "
+    "عالية* قد تصل إلى خسارة رأس المال كاملاً. عقود الخيارات المعروضة هي نتاج "
+    "فرز آلي لأنشط العقود سيولةً وليست اقتراحاً بالتداول عليها.\n\n"
+    "5️⃣ أي قرار استثماري تتخذه هو *مسؤوليتك وحدك*، ولا يتحمل مشغّل الخدمة أي "
+    "مسؤولية عن أي خسارة أو ضرر ينشأ عن استخدامها. استشر مستشاراً مالياً مرخصاً "
+    "قبل اتخاذ أي قرار.\n\n"
+    "باشتراكك واستخدامك هذه الخدمة فأنت تقر بأنك قرأت هذا الإخلاء وفهمته "
+    "ووافقت عليه."
+)
+
+
+# ------------------------------------------------------ subscription gate
+
+def is_admin(chat_id: int) -> bool:
+    return config.ADMIN_CHAT_ID and chat_id == config.ADMIN_CHAT_ID
+
+
+def sub_expiry(chat_id: int):
+    """None = not approved; 0 = lifetime; else unix expiry timestamp."""
+    return state.approved.get(str(chat_id))
+
+
+def eligible(chat_id: int) -> bool:
+    """May receive alerts: accepted the disclaimer + active paid subscription."""
+    if is_admin(chat_id):
+        return True
+    if str(chat_id) not in state.accepted:
+        return False
+    expiry = sub_expiry(chat_id)
+    if expiry is None:
+        return False
+    return expiry == 0 or expiry > time.time()
 
 
 def format_match(m) -> str:
@@ -119,11 +171,26 @@ def build_messages(header: str, matches) -> list[str]:
         else:
             current += block
     chunks.append(current)
-    return chunks
+    return [c + f"\n\n{ALERT_FOOTER}" for c in chunks]
 
 
 async def broadcast(app: Application, text: str):
     for chat_id in list(state.subscribers):
+        expiry = sub_expiry(chat_id)
+        if not eligible(chat_id):
+            # Notify once when a subscription lapses, then stop sending
+            if expiry and expiry != 0 and expiry <= time.time():
+                state.subscribers.discard(chat_id)
+                state.approved.pop(str(chat_id), None)
+                state.save()
+                try:
+                    await app.bot.send_message(
+                        chat_id,
+                        "⏰ انتهت مدة اشتراكك وتوقفت التنبيهات. "
+                        f"للتجديد تواصل مع {config.SUBSCRIBE_CONTACT}.")
+                except Exception:
+                    log.warning("Expiry notice to %s failed", chat_id)
+            continue
         try:
             await app.bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN)
         except Exception:
@@ -250,22 +317,51 @@ async def scan_loop_job(context: ContextTypes.DEFAULT_TYPE):
 
 # --------------------------------------------------------------- commands
 
+WELCOME = (
+    "أهلاً بك في بوت المسح الفني للسوق الأمريكي 📊\n\n"
+    "تفحص الخدمة كل الأسهم الأمريكية 📈 وأهم 100 عملة رقمية 🪙 بشكل متواصل "
+    "(فريم الساعة) وترصد الحالات الفنية التي تحقق "
+    f"{config.FILTERS_REQUIRED} شروط من 4:\n"
+    "1️⃣ السعر عند الحد السفلي لبولينجر باند\n"
+    "2️⃣ RSI أقل من 30 (تشبع بيعي)\n"
+    "3️⃣ السعر عند منطقة دعم\n"
+    "4️⃣ نموذج وتد هابط\n\n"
+    "قبل تفعيل الخدمة يجب قراءة إخلاء المسؤولية التالي والموافقة عليه:"
+)
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    state.subscribers.add(update.effective_chat.id)
-    state.save()
-    await update.message.reply_text(
-        "أهلاً! ✅ تم تفعيل الاشتراك.\n\n"
-        "سأمسح كل الأسهم الأمريكية 📈 وأهم 100 عملة رقمية 🪙 "
-        "بشكل متواصل على مدار اليوم (فريم الساعة): فور انتهاء الدورة تبدأ التالية، "
-        "وأرسل لك فقط الإشارات *الجديدة أو المتغيرة* التي تحقق "
-        f"{config.FILTERS_REQUIRED} فلاتر من 4:\n"
-        "1️⃣ السعر عند الحد السفلي لبولينجر باند\n"
-        "2️⃣ RSI أقل من 30 (تشبع بيعي)\n"
-        "3️⃣ السعر عند منطقة دعم\n"
-        "4️⃣ نموذج وتد هابط\n\n"
-        "الأوامر: /scan مسح يدوي فوري • /status الحالة • /stop إيقاف",
-        parse_mode=ParseMode.MARKDOWN,
-    )
+    chat_id = update.effective_chat.id
+    await update.message.reply_text(WELCOME, parse_mode=ParseMode.MARKDOWN)
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ قرأت إخلاء المسؤولية وأوافق عليه",
+                             callback_data="accept_disclaimer")
+    ]])
+    await update.message.reply_text(DISCLAIMER, parse_mode=ParseMode.MARKDOWN,
+                                    reply_markup=keyboard)
+    log.info("Start from chat %s", chat_id)
+
+
+async def on_accept(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    chat_id = query.message.chat.id
+    state.accepted[str(chat_id)] = time.time()
+    await query.answer("تم تسجيل موافقتك")
+    if eligible(chat_id):
+        state.subscribers.add(chat_id)
+        state.save()
+        await query.message.reply_text(
+            "✅ تم تسجيل موافقتك وتفعيل اشتراكك — ستصلك الإشارات الجديدة تلقائياً.\n"
+            "الأوامر: /scan مسح فوري • /status الحالة • /stop إيقاف التنبيهات")
+    else:
+        state.save()
+        await query.message.reply_text(
+            "✅ تم تسجيل موافقتك على إخلاء المسؤولية.\n\n"
+            "الخدمة بـ*اشتراك مدفوع*. للاشتراك تواصل مع "
+            f"{config.SUBSCRIBE_CONTACT} وأرسل له رقم معرّفك التالي:\n"
+            f"`{chat_id}`\n\n"
+            "سيصلك إشعار فور تفعيل اشتراكك.",
+            parse_mode=ParseMode.MARKDOWN)
 
 
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -274,7 +370,23 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("تم إيقاف التنبيهات. أرسل /start لإعادة التفعيل.")
 
 
+async def require_subscription(update: Update) -> bool:
+    chat_id = update.effective_chat.id
+    if eligible(chat_id):
+        return True
+    if str(chat_id) not in state.accepted:
+        await update.message.reply_text(
+            "أرسل /start أولاً للاطلاع على إخلاء المسؤولية والموافقة عليه.")
+    else:
+        await update.message.reply_text(
+            f"هذه الخدمة باشتراك مدفوع. للاشتراك تواصل مع {config.SUBSCRIBE_CONTACT} "
+            f"وأرسل له معرّفك: {chat_id}")
+    return False
+
+
 async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_subscription(update):
+        return
     if scan_lock.locked():
         await update.message.reply_text("⏳ يوجد مسح قيد التنفيذ حالياً، انتظر انتهاءه.")
         return
@@ -288,6 +400,78 @@ async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await do_scan(context.application, only_changes=False, notify_empty=True)
 
 
+async def cmd_disclaimer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(DISCLAIMER, parse_mode=ParseMode.MARKDOWN)
+
+
+# --------------------------------------------------------- admin commands
+
+def _fmt_expiry(expiry: float) -> str:
+    if expiry == 0:
+        return "مدى الحياة"
+    return dt.datetime.fromtimestamp(expiry, NY).strftime("%Y-%m-%d")
+
+
+async def cmd_approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/approve <chat_id> [days] — activate a paying subscriber (0 = lifetime)."""
+    if not is_admin(update.effective_chat.id):
+        return
+    try:
+        target = int(context.args[0])
+        days = int(context.args[1]) if len(context.args) > 1 else config.DEFAULT_SUB_DAYS
+    except (IndexError, ValueError):
+        await update.message.reply_text(
+            "الصيغة: /approve <chat_id> [عدد الأيام]\n"
+            "مثال: /approve 123456789 30 — أو 0 أيام لاشتراك دائم")
+        return
+    expiry = 0 if days == 0 else time.time() + days * 86400
+    state.approved[str(target)] = expiry
+    if str(target) in state.accepted:
+        state.subscribers.add(target)
+    state.save()
+    await update.message.reply_text(
+        f"✅ تم تفعيل {target} حتى: {_fmt_expiry(expiry)}")
+    try:
+        await context.bot.send_message(
+            target,
+            f"🎉 تم تفعيل اشتراكك حتى: {_fmt_expiry(expiry)}\n"
+            + ("ستصلك الإشارات تلقائياً." if str(target) in state.accepted
+               else "أرسل /start للموافقة على إخلاء المسؤولية وبدء الاستقبال."))
+    except Exception:
+        await update.message.reply_text(
+            "⚠️ لم أستطع مراسلته (ربما لم يبدأ محادثة مع البوت بعد).")
+
+
+async def cmd_revoke(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/revoke <chat_id> — cancel a subscription."""
+    if not is_admin(update.effective_chat.id):
+        return
+    try:
+        target = int(context.args[0])
+    except (IndexError, ValueError):
+        await update.message.reply_text("الصيغة: /revoke <chat_id>")
+        return
+    state.approved.pop(str(target), None)
+    state.subscribers.discard(target)
+    state.save()
+    await update.message.reply_text(f"🚫 أُلغي اشتراك {target}")
+
+
+async def cmd_subs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/subs — list active subscriptions (admin)."""
+    if not is_admin(update.effective_chat.id):
+        return
+    if not state.approved:
+        await update.message.reply_text("لا يوجد مشتركون مفعّلون.")
+        return
+    lines = ["المشتركون المفعّلون:"]
+    for cid, expiry in sorted(state.approved.items()):
+        active = "🟢" if eligible(int(cid)) else "🔴"
+        accepted = "✅" if cid in state.accepted else "⬜"
+        lines.append(f"{active} {cid} — حتى {_fmt_expiry(expiry)} — الإخلاء: {accepted}")
+    await update.message.reply_text("\n".join(lines))
+
+
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     open_now = "مفتوح ✅" if market_is_open() else "مغلق ❌"
     scanning = "نعم ⏳" if scan_lock.locked() else "لا"
@@ -295,12 +479,20 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         crypto_line = f"مفعّلة 🪙 ({len(universe.get_crypto_universe())} عملة)"
     else:
         crypto_line = "معطلة"
+    chat_id = update.effective_chat.id
+    if is_admin(chat_id):
+        sub_line = "أنت المشرف 👑"
+    elif eligible(chat_id):
+        sub_line = f"مفعّل حتى {_fmt_expiry(sub_expiry(chat_id))} ✅"
+    else:
+        sub_line = "غير مفعّل ❌"
     qualified = universe.load_qualified()
     universe_line = (f"قائمة مؤهلة ({len(qualified)} سهم)" if qualified
                      else "دورة تأهيل كاملة (كل الأسهم)")
     throttle_line = (f"نشطة مؤقتاً ({throttle.delay:.0f} ثانية بين الدفعات)"
                      if throttle.active else "غير نشطة")
     await update.message.reply_text(
+        f"اشتراكك: {sub_line}\n"
         f"السوق الأمريكي الآن: {open_now}\n"
         f"العملات الرقمية: {crypto_line}\n"
         f"نطاق الأسهم: {universe_line}\n"
@@ -326,6 +518,11 @@ def main():
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("scan", cmd_scan))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("disclaimer", cmd_disclaimer))
+    app.add_handler(CommandHandler("approve", cmd_approve))
+    app.add_handler(CommandHandler("revoke", cmd_revoke))
+    app.add_handler(CommandHandler("subs", cmd_subs))
+    app.add_handler(CallbackQueryHandler(on_accept, pattern="^accept_disclaimer$"))
     app.job_queue.run_repeating(scan_loop_job,
                                 interval=config.SCAN_PAUSE_SECONDS, first=10)
     app.job_queue.run_repeating(hot_job,
