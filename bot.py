@@ -98,8 +98,9 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
         log.info("Scan started")
         stock_symbols = await asyncio.to_thread(universe.get_universe)
         crypto_symbols = universe.get_crypto_universe() if config.CRYPTO_ENABLED else []
-        stats = engine.new_stats(len(stock_symbols) + len(crypto_symbols))
-        matched_symbols: set[str] = set()
+        kstats = {"stock": engine.new_stats(len(stock_symbols)),
+                  "crypto": engine.new_stats(len(crypto_symbols))}
+        matched = {"stock": 0, "crypto": 0}
         sent_count = 0
 
         # Crypto first: it is a single quick batch, so those alerts go out
@@ -108,8 +109,8 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
         plan += [("stock", batch) for batch in engine.make_batches(stock_symbols)]
 
         for kind, batch in plan:
-            matches = await asyncio.to_thread(engine.scan_batch, batch, stats)
-            matched_symbols.update(m.symbol for m in matches)
+            matches = await asyncio.to_thread(engine.scan_batch, batch, kstats[kind])
+            matched[kind] += len(matches)
             to_send = state.fresh_matches(matches) if only_changes else matches
             state.record(matches)
             if to_send:
@@ -121,22 +122,22 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
 
         state.prune()
         state.save()
-        log.info("Scan done: %d matched, %d sent, stats=%s",
-                 len(matched_symbols), sent_count, stats)
+        log.info("Scan done: matched=%s sent=%d stats=%s", matched, sent_count, kstats)
+
+        breakdown = (f"📈 الأسهم: {matched['stock']} مطابق "
+                     f"من {kstats['stock']['liquid']} مفحوص")
+        if config.CRYPTO_ENABLED:
+            breakdown += (f"\n🪙 العملات الرقمية: {matched['crypto']} مطابق "
+                          f"من {kstats['crypto']['liquid']} مفحوص")
 
         if sent_count == 0 and notify_empty:
             await broadcast(
                 app,
-                f"🔎 اكتمل المسح ({started:%H:%M} ET): لا توجد أسهم تحقق "
-                f"{config.FILTERS_REQUIRED}/4 من الفلاتر "
-                f"({stats['liquid']} سهم مفحوص).",
+                f"🔎 اكتمل المسح ({started:%H:%M} ET) — لا إشارات تحقق "
+                f"{config.FILTERS_REQUIRED}/4 من الفلاتر.\n{breakdown}",
             )
         elif not only_changes:
-            await broadcast(
-                app,
-                f"✅ اكتمل المسح: {sent_count} سهم مطابق "
-                f"من أصل {stats['liquid']} سهم مفحوص.",
-            )
+            await broadcast(app, f"✅ اكتمل المسح:\n{breakdown}")
 
 
 async def hourly_job(context: ContextTypes.DEFAULT_TYPE):
@@ -190,11 +191,16 @@ async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     open_now = "مفتوح ✅" if market_is_open() else "مغلق ❌"
     scanning = "نعم ⏳" if scan_lock.locked() else "لا"
+    if config.CRYPTO_ENABLED:
+        crypto_line = f"مفعّلة 🪙 ({len(universe.get_crypto_universe())} عملة)"
+    else:
+        crypto_line = "معطلة"
     await update.message.reply_text(
         f"السوق الأمريكي الآن: {open_now}\n"
+        f"العملات الرقمية: {crypto_line}\n"
         f"مسح قيد التنفيذ: {scanning}\n"
         f"عدد المشتركين: {len(state.subscribers)}\n"
-        f"أسهم في آخر تنبيه: {len(state.last_alerts)}\n"
+        f"إشارات في الذاكرة: {len(state.last_alerts)}\n"
         f"الشرط: {config.FILTERS_REQUIRED}/4 فلاتر • الفريم: {config.INTERVAL}"
     )
 
