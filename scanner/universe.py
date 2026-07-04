@@ -4,10 +4,12 @@ Source: the official Nasdaq Trader symbol directory files, refreshed daily.
 ETFs, test issues, warrants and units are excluded; only plain alphabetic
 tickers are kept (these are the common shares yfinance handles reliably).
 """
+import datetime as dt
 import io
 import json
 import logging
 import time
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -15,6 +17,8 @@ import requests
 from . import config
 
 log = logging.getLogger(__name__)
+
+NY = ZoneInfo("America/New_York")
 
 NASDAQ_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
 OTHER_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
@@ -90,13 +94,30 @@ def fetch_universe() -> list[str]:
     return symbols
 
 
+def last_rebuild_deadline(now: dt.datetime | None = None) -> float:
+    """Timestamp of the most recent scheduled rebuild time (ET) already passed.
+
+    A qualified list built before that moment is stale: the scheduled
+    rebuilds run just before the US session opens and just after the close
+    (QUALIFY_REBUILD_TIMES), so the list reflects each session's liquidity.
+    """
+    now = (now or dt.datetime.now(NY)).astimezone(NY)
+    stamps = []
+    for day_offset in (1, 0):
+        day = (now - dt.timedelta(days=day_offset)).date()
+        for hh, mm in config.QUALIFY_REBUILD_TIMES:
+            t = dt.datetime.combine(day, dt.time(hh, mm), tzinfo=NY)
+            if t <= now:
+                stamps.append(t.timestamp())
+    return max(stamps)
+
+
 def load_qualified() -> list[str] | None:
-    """Liquid symbols qualified by the last daily full pass, if still fresh."""
+    """Liquid symbols qualified by the last full pass, if not yet due a rebuild."""
     try:
         with open(config.QUALIFIED_FILE) as f:
             cache = json.load(f)
-        age_hours = (time.time() - cache["built_at"]) / 3600
-        if age_hours < config.QUALIFY_MAX_AGE_HOURS and cache["symbols"]:
+        if cache["built_at"] >= last_rebuild_deadline() and cache["symbols"]:
             return cache["symbols"]
     except (OSError, KeyError, ValueError):
         pass

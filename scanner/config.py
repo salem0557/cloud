@@ -49,9 +49,19 @@ WEDGE_LOOKBACK = _int("WEDGE_LOOKBACK", 120)
 WEDGE_PIVOT_ORDER = _int("WEDGE_PIVOT_ORDER", 3)
 WEDGE_MIN_BARS = _int("WEDGE_MIN_BARS", 20)
 
-# --- Qualified list (daily full pass qualifies liquid symbols; continuous
-# --- cycles then scan only those, cutting request volume drastically) ---
-QUALIFY_MAX_AGE_HOURS = _int("QUALIFY_MAX_AGE_HOURS", 24)
+# --- Qualified list (full passes qualify liquid symbols; continuous cycles
+# --- then scan only those, cutting request volume drastically) ---
+# Rebuilt on a schedule (ET times, comma-separated): once before the US
+# session opens and once right after the close.
+def _times(name: str, default: str) -> list[tuple[int, int]]:
+    out = []
+    for part in os.environ.get(name, default).split(","):
+        hh, mm = part.strip().split(":")
+        out.append((int(hh), int(mm)))
+    return out
+
+
+QUALIFY_REBUILD_TIMES = _times("QUALIFY_REBUILD_TIMES", "09:00,16:30")
 
 # --- Hot list: near-signal symbols get re-checked on a fast lane ---
 HOTLIST_MIN_SCORE = _int("HOTLIST_MIN_SCORE", 2)       # filters needed to be "hot"
