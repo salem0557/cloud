@@ -1,16 +1,11 @@
 """Scan orchestration: universe -> data -> filters -> matches."""
 import logging
-import re
 from dataclasses import dataclass, field
 
 from . import config, data, universe
 from .indicators import FILTERS
 
 log = logging.getLogger(__name__)
-
-
-def is_crypto_symbol(symbol: str) -> bool:
-    return symbol.endswith("-USD")
 
 
 @dataclass
@@ -24,18 +19,6 @@ class Match:
     @property
     def score(self) -> int:
         return len(self.matched)
-
-    @property
-    def is_crypto(self) -> bool:
-        return is_crypto_symbol(self.symbol)
-
-    @property
-    def display_symbol(self) -> str:
-        """BTC-USD -> BTC; also drop Yahoo's CoinMarketCap id (TON11419 -> TON)."""
-        if not self.is_crypto:
-            return self.symbol
-        base = self.symbol[:-len("-USD")]
-        return re.sub(r"\d{4,}$", "", base)
 
     def signature(self) -> str:
         """Stable identity of the alert, used for change detection."""
@@ -87,7 +70,7 @@ def scan_batch(batch: list[str], stats: dict) -> BatchResult:
     result.with_data = len(frames)
     stats["with_data"] += len(frames)
     for sym, df in frames.items():
-        if not data.passes_liquidity(df, is_crypto=is_crypto_symbol(sym)):
+        if not data.passes_liquidity(df):
             continue
         stats["liquid"] += 1
         result.liquid.append(sym)

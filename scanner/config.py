@@ -44,7 +44,7 @@ DOWNLOAD_THREADS = _int("DOWNLOAD_THREADS", 12)     # parallel requests per batc
 BATCH_INTERVAL_SECONDS = _float("BATCH_INTERVAL_SECONDS", 2.0)  # floor between batches
 
 # --- Off-peak savings: slower pace overnight, no stock scanning on weekends
-# --- and market holidays (crypto keeps its normal pace at all times) ---
+# --- and market holidays ---
 WEEKEND_HOLIDAY_PAUSE_ENABLED = os.environ.get("WEEKEND_HOLIDAY_PAUSE_ENABLED", "1") == "1"
 NIGHT_START_HOUR = _int("NIGHT_START_HOUR", 20)     # 8pm ET: overnight session opens
 NIGHT_END_HOUR = _int("NIGHT_END_HOUR", 4)          # 4am ET: overnight session ends
@@ -54,14 +54,6 @@ NIGHT_HOTLIST_INTERVAL_SECONDS = _int("NIGHT_HOTLIST_INTERVAL_SECONDS", 300)
 # --- Liquidity pre-filter (skip dead/penny stocks) ---
 MIN_PRICE = _float("MIN_PRICE", 2.0)               # USD
 MIN_AVG_VOLUME = _int("MIN_AVG_VOLUME", 30_000)    # avg volume per hourly bar
-
-# --- Crypto ---
-CRYPTO_ENABLED = os.environ.get("CRYPTO_ENABLED", "1") == "1"
-# Coins are priced from cents to thousands of dollars, so liquidity is
-# judged in dollar volume per hourly bar instead of price/share-count.
-MIN_CRYPTO_DOLLAR_VOLUME = _float("MIN_CRYPTO_DOLLAR_VOLUME", 50_000)
-CRYPTO_EXTRA = [s.strip().upper() for s in
-                os.environ.get("CRYPTO_EXTRA", "").split(",") if s.strip()]
 
 # --- Filter parameters ---
 BB_PERIOD = _int("BB_PERIOD", 20)

@@ -49,12 +49,8 @@ def fetch_batch(symbols: list[str]) -> dict[str, pd.DataFrame]:
     return out
 
 
-def passes_liquidity(df: pd.DataFrame, is_crypto: bool = False) -> bool:
-    """Skip penny/illiquid assets before running the filters."""
+def passes_liquidity(df: pd.DataFrame) -> bool:
+    """Skip penny/illiquid stocks before running the filters."""
     last_close = df["Close"].iloc[-1]
     avg_vol = df["Volume"].tail(20).mean()
-    if is_crypto:
-        # Coins range from cents to thousands of dollars, so judge liquidity
-        # by traded dollar volume rather than price and unit count.
-        return last_close * avg_vol >= config.MIN_CRYPTO_DOLLAR_VOLUME
     return last_close >= config.MIN_PRICE and avg_vol >= config.MIN_AVG_VOLUME

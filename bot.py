@@ -1,4 +1,4 @@
-"""Telegram bot: continuous scanner for US stocks and top cryptocurrencies.
+"""Telegram bot: continuous scanner for US stocks.
 
 Filters (a stock is reported when >= FILTERS_REQUIRED of them match):
   1. Price at the lower Bollinger Band
@@ -88,10 +88,7 @@ def market_is_open(now: dt.datetime | None = None) -> bool:
 
 # ------------------------------------------------------------- formatting
 
-KIND_HEADERS = {
-    "stock": "⚡ إشارة فورية — 📈 أسهم أمريكية",
-    "crypto": "⚡ إشارة فورية — 🪙 عملات رقمية",
-}
+ALERT_HEADER = "⚡ إشارة فورية — 📈 أسهم أمريكية"
 
 ALERT_FOOTER = "⚠️ تحليل فني آلي — ليس توصية بشراء أو بيع"
 
@@ -99,7 +96,7 @@ DISCLAIMER = (
     "⚠️ *إخلاء مسؤولية — يُرجى القراءة بعناية*\n\n"
     "هذه الخدمة *أداة تحليل فني آلية* تعتمد على مؤشرات رياضية "
     "(بولينجر باند، مؤشر القوة النسبية RSI، مستويات الدعم، الأنماط السعرية) "
-    "لرصد الحالات الفنية في سوق الأسهم الأمريكية والعملات الرقمية، "
+    "لرصد الحالات الفنية في سوق الأسهم الأمريكية، "
     "وعرض بيانات عقود الخيارات الأنشط سيولةً وفق معايير آلية بحتة.\n\n"
     "1️⃣ ما تقدمه هذه الخدمة *ليس توصية ولا مشورة استثمارية* ولا دعوة أو تحريضاً "
     "على شراء أو بيع أي ورقة مالية أو أصل رقمي أو عقد مشتقات، ولا يجوز تفسيره "
@@ -109,7 +106,7 @@ DISCLAIMER = (
     "المشورة الاستثمارية، ولا تقدم الخدمة أي عمل من الأعمال الخاضعة للترخيص.\n\n"
     "3️⃣ المؤشرات الفنية أدوات إحصائية *قد تخطئ*، والنتائج السابقة لا تضمن "
     "الأداء المستقبلي، والبيانات المعروضة قد يشوبها تأخير أو خطأ من مصادرها.\n\n"
-    "4️⃣ التداول في الأسهم وعقود الخيارات والعملات الرقمية *ينطوي على مخاطر "
+    "4️⃣ التداول في الأسهم وعقود الخيارات *ينطوي على مخاطر "
     "عالية* قد تصل إلى خسارة رأس المال كاملاً. عقود الخيارات المعروضة هي نتاج "
     "فرز آلي لأنشط العقود سيولةً وليست اقتراحاً بالتداول عليها.\n\n"
     "5️⃣ أي قرار استثماري تتخذه هو *مسؤوليتك وحدك*، ولا يتحمل مشغّل الخدمة أي "
@@ -144,8 +141,7 @@ def eligible(chat_id: int) -> bool:
 
 
 def format_match(m) -> str:
-    icon = "🪙 " if m.is_crypto else ""
-    lines = [f"{icon}*{m.display_symbol}* — {m.score}/4 — {fmt_price(m.price)}"]
+    lines = [f"*{m.symbol}* — {m.score}/4 — {fmt_price(m.price)}"]
     for key, (name, _) in FILTERS.items():
         mark = "✅" if key in m.matched else "❌"
         lines.append(f"  {mark} {name}: {m.details.get(key, '-')}")
@@ -180,11 +176,11 @@ def format_options(picks: dict) -> str:
 
 
 async def attach_options(matches):
-    """Fill options_text on stock matches (coins have no listed options)."""
+    """Fill options_text on each match."""
     if not config.OPTIONS_ENABLED:
         return
     for m in matches:
-        if m.is_crypto or m.options_text:
+        if m.options_text:
             continue
         no_options_line = "  📊 لا يوجد أوبشن لهذا السهم"
         try:
@@ -237,11 +233,10 @@ async def broadcast(app: Application, text: str):
 
 # ------------------------------------------------------------------ scans
 
-async def send_matches(app, kind: str, to_send, hot: bool = False):
-    if kind == "stock":
-        await attach_options(to_send)
+async def send_matches(app, to_send, hot: bool = False):
+    await attach_options(to_send)
     flame = "🔥 " if hot else ""
-    header = f"{flame}{KIND_HEADERS[kind]} — {dt.datetime.now(NY):%H:%M} ET"
+    header = f"{flame}{ALERT_HEADER} — {dt.datetime.now(NY):%H:%M} ET"
     for chunk in build_messages(header, to_send):
         await broadcast(app, chunk)
 
@@ -255,39 +250,31 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
     async with scan_lock:
         started = dt.datetime.now(NY)
         # No US stock can move over the weekend/a market holiday, so skip
-        # the stock side entirely and save the requests; crypto never closes.
-        stocks_paused = market_calendar.stocks_scan_paused()
-        if stocks_paused:
+        # the whole scan and save the requests.
+        paused = market_calendar.scan_paused()
+        if paused:
             full_pass, stock_symbols = False, []
         else:
             full_pass, stock_symbols = await asyncio.to_thread(universe.stock_scan_list)
-        crypto_symbols = universe.get_crypto_universe() if config.CRYPTO_ENABLED else []
-        log.info("Scan started (stocks_paused=%s, full_pass=%s, %d stocks)",
-                 stocks_paused, full_pass, len(stock_symbols))
-        kstats = {"stock": engine.new_stats(len(stock_symbols)),
-                  "crypto": engine.new_stats(len(crypto_symbols))}
-        matched = {"stock": 0, "crypto": 0}
+        log.info("Scan started (paused=%s, full_pass=%s, %d stocks)",
+                 paused, full_pass, len(stock_symbols))
+        stats = engine.new_stats(len(stock_symbols))
+        matched = 0
         sent_count = 0
         new_hot: set[str] = set()
         qualified: list[str] = []
 
-        # Crypto first: it is a single quick batch, so those alerts go out
-        # within seconds; stocks and coins are never mixed in one message.
-        plan = [("crypto", batch) for batch in engine.make_batches(crypto_symbols)]
-        plan += [("stock", batch) for batch in engine.make_batches(stock_symbols)]
-
-        for kind, batch in plan:
+        for batch in engine.make_batches(stock_symbols):
             result, delta = await scan_batch_async(batch)
-            merge_stats(kstats[kind], delta)
-            matched[kind] += len(result.matches)
+            merge_stats(stats, delta)
+            matched += len(result.matches)
             new_hot.update(result.hot)
-            if kind == "stock":
-                qualified.extend(result.liquid)
+            qualified.extend(result.liquid)
             to_send = state.fresh_matches(result.matches) if only_changes else result.matches
             state.record(result.matches)
             if to_send:
                 sent_count += len(to_send)
-                await send_matches(app, kind, to_send)
+                await send_matches(app, to_send)
                 state.save()  # crash-safe: never re-alert what was already sent
             throttle.report(result.data_ratio)
             # Always pace batches; unpaced cycles crashed the container
@@ -295,26 +282,22 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
 
         if full_pass and qualified:
             await asyncio.to_thread(universe.save_qualified, qualified)
-        if stocks_paused:
-            # Keep prior stock hot-symbols so the fast lane resumes instantly
-            # when trading reopens instead of waiting for a fresh full pass.
-            new_hot |= {s for s in hotlist if not engine.is_crypto_symbol(s)}
+        if paused:
+            # Keep the prior hot list so the fast lane resumes instantly when
+            # trading reopens instead of waiting for a fresh full pass.
+            new_hot |= hotlist
         hotlist = new_hot
         state.prune()
         state.save()
         gc.collect()  # drop per-cycle DataFrames before the next cycle starts
         rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
-        log.info("Scan done: matched=%s sent=%d hot=%d peak_rss=%.0fMB stats=%s",
-                 matched, sent_count, len(hotlist), rss_mb, kstats)
+        log.info("Scan done: matched=%d sent=%d hot=%d peak_rss=%.0fMB stats=%s",
+                 matched, sent_count, len(hotlist), rss_mb, stats)
 
-        if stocks_paused:
+        if paused:
             breakdown = "📈 الأسهم: متوقف مؤقتاً (نهاية أسبوع/عطلة رسمية)"
         else:
-            breakdown = (f"📈 الأسهم: {matched['stock']} مطابق "
-                         f"من {kstats['stock']['liquid']} مفحوص")
-        if config.CRYPTO_ENABLED:
-            breakdown += (f"\n🪙 العملات الرقمية: {matched['crypto']} مطابق "
-                          f"من {kstats['crypto']['liquid']} مفحوص")
+            breakdown = f"📈 الأسهم: {matched} مطابق من {stats['liquid']} مفحوص"
 
         if sent_count == 0 and notify_empty:
             await broadcast(
@@ -329,14 +312,12 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
 async def do_hot_scan(app: Application):
     """Fast lane: re-check near-signal symbols (>=2 filters) every couple of
     minutes so a setup completing between full cycles is caught immediately."""
-    if not hotlist or hot_lock.locked():
+    if not hotlist or hot_lock.locked() or market_calendar.scan_paused():
         return
     if throttle.delay >= 60:
         return  # Yahoo is pushing back; don't add fast-lane pressure
     async with hot_lock:
         symbols = sorted(hotlist)[:config.HOTLIST_MAX]
-        if market_calendar.stocks_scan_paused():
-            symbols = [s for s in symbols if engine.is_crypto_symbol(s)]
         for batch in engine.make_batches(symbols):
             result, _ = await scan_batch_async(batch)
             throttle.report(result.data_ratio)
@@ -344,10 +325,7 @@ async def do_hot_scan(app: Application):
             if not to_send:
                 continue
             state.record(result.matches)
-            for kind in ("crypto", "stock"):
-                group = [m for m in to_send if (kind == "crypto") == m.is_crypto]
-                if group:
-                    await send_matches(app, kind, group, hot=True)
+            await send_matches(app, to_send, hot=True)
             state.save()
 
 
@@ -376,7 +354,7 @@ async def scan_loop_job(context: ContextTypes.DEFAULT_TYPE):
 
 WELCOME = (
     "أهلاً بك في بوت المسح الفني للسوق الأمريكي 📊\n\n"
-    "تفحص الخدمة كل الأسهم الأمريكية 📈 وأهم 100 عملة رقمية 🪙 بشكل متواصل "
+    "تفحص الخدمة كل الأسهم الأمريكية 📈 بشكل متواصل "
     "(فريم الساعة) وترصد الحالات الفنية التي تحقق "
     f"{config.FILTERS_REQUIRED} شروط من 4:\n"
     "1️⃣ السعر عند الحد السفلي لبولينجر باند\n"
@@ -450,7 +428,7 @@ async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state.subscribers.add(update.effective_chat.id)
     state.save()
     await update.message.reply_text(
-        "🔎 بدأ المسح اليدوي (العملات الرقمية أولاً ثم كل الأسهم الأمريكية)... "
+        "🔎 بدأ المسح اليدوي لكل الأسهم الأمريكية... "
         "سأرسل كل إشارة فور اكتشافها، ثم رسالة عند اكتمال المسح "
         "(المسح الكامل يستغرق 15-40 دقيقة)."
     )
@@ -553,10 +531,6 @@ async def cmd_subs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     open_now = "مفتوح ✅" if market_is_open() else "مغلق ❌"
     scanning = "نعم ⏳" if scan_lock.locked() else "لا"
-    if config.CRYPTO_ENABLED:
-        crypto_line = f"مفعّلة 🪙 ({len(universe.get_crypto_universe())} عملة)"
-    else:
-        crypto_line = "معطلة"
     chat_id = update.effective_chat.id
     if is_admin(chat_id):
         sub_line = "أنت المشرف 👑"
@@ -572,13 +546,12 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pace_line = ("ليلي 🌙 (بطيء لتوفير الاستهلاك)" if market_calendar.is_night_hours()
                 else "نهاري (عادي)")
     stock_scan_line = ("متوقف 🚫 (نهاية أسبوع/عطلة رسمية)"
-                       if market_calendar.stocks_scan_paused() else "نشط ✅")
+                       if market_calendar.scan_paused() else "نشط ✅")
     await update.message.reply_text(
         f"اشتراكك: {sub_line}\n"
         f"السوق الأمريكي الآن: {open_now}\n"
         f"مسح الأسهم: {stock_scan_line}\n"
         f"وتيرة المسح: {pace_line}\n"
-        f"العملات الرقمية: {crypto_line}\n"
         f"نطاق الأسهم: {universe_line}\n"
         f"القائمة الساخنة 🔥: {len(hotlist)} رمز (فحص كل {config.HOTLIST_INTERVAL_SECONDS // 60} دقيقة)\n"
         f"التهدئة التلقائية: {throttle_line}\n"

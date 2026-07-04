@@ -1,8 +1,6 @@
 """NYSE trading calendar helpers: holiday dates, weekend closure window, and
-the overnight-session hours — used to pause stock scanning when nothing can
-move (saving compute/requests) and to slow the scan pace overnight.
-
-Crypto never closes, so callers only gate the STOCK side of a scan on these.
+the overnight-session hours — used to pause scanning entirely when no US
+stock can move (saving compute/requests) and to slow the scan pace overnight.
 """
 import datetime as dt
 from zoneinfo import ZoneInfo
@@ -67,9 +65,9 @@ def is_night_hours(now: dt.datetime | None = None) -> bool:
     return h >= config.NIGHT_START_HOUR or h < config.NIGHT_END_HOUR
 
 
-def stocks_scan_paused(now: dt.datetime | None = None) -> bool:
+def scan_paused(now: dt.datetime | None = None) -> bool:
     """True when no US stock can possibly trade: weekend gap (Friday 20:00 ET
-    to Sunday 20:00 ET) or a full market holiday date. Crypto is unaffected.
+    to Sunday 20:00 ET) or a full market holiday date.
     """
     if not config.WEEKEND_HOLIDAY_PAUSE_ENABLED:
         return False
