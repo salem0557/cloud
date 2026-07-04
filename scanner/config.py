@@ -42,6 +42,8 @@ WEDGE_MIN_BARS = _int("WEDGE_MIN_BARS", 20)
 
 # --- Alerting ---
 FILTERS_REQUIRED = _int("FILTERS_REQUIRED", 3)     # minimum matched filters (out of 4)
+ALERT_MEMORY_HOURS = _int("ALERT_MEMORY_HOURS", 24)  # identical alert not resent unless
+                                                     # its signal was gone this long
 
 # --- Files ---
 # On Railway, attaching a volume sets RAILWAY_VOLUME_MOUNT_PATH automatically,

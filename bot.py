@@ -106,7 +106,7 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
                     await broadcast(app, chunk)
                 state.save()  # crash-safe: never re-alert what was already sent
 
-        state.prune(matched_symbols)
+        state.prune()
         state.save()
         log.info("Scan done: %d matched, %d sent, stats=%s",
                  len(matched_symbols), sent_count, stats)

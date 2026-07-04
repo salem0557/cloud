@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 
 from . import config
 
@@ -13,7 +14,8 @@ class State:
     def __init__(self, path: str = None):
         self.path = path or config.STATE_FILE
         self.subscribers: set[int] = set()
-        self.last_alerts: dict[str, str] = {}  # symbol -> alert signature
+        # symbol -> {"sig": alert signature, "ts": last time it matched}
+        self.last_alerts: dict[str, dict] = {}
         self._load()
 
     def _load(self):
@@ -21,7 +23,11 @@ class State:
             with open(self.path) as f:
                 raw = json.load(f)
             self.subscribers = set(raw.get("subscribers", []))
-            self.last_alerts = dict(raw.get("last_alerts", {}))
+            now = time.time()
+            for sym, entry in dict(raw.get("last_alerts", {})).items():
+                if isinstance(entry, str):  # legacy format: bare signature
+                    entry = {"sig": entry, "ts": now}
+                self.last_alerts[sym] = entry
         except (OSError, ValueError):
             pass
 
@@ -44,18 +50,27 @@ class State:
 
     # ------------------------------------------------------------- dedup
     # Alerts are streamed batch-by-batch during a scan: fresh_matches picks
-    # what to send now, record remembers it, and prune (at scan end) forgets
-    # symbols that stopped matching so they re-alert if the signal returns.
+    # what to send now, record refreshes the memory of everything currently
+    # matching, and prune (at scan end) only forgets a symbol after its
+    # signal has been gone for ALERT_MEMORY_HOURS. The time buffer matters:
+    # a transient batch-download failure or a filter flickering off for one
+    # scan must NOT cause the identical alert to be sent again next hour.
 
     def fresh_matches(self, matches) -> list:
         """Matches that are new or whose matched-filter set changed."""
-        return [m for m in matches
-                if self.last_alerts.get(m.symbol) != m.signature()]
+        fresh = []
+        for m in matches:
+            entry = self.last_alerts.get(m.symbol)
+            if entry is None or entry["sig"] != m.signature():
+                fresh.append(m)
+        return fresh
 
     def record(self, matches):
+        now = time.time()
         for m in matches:
-            self.last_alerts[m.symbol] = m.signature()
+            self.last_alerts[m.symbol] = {"sig": m.signature(), "ts": now}
 
-    def prune(self, still_matching: set[str]):
-        self.last_alerts = {s: sig for s, sig in self.last_alerts.items()
-                            if s in still_matching}
+    def prune(self):
+        cutoff = time.time() - config.ALERT_MEMORY_HOURS * 3600
+        self.last_alerts = {s: e for s, e in self.last_alerts.items()
+                            if e["ts"] >= cutoff}
