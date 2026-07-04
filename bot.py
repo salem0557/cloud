@@ -139,11 +139,14 @@ def format_options(picks: dict) -> str:
             continue
         lines.append(f"  {SIDE_LABELS[side]}:")
         for i, c in enumerate(contracts, 1):
+            approx = "≈" if c.get("estimated") else ""
             lines.append(
                 f"    {i}) تنفيذ {c['strike']:.2f}$ • ينتهي {c['expiry']}"
-                f" ({c['days']} يوم) • بريميوم {c['premium']:.2f}$"
-                f" = {c['premium'] * 100:.0f}$/عقد"
+                f" ({c['days']} يوم) • بريميوم {approx}{c['premium']:.2f}$"
+                f" = {approx}{c['premium'] * 100:.0f}$/عقد"
             )
+    if any(c.get("estimated") for side in ("call", "put") for c in picks.get(side) or []):
+        lines.append("  (≈ آخر سعر تداول — سوق الأوبشنز مغلق الآن)")
     return "\n".join(lines)
 
 
@@ -156,7 +159,8 @@ async def attach_options(matches):
             continue
         try:
             picks = await asyncio.to_thread(options.best_options, m.symbol, m.price)
-            m.options_text = format_options(picks)
+            m.options_text = (format_options(picks)
+                              or "  📊 لا تتوفر عقود أوبشنز سائلة لهذا السهم")
         except Exception:
             log.exception("Options lookup failed for %s", m.symbol)
 

@@ -17,12 +17,12 @@ log = logging.getLogger(__name__)
 
 
 def _score(row, spot: float):
-    """Return (score, mid_premium) or None if the contract is untradeable."""
-    bid = float(row.get("bid") or 0)
-    ask = float(row.get("ask") or 0)
-    if bid <= 0 or ask <= 0 or ask < bid:
-        return None
-    mid = (bid + ask) / 2
+    """Return (score, premium, estimated) or None if the contract is untradeable.
+
+    estimated=True means the premium comes from the last traded price: outside
+    options market hours (9:30-16:00 ET) Yahoo zeroes out bid/ask, which must
+    not hide the picks entirely.
+    """
     strike = float(row["strike"])
     moneyness = abs(strike - spot) / spot
     if moneyness > config.OPTIONS_MONEYNESS_WINDOW:
@@ -31,11 +31,25 @@ def _score(row, spot: float):
     vol = int(row.get("volume") or 0)
     if oi + vol < config.OPTIONS_MIN_ACTIVITY:
         return None
-    spread = (ask - bid) / mid
+
+    bid = float(row.get("bid") or 0)
+    ask = float(row.get("ask") or 0)
+    last = float(row.get("lastPrice") or 0)
+    if ask >= bid > 0:
+        premium = (bid + ask) / 2
+        spread_score = max(0.0, 1 - ((ask - bid) / premium) * 2)  # 0 at 50% spread
+        estimated = False
+    elif last > 0:
+        premium = last
+        spread_score = 0.0  # no live quote to judge; rank below quoted contracts
+        estimated = True
+    else:
+        return None
+
     atm_score = max(0.0, 1 - moneyness / config.OPTIONS_MONEYNESS_WINDOW)
     liq_score = min(1.0, math.log10(1 + oi + 2 * vol) / 4)  # ~1.0 at 10k activity
-    spread_score = max(0.0, 1 - spread * 2)                 # 0 at 50% spread
-    return 0.45 * atm_score + 0.35 * liq_score + 0.20 * spread_score, mid
+    score = 0.45 * atm_score + 0.35 * liq_score + 0.20 * spread_score
+    return score, premium, estimated
 
 
 def best_options(symbol: str, spot: float) -> dict[str, list[dict]]:
@@ -72,12 +86,13 @@ def best_options(symbol: str, spot: float) -> dict[str, list[dict]]:
                 scored = _score(row, spot)
                 if scored is None:
                     continue
-                score, mid = scored
+                score, premium, estimated = scored
                 candidates[side].append({
                     "strike": float(row["strike"]),
                     "expiry": exp,
                     "days": days,
-                    "premium": round(mid, 2),
+                    "premium": round(premium, 2),
+                    "estimated": estimated,
                     "score": score,
                     "activity": int(row.get("openInterest") or 0)
                                 + int(row.get("volume") or 0),
