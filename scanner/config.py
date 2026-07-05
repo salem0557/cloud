@@ -62,16 +62,27 @@ BB_TOUCH_TOLERANCE = _float("BB_TOUCH_TOLERANCE", 0.005)  # close within 0.5% of
 
 RSI_PERIOD = _int("RSI_PERIOD", 14)
 RSI_OVERSOLD = _float("RSI_OVERSOLD", 30.0)
+RSI_OVERBOUGHT = _float("RSI_OVERBOUGHT", 70.0)
 
-SUPPORT_LOOKBACK = _int("SUPPORT_LOOKBACK", 250)          # bars scanned for pivot lows
+# Shared by both support (bullish) and its exact mirror, resistance (bearish)
+# — the clustering/proximity geometry is identical, just flipped direction.
+SUPPORT_LOOKBACK = _int("SUPPORT_LOOKBACK", 250)          # bars scanned for pivot lows/highs
 SUPPORT_CLUSTER_TOL = _float("SUPPORT_CLUSTER_TOL", 0.01) # pivots within 1% form one level
 SUPPORT_MIN_TOUCHES = _int("SUPPORT_MIN_TOUCHES", 2)
-SUPPORT_PROXIMITY = _float("SUPPORT_PROXIMITY", 0.015)    # price within 1.5% above level
-SUPPORT_BREAK_TOL = _float("SUPPORT_BREAK_TOL", 0.005)    # allow 0.5% dip below level
+SUPPORT_PROXIMITY = _float("SUPPORT_PROXIMITY", 0.015)    # price within 1.5% of level
+SUPPORT_BREAK_TOL = _float("SUPPORT_BREAK_TOL", 0.005)    # allow 0.5% slip past the level
 
+# Shared by both falling wedge (bullish) and its exact mirror, rising wedge
+# (bearish) — same pivot/lookback geometry, opposite slope/convergence signs.
 WEDGE_LOOKBACK = _int("WEDGE_LOOKBACK", 120)
 WEDGE_PIVOT_ORDER = _int("WEDGE_PIVOT_ORDER", 3)
 WEDGE_MIN_BARS = _int("WEDGE_MIN_BARS", 20)
+
+# MACD: the bearish-side's 5th filter (a bearish signal-line crossover),
+# commonly used by analysts as overbought-reversal confirmation.
+MACD_FAST = _int("MACD_FAST", 12)
+MACD_SLOW = _int("MACD_SLOW", 26)
+MACD_SIGNAL = _int("MACD_SIGNAL", 9)
 
 # --- Qualified list (full passes qualify liquid symbols; continuous cycles
 # --- then scan only those, cutting request volume drastically) ---
@@ -112,6 +123,7 @@ OPTIONS_MONEYNESS_WINDOW = _float("OPTIONS_MONEYNESS_WINDOW", 0.25)  # strike wi
 
 # --- Alerting ---
 FILTERS_REQUIRED = _int("FILTERS_REQUIRED", 3)     # minimum matched filters (out of 4)
+BEARISH_FILTERS_REQUIRED = _int("BEARISH_FILTERS_REQUIRED", 3)  # out of 5 (adds MACD)
 ALERT_MEMORY_HOURS = _int("ALERT_MEMORY_HOURS", 24)  # identical alert not resent unless
                                                      # its signal was gone this long
 

@@ -1,10 +1,17 @@
-"""Telegram bot: continuous scanner for US stocks.
+"""Telegram bot: continuous scanner for US stocks, both directions.
 
-Filters (a stock is reported when >= FILTERS_REQUIRED of them match):
+Bullish reversal-up (a stock is reported when >= FILTERS_REQUIRED match):
   1. Price at the lower Bollinger Band
   2. RSI < 30 (oversold)
   3. Price at a support zone
   4. Falling wedge pattern
+
+Bearish reversal-down / overbought (>= BEARISH_FILTERS_REQUIRED match):
+  1. Price at the upper Bollinger Band
+  2. RSI > 70 (overbought)
+  3. Price at a resistance zone
+  4. Rising wedge pattern
+  5. Bearish MACD signal-line crossover
 
 Run:  TELEGRAM_BOT_TOKEN=xxx python bot.py
 """
@@ -33,7 +40,7 @@ from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
 
 from scanner import chart, config, engine, market_calendar, options, performance, sentiment, universe
 from scanner import data as data_mod
-from scanner.indicators import FILTERS, fmt_price
+from scanner.indicators import FILTERS, FILTERS_BEARISH, fmt_price
 from scanner.state import State
 from scanner.throttle import Throttle
 
@@ -90,15 +97,19 @@ def market_is_open(now: dt.datetime | None = None) -> bool:
 
 # ------------------------------------------------------------- formatting
 
-ALERT_HEADER = "⚡ إشارة فورية — 📈 أسهم أمريكية"
+ALERT_HEADERS = {
+    "bullish": "⚡ إشارة فورية — 📈 احتمال صعود",
+    "bearish": "⚡ إشارة فورية — 📉 تشبع شرائي/احتمال هبوط",
+}
 
 ALERT_FOOTER = "⚠️ تحليل فني آلي — ليس توصية بشراء أو بيع"
 
 DISCLAIMER = (
     "⚠️ *إخلاء مسؤولية — يُرجى القراءة بعناية*\n\n"
     "هذه الخدمة *أداة تحليل فني آلية* تعتمد على مؤشرات رياضية "
-    "(بولينجر باند، مؤشر القوة النسبية RSI، مستويات الدعم، الأنماط السعرية) "
-    "لرصد الحالات الفنية في سوق الأسهم الأمريكية، "
+    "(بولينجر باند، مؤشر القوة النسبية RSI، مستويات الدعم والمقاومة، MACD، "
+    "الأنماط السعرية) لرصد الحالات الفنية في سوق الأسهم الأمريكية — سواء "
+    "حالات تشبع بيعي (احتمال صعود) أو تشبع شرائي (احتمال هبوط) — "
     "وعرض بيانات عقود الخيارات الأنشط سيولةً وفق معايير آلية بحتة.\n\n"
     "1️⃣ ما تقدمه هذه الخدمة *ليس توصية ولا مشورة استثمارية* ولا دعوة أو تحريضاً "
     "على شراء أو بيع أي ورقة مالية أو أصل رقمي أو عقد مشتقات، ولا يجوز تفسيره "
@@ -143,8 +154,9 @@ def eligible(chat_id: int) -> bool:
 
 
 def format_match(m) -> str:
-    lines = [f"*{m.symbol}* — {m.score}/4 — {fmt_price(m.price)}"]
-    for key, (name, _) in FILTERS.items():
+    filters = FILTERS if m.kind == "bullish" else FILTERS_BEARISH
+    lines = [f"*{m.symbol}* — {m.score}/{m.total_filters} — {fmt_price(m.price)}"]
+    for key, (name, _) in filters.items():
         mark = "✅" if key in m.matched else "❌"
         lines.append(f"  {mark} {name}: {m.details.get(key, '-')}")
     if m.options_text:
@@ -229,7 +241,7 @@ async def attach_charts(matches):
             continue
         try:
             m.chart_png = await asyncio.to_thread(
-                chart.render_chart, m.symbol, m.chart_df, m.details)
+                chart.render_chart, m.symbol, m.chart_df, m.details, m.kind)
         except Exception:
             log.exception("Chart render failed for %s", m.symbol)
         m.chart_df = None
@@ -301,10 +313,10 @@ async def send_matches(app, to_send, hot: bool = False):
     await attach_charts(to_send)
     await attach_sentiment(to_send)
     await asyncio.to_thread(performance.track_alerts, to_send)
-    perf_line = await asyncio.to_thread(performance.compact_summary)
     flame = "🔥 " if hot else ""
-    header = f"{flame}{ALERT_HEADER} — {dt.datetime.now(NY):%H:%M} ET"
     for m in to_send:
+        header = f"{flame}{ALERT_HEADERS[m.kind]} — {dt.datetime.now(NY):%H:%M} ET"
+        perf_line = await asyncio.to_thread(performance.compact_summary, m.kind)
         text = f"{header}\n\n{format_match(m)}\n\n{ALERT_FOOTER}"
         if perf_line:
             text += f"\n{perf_line}"
@@ -313,7 +325,8 @@ async def send_matches(app, to_send, hot: bool = False):
         elif len(text) <= CHART_CAPTION_LIMIT:
             await broadcast_photo(app, m.chart_png, text)
         else:
-            await broadcast_photo(app, m.chart_png, f"{header}\n\n*{m.symbol}* — {m.score}/4")
+            await broadcast_photo(app, m.chart_png,
+                                  f"{header}\n\n*{m.symbol}* — {m.score}/{m.total_filters}")
             await broadcast(app, text)
 
 
@@ -336,7 +349,7 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
         log.info("Scan started (paused=%s, full_pass=%s, %d stocks)",
                  paused, full_pass, len(stock_symbols))
         stats = engine.new_stats(len(stock_symbols))
-        matched = 0
+        matched = {"bullish": 0, "bearish": 0}
         sent_count = 0
         new_hot: set[str] = set()
         qualified: list[str] = []
@@ -344,7 +357,8 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
         for batch in engine.make_batches(stock_symbols):
             result, delta = await scan_batch_async(batch)
             merge_stats(stats, delta)
-            matched += len(result.matches)
+            for m in result.matches:
+                matched[m.kind] += 1
             new_hot.update(result.hot)
             qualified.extend(result.liquid)
             to_send = state.fresh_matches(result.matches) if only_changes else result.matches
@@ -368,19 +382,20 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
         state.save()
         gc.collect()  # drop per-cycle DataFrames before the next cycle starts
         rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
-        log.info("Scan done: matched=%d sent=%d hot=%d peak_rss=%.0fMB stats=%s",
+        log.info("Scan done: matched=%s sent=%d hot=%d peak_rss=%.0fMB stats=%s",
                  matched, sent_count, len(hotlist), rss_mb, stats)
 
         if paused:
             breakdown = "📈 الأسهم: متوقف مؤقتاً (نهاية أسبوع/عطلة رسمية)"
         else:
-            breakdown = f"📈 الأسهم: {matched} مطابق من {stats['liquid']} مفحوص"
+            breakdown = (f"📈 صعود: {matched['bullish']} مطابق • "
+                        f"📉 هبوط: {matched['bearish']} مطابق — من {stats['liquid']} مفحوص")
 
         if sent_count == 0 and notify_empty:
             await broadcast(
                 app,
-                f"🔎 اكتمل المسح ({started:%H:%M} ET) — لا إشارات تحقق "
-                f"{config.FILTERS_REQUIRED}/4 من الفلاتر.\n{breakdown}",
+                f"🔎 اكتمل المسح ({started:%H:%M} ET) — لا إشارات تحقق الحد "
+                f"الأدنى من الفلاتر.\n{breakdown}",
             )
         elif not only_changes:
             await broadcast(app, f"✅ اكتمل المسح:\n{breakdown}")
@@ -437,13 +452,18 @@ async def performance_job(context: ContextTypes.DEFAULT_TYPE):
 
 WELCOME = (
     "أهلاً بك في بوت المسح الفني للسوق الأمريكي 📊\n\n"
-    "تفحص الخدمة كل الأسهم الأمريكية 📈 بشكل متواصل "
-    "(فريم الساعة) وترصد الحالات الفنية التي تحقق "
-    f"{config.FILTERS_REQUIRED} شروط من 4:\n"
+    "تفحص الخدمة كل الأسهم الأمريكية بشكل متواصل (فريم الساعة) وترصد اتجاهين:\n\n"
+    f"📈 *احتمال صعود* — تحقق {config.FILTERS_REQUIRED} شروط من 4:\n"
     "1️⃣ السعر عند الحد السفلي لبولينجر باند\n"
     "2️⃣ RSI أقل من 30 (تشبع بيعي)\n"
     "3️⃣ السعر عند منطقة دعم\n"
     "4️⃣ نموذج وتد هابط\n\n"
+    f"📉 *احتمال هبوط (تشبع شرائي)* — تحقق {config.BEARISH_FILTERS_REQUIRED} شروط من 5:\n"
+    "1️⃣ السعر عند الحد العلوي لبولينجر باند\n"
+    "2️⃣ RSI أكبر من 70 (تشبع شرائي)\n"
+    "3️⃣ السعر عند منطقة مقاومة\n"
+    "4️⃣ نموذج وتد صاعد\n"
+    "5️⃣ تقاطع MACD هابط\n\n"
     "قبل تفعيل الخدمة يجب قراءة إخلاء المسؤولية التالي والموافقة عليه:"
 )
 
@@ -638,26 +658,29 @@ async def cmd_preview_alert(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⚠️ تعذر جلب بيانات لسهم {symbol}. جرّب رمزاً آخر، مثل: /previewalert MSFT")
         return
 
-    m = await asyncio.to_thread(engine.evaluate_symbol, symbol, df)
-    await attach_options([m])
-    await attach_charts([m])
-    await attach_sentiment([m])
-    perf_line = await asyncio.to_thread(performance.compact_summary)
+    matches = await asyncio.to_thread(engine.evaluate_symbol, symbol, df)
+    await attach_options(matches)
+    await attach_charts(matches)
+    await attach_sentiment(matches)
 
-    body = f"{PREVIEW_BANNER}\n{format_match(m)}\n\n{ALERT_FOOTER}"
-    if perf_line:
-        body += f"\n{perf_line}"
+    for m in matches:
+        perf_line = await asyncio.to_thread(performance.compact_summary, m.kind)
+        header = f"{ALERT_HEADERS[m.kind]}"
+        body = f"{PREVIEW_BANNER}\n{header}\n\n{format_match(m)}\n\n{ALERT_FOOTER}"
+        if perf_line:
+            body += f"\n{perf_line}"
 
-    if not m.chart_png:
-        await broadcast(context.application, body)
-    elif len(body) <= CHART_CAPTION_LIMIT:
-        await broadcast_photo(context.application, m.chart_png, body)
-    else:
-        await broadcast_photo(context.application, m.chart_png, PREVIEW_BANNER)
-        await broadcast(context.application, body)
+        if not m.chart_png:
+            await broadcast(context.application, body)
+        elif len(body) <= CHART_CAPTION_LIMIT:
+            await broadcast_photo(context.application, m.chart_png, body)
+        else:
+            await broadcast_photo(context.application, m.chart_png,
+                                  f"{PREVIEW_BANNER}\n{header}")
+            await broadcast(context.application, body)
 
     await update.message.reply_text(
-        f"✅ تم إرسال المثال التوضيحي لكل المشتركين ({len(state.subscribers)}).")
+        f"✅ تم إرسال المثال التوضيحي (صعود وهبوط) لكل المشتركين ({len(state.subscribers)}).")
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -690,7 +713,8 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"مسح قيد التنفيذ: {scanning}\n"
         f"عدد المشتركين: {len(state.subscribers)}\n"
         f"إشارات في الذاكرة: {len(state.last_alerts)}\n"
-        f"الشرط: {config.FILTERS_REQUIRED}/4 فلاتر • الفريم: {config.INTERVAL}"
+        f"شرط الصعود: {config.FILTERS_REQUIRED}/4 فلاتر • "
+        f"شرط الهبوط: {config.BEARISH_FILTERS_REQUIRED}/5 فلاتر • الفريم: {config.INTERVAL}"
     )
 
 
