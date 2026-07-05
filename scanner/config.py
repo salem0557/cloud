@@ -121,6 +121,12 @@ OPTIONS_TOP_N = _int("OPTIONS_TOP_N", 3)              # picks per side (call/put
 OPTIONS_MIN_ACTIVITY = _int("OPTIONS_MIN_ACTIVITY", 20)  # min OI+volume per contract
 OPTIONS_MONEYNESS_WINDOW = _float("OPTIONS_MONEYNESS_WINDOW", 0.25)  # strike within 25% of spot
 
+# --- On-demand /cheapoptions search: scans the current qualified list for
+# --- contracts priced at or under a cap (contract cost = premium * 100) ---
+CHEAP_OPTION_DEFAULT_MAX = _float("CHEAP_OPTION_DEFAULT_MAX", 50.0)  # $ per contract
+CHEAP_OPTIONS_PACE_SECONDS = _float("CHEAP_OPTIONS_PACE_SECONDS", 0.3)  # between symbols
+CHEAP_OPTIONS_PROGRESS_EVERY = _int("CHEAP_OPTIONS_PROGRESS_EVERY", 150)  # symbols per status edit
+
 # --- Alerting ---
 FILTERS_REQUIRED = _int("FILTERS_REQUIRED", 3)     # minimum matched filters (out of 4)
 BEARISH_FILTERS_REQUIRED = _int("BEARISH_FILTERS_REQUIRED", 3)  # out of 5 (adds MACD)

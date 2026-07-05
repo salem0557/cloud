@@ -56,6 +56,7 @@ MSG_LIMIT = 3800  # keep below Telegram's 4096-char cap
 state = State()
 scan_lock = asyncio.Lock()
 hot_lock = asyncio.Lock()
+cheap_options_lock = asyncio.Lock()
 throttle = Throttle()
 hotlist: set[str] = set()  # near-signal symbols, rebuilt every full cycle
 
@@ -100,6 +101,14 @@ def market_is_open(now: dt.datetime | None = None) -> bool:
 ALERT_HEADERS = {
     "bullish": "⚡ إشارة فورية — 📈 احتمال صعود",
     "bearish": "⚡ إشارة فورية — 📉 تشبع شرائي/احتمال هبوط",
+}
+
+# /check <symbol>: an on-demand personal lookup, replied privately to whoever
+# asked — distinct wording from ALERT_HEADERS so it's never mistaken for a
+# real streamed alert.
+CHECK_HEADERS = {
+    "bullish": "🔍 نتيجة الفحص اليدوي — 📈 صعود",
+    "bearish": "🔍 نتيجة الفحص اليدوي — 📉 هبوط",
 }
 
 ALERT_FOOTER = "⚠️ تحليل فني آلي — ليس توصية بشراء أو بيع"
@@ -188,6 +197,24 @@ def format_options(picks: dict) -> str:
             )
     if any(c.get("estimated") for side in ("call", "put") for c in picks.get(side) or []):
         lines.append("  (≈ آخر سعر تداول — سوق الأوبشنز مغلق الآن)")
+    return "\n".join(lines)
+
+
+def format_cheap_picks(symbol: str, price: float, picks: dict) -> str:
+    """One /cheapoptions result block: symbol + its qualifying contracts."""
+    lines = [f"*{symbol}* — {fmt_price(price)}"]
+    for side in ("call", "put"):
+        contracts = picks.get(side) or []
+        if not contracts:
+            continue
+        lines.append(f"  {SIDE_LABELS[side]}:")
+        for c in contracts:
+            approx = "≈" if c.get("estimated") else ""
+            lines.append(
+                f"    تنفيذ {c['strike']:.2f}$ • ينتهي {c['expiry']}"
+                f" ({c['days']} يوم) • بريميوم {approx}{c['premium']:.2f}$"
+                f" = {approx}{c['premium'] * 100:.0f}$/عقد"
+            )
     return "\n".join(lines)
 
 
@@ -538,6 +565,137 @@ async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await do_scan(context.application, only_changes=False, notify_empty=True)
 
 
+async def _reply_match(update: Update, header: str, m):
+    """Send one Match's chart+detail as a private reply (never broadcast)."""
+    text = f"{header}\n\n{format_match(m)}\n\n{ALERT_FOOTER}"
+    if not m.chart_png:
+        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+    elif len(text) <= CHART_CAPTION_LIMIT:
+        await update.message.reply_photo(photo=io.BytesIO(m.chart_png), caption=text,
+                                         parse_mode=ParseMode.MARKDOWN)
+    else:
+        await update.message.reply_photo(
+            photo=io.BytesIO(m.chart_png),
+            caption=f"{header}\n\n*{m.symbol}* — {m.score}/{m.total_filters}",
+            parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+
+
+async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/check <symbol> — fetch a stock on demand with the same additions as a
+    real alert (chart, options, وجهة نظر البوت), for both directions, replied
+    privately to whoever asked. Not a real alert: no performance tracking."""
+    if not await require_subscription(update):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "الصيغة: /check <رمز السهم>\nمثال: /check AAPL")
+        return
+    symbol = context.args[0].upper()
+    await update.message.reply_text(f"⏳ يجلب بيانات {symbol}...")
+    try:
+        frames = await asyncio.to_thread(data_mod.fetch_batch, [symbol])
+    except Exception:
+        log.exception("Check fetch failed for %s", symbol)
+        frames = {}
+    df = frames.get(symbol)
+    if df is None:
+        await update.message.reply_text(
+            f"⚠️ تعذر جلب بيانات لسهم {symbol}. تأكد من صحة الرمز.")
+        return
+
+    matches = await asyncio.to_thread(engine.evaluate_symbol, symbol, df)
+    await attach_options(matches)
+    await attach_charts(matches)
+    await attach_sentiment(matches)
+    for m in matches:
+        await _reply_match(update, CHECK_HEADERS[m.kind], m)
+
+
+async def cmd_cheap_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/cheapoptions [max_contract_price] — scan the current qualified list
+    (the same liquid symbols the regular cycle scans) for stocks with at
+    least one reliable call/put contract at or under the price cap (default
+    50$, meaning premium <= 0.50$/share since a contract is 100 shares).
+    Replies privately; can take several minutes (one options-chain fetch per
+    liquid symbol — there is no batched cross-symbol options API)."""
+    if not await require_subscription(update):
+        return
+    if cheap_options_lock.locked():
+        await update.message.reply_text("⏳ يوجد بحث آخر عن عقود رخيصة قيد التنفيذ، انتظر انتهاءه.")
+        return
+    try:
+        max_contract = float(context.args[0]) if context.args else config.CHEAP_OPTION_DEFAULT_MAX
+        if max_contract <= 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(
+            "الصيغة: /cheapoptions [الحد الأقصى لسعر العقد بالدولار]\n"
+            "مثال: /cheapoptions 50")
+        return
+    max_premium = max_contract / 100.0
+
+    symbols = await asyncio.to_thread(universe.load_qualified)
+    if not symbols:
+        await update.message.reply_text(
+            "⚠️ القائمة المؤهلة غير جاهزة بعد (تُبنى مع أول دورة مسح كاملة). "
+            "جرّب /scan أولاً ثم أعد المحاولة بعد قليل.")
+        return
+
+    async with cheap_options_lock:
+        status = await update.message.reply_text(
+            f"🔎 يبحث عن عقود لا يتجاوز سعرها {max_contract:.0f}$ ضمن {len(symbols)} سهم "
+            "من القائمة المؤهلة... قد يستغرق هذا عدة دقائق."
+        )
+        found = []
+        processed = 0
+        for batch in engine.make_batches(symbols):
+            try:
+                frames = await asyncio.to_thread(data_mod.fetch_batch, batch)
+            except Exception:
+                log.exception("cheapoptions batch download failed (%s..)", batch[0])
+                continue
+            for sym, df in frames.items():
+                if not data_mod.passes_liquidity(df):
+                    continue
+                price = float(df["Close"].iloc[-1])
+                try:
+                    picks = await asyncio.to_thread(
+                        options.find_cheap_contracts, sym, price, max_premium)
+                except options.OptionsFetchError:
+                    picks = {"call": [], "put": []}
+                if picks["call"] or picks["put"]:
+                    found.append((sym, price, picks))
+                processed += 1
+                if processed % config.CHEAP_OPTIONS_PROGRESS_EVERY == 0:
+                    try:
+                        await status.edit_text(
+                            f"🔎 جارٍ البحث... {processed}/{len(symbols)} سهم "
+                            f"({len(found)} نتيجة حتى الآن)")
+                    except Exception:
+                        pass
+                await asyncio.sleep(config.CHEAP_OPTIONS_PACE_SECONDS)
+
+        if not found:
+            await update.message.reply_text(
+                f"لم يُعثر على أسهم بعقود لا يتجاوز سعرها {max_contract:.0f}$ "
+                "ضمن القائمة الحالية.")
+            return
+
+        header = f"📊 أسهم بعقود لا يتجاوز سعرها {max_contract:.0f}$ للعقد ({len(found)} سهم):"
+        chunks, current = [], header
+        for sym, price, picks in found:
+            block = "\n\n" + format_cheap_picks(sym, price, picks)
+            if len(current) + len(block) > MSG_LIMIT:
+                chunks.append(current)
+                current = format_cheap_picks(sym, price, picks)
+            else:
+                current += block
+        chunks.append(current)
+        for chunk in chunks:
+            await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
+
+
 async def cmd_disclaimer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(DISCLAIMER, parse_mode=ParseMode.MARKDOWN)
 
@@ -731,6 +889,8 @@ async def on_error(update, context: ContextTypes.DEFAULT_TYPE):
 PUBLIC_COMMANDS = [
     BotCommand("start", "التسجيل والموافقة على إخلاء المسؤولية"),
     BotCommand("scan", "مسح فوري لكل السوق"),
+    BotCommand("check", "فحص سهم محدد: /check <رمز>"),
+    BotCommand("cheapoptions", "بحث عن أسهم بعقود رخيصة: /cheapoptions [سعر]"),
     BotCommand("status", "حالة البوت واشتراكك"),
     BotCommand("disclaimer", "عرض إخلاء المسؤولية"),
     BotCommand("performance", "سجل أداء الإشارات مقابل السوق"),
@@ -769,6 +929,8 @@ def main():
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("scan", cmd_scan))
+    app.add_handler(CommandHandler("check", cmd_check))
+    app.add_handler(CommandHandler("cheapoptions", cmd_cheap_options))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("disclaimer", cmd_disclaimer))
     app.add_handler(CommandHandler("approve", cmd_approve))

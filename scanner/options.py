@@ -191,6 +191,49 @@ def _cboe_candidates(symbol, spot, today, cutoff):
     return candidates, True
 
 
+def find_cheap_contracts(symbol: str, spot: float, max_premium: float,
+                         sides=("call", "put")) -> dict[str, list[dict]]:
+    """Contracts on `symbol` priced at or under `max_premium` per share
+    (contract cost = premium * 100), among the requested sides.
+
+    Reuses the same reliability screen as best_options (moneyness window,
+    minimum open-interest+volume, valid bid/ask or last-trade quote) — just
+    selects by "cheapest first, under the cap" instead of the balanced
+    near-the-money score, since a deliberately cheap/OTM contract is exactly
+    what this search is for.
+    """
+    out = {"call": [], "put": []}
+    if _no_options.get(symbol, 0) > time.time() - NO_OPTIONS_TTL:
+        return out
+
+    today = dt.date.today()
+    cutoff = today + dt.timedelta(weeks=config.OPTIONS_MAX_WEEKS)
+    providers = (_yahoo_candidates, _cboe_candidates)
+    last_error = None
+    failures = 0
+    for provider in providers:
+        try:
+            candidates, has_options = provider(symbol, spot, today, cutoff)
+        except OptionsFetchError as exc:
+            log.warning("Options provider %s failed for %s",
+                        provider.__name__, symbol)
+            last_error = exc
+            failures += 1
+            continue
+        if has_options:
+            for side in sides:
+                cheap = [c for c in candidates[side] if c["premium"] <= max_premium]
+                out[side] = sorted(cheap, key=lambda c: c["premium"])[:config.OPTIONS_TOP_N]
+            return out
+        # This provider cleanly reports no options; ask the next one to
+        # confirm — a throttled Yahoo sometimes answers with emptiness.
+
+    if failures == len(providers):
+        raise last_error
+    _no_options[symbol] = time.time()
+    return out
+
+
 def best_options(symbol: str, spot: float) -> dict[str, list[dict]]:
     """{'call': [top picks cheapest-first], 'put': [...]}.
 
