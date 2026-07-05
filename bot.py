@@ -32,6 +32,7 @@ from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes)
 
 from scanner import chart, config, engine, market_calendar, options, performance, sentiment, universe
+from scanner import data as data_mod
 from scanner.indicators import FILTERS, fmt_price
 from scanner.state import State
 from scanner.throttle import Throttle
@@ -610,6 +611,55 @@ async def cmd_subs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines))
 
 
+PREVIEW_BANNER = (
+    "🧪 *مثال توضيحي فقط — ليس تنبيهاً حقيقياً ولا توصية*\n"
+    "هذا نموذج لشكل الرسالة القادمة، مبني على بيانات حقيقية لسهم مذكور هنا "
+    "لغرض العرض فقط — بصرف النظر عن نتيجة فلاتره الفعلية حالياً.\n"
+)
+
+
+async def cmd_preview_alert(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/previewalert [ticker] — admin only: broadcast a clearly-labeled
+    example alert (real market data, real chart/options/sentiment) to every
+    current subscriber, so they see the new format without it being mistaken
+    for a real signal. Never touches performance tracking (not a real alert)."""
+    if not is_admin(update.effective_chat.id):
+        return
+    symbol = context.args[0].upper() if context.args else "AAPL"
+    await update.message.reply_text(f"⏳ يجهّز مثالاً توضيحياً لسهم {symbol}...")
+    try:
+        frames = await asyncio.to_thread(data_mod.fetch_batch, [symbol])
+    except Exception:
+        log.exception("Preview fetch failed for %s", symbol)
+        frames = {}
+    df = frames.get(symbol)
+    if df is None:
+        await update.message.reply_text(
+            f"⚠️ تعذر جلب بيانات لسهم {symbol}. جرّب رمزاً آخر، مثل: /previewalert MSFT")
+        return
+
+    m = await asyncio.to_thread(engine.evaluate_symbol, symbol, df)
+    await attach_options([m])
+    await attach_charts([m])
+    await attach_sentiment([m])
+    perf_line = await asyncio.to_thread(performance.compact_summary)
+
+    body = f"{PREVIEW_BANNER}\n{format_match(m)}\n\n{ALERT_FOOTER}"
+    if perf_line:
+        body += f"\n{perf_line}"
+
+    if not m.chart_png:
+        await broadcast(context.application, body)
+    elif len(body) <= CHART_CAPTION_LIMIT:
+        await broadcast_photo(context.application, m.chart_png, body)
+    else:
+        await broadcast_photo(context.application, m.chart_png, PREVIEW_BANNER)
+        await broadcast(context.application, body)
+
+    await update.message.reply_text(
+        f"✅ تم إرسال المثال التوضيحي لكل المشتركين ({len(state.subscribers)}).")
+
+
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     open_now = "مفتوح ✅" if market_is_open() else "مغلق ❌"
     scanning = "نعم ⏳" if scan_lock.locked() else "لا"
@@ -667,6 +717,7 @@ ADMIN_COMMANDS = PUBLIC_COMMANDS + [
     BotCommand("revoke", "إلغاء اشتراك: /revoke <id>"),
     BotCommand("subs", "قائمة المشتركين"),
     BotCommand("reset", "مسح ذاكرة المسح والبدء من جديد"),
+    BotCommand("previewalert", "إرسال مثال توضيحي لشكل التنبيه لكل المشتركين"),
 ]
 
 
@@ -701,6 +752,7 @@ def main():
     app.add_handler(CommandHandler("subs", cmd_subs))
     app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(CommandHandler("performance", cmd_performance))
+    app.add_handler(CommandHandler("previewalert", cmd_preview_alert))
     app.add_handler(CallbackQueryHandler(on_accept, pattern="^accept_disclaimer$"))
     # Self-rescheduling jobs (see scan_loop_job/hot_job) so the pace can
     # widen at night; just kick off the first run of each here.
