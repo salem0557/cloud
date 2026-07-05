@@ -29,14 +29,19 @@ def fetch_batch(symbols: list[str]) -> dict[str, pd.DataFrame]:
     if raw is None or raw.empty:
         return out
 
-    if len(symbols) == 1:
-        frames = {symbols[0]: raw}
-    else:
-        frames = {}
+    # yfinance returns MultiIndex columns (ticker, field) for a list input
+    # regardless of how many tickers are in it — including a list of one,
+    # since multi_level_index defaults to True and we never override it.
+    # A prior "single symbol -> flat columns" special case was wrong and
+    # silently dropped every one-symbol request (KeyError caught below).
+    frames = {}
+    if isinstance(raw.columns, pd.MultiIndex):
         top = raw.columns.get_level_values(0)
         for sym in symbols:
             if sym in top:
                 frames[sym] = raw[sym]
+    else:
+        frames = {symbols[0]: raw}
 
     for sym, df in frames.items():
         try:
