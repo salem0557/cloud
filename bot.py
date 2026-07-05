@@ -179,11 +179,26 @@ def format_match(m) -> str:
 SIDE_LABELS = {"call": "🟢📈 CALL", "put": "🔴📉 PUT"}
 
 
+def _greek_suffix(c: dict) -> str:
+    """IV/delta/theta tail for one contract line, when known — these (plus
+    liquidity) are what the picks are actually ranked by now, not price."""
+    bits = []
+    if c.get("iv") is not None:
+        bits.append(f"IV={c['iv'] * 100:.0f}%")
+    if c.get("delta") is not None:
+        bits.append(f"دلتا={c['delta']:.2f}")
+    if c.get("theta") is not None:
+        bits.append(f"ثيتا={c['theta']:.3f}$/يوم")
+    return f" • {' • '.join(bits)}" if bits else ""
+
+
 def format_options(picks: dict) -> str:
-    """Best-contracts block: top picks per side, cheapest premium first."""
+    """Best-contracts block: top picks per side, ranked by a composite score
+    (spread/volume/open interest + IV/delta/theta), best first — not by
+    cheapest premium."""
     if not picks or not (picks.get("call") or picks.get("put")):
         return ""
-    lines = ["  📊 أفضل عقود الأوبشنز (الأرخص أولاً):"]
+    lines = ["  📊 أفضل عقود الأوبشنز (الأعلى جودة أولاً):"]
     for side in ("call", "put"):
         contracts = picks.get(side) or []
         if not contracts:
@@ -194,7 +209,7 @@ def format_options(picks: dict) -> str:
             lines.append(
                 f"    {i}) تنفيذ {c['strike']:.2f}$ • ينتهي {c['expiry']}"
                 f" ({c['days']} يوم) • بريميوم {approx}{c['premium']:.2f}$"
-                f" = {approx}{c['premium'] * 100:.0f}$/عقد"
+                f" = {approx}{c['premium'] * 100:.0f}$/عقد{_greek_suffix(c)}"
             )
     if any(c.get("estimated") for side in ("call", "put") for c in picks.get(side) or []):
         lines.append("  (≈ آخر سعر تداول — سوق الأوبشنز مغلق الآن)")
@@ -202,7 +217,8 @@ def format_options(picks: dict) -> str:
 
 
 def format_cheap_picks(symbol: str, price: float, picks: dict) -> str:
-    """One /cheapoptions result block: symbol + its qualifying contracts."""
+    """One /cheapoptions result block: symbol + its qualifying contracts,
+    best-scored first among those under the price cap."""
     lines = [f"*{symbol}* — {fmt_price(price)}"]
     for side in ("call", "put"):
         contracts = picks.get(side) or []
@@ -214,7 +230,7 @@ def format_cheap_picks(symbol: str, price: float, picks: dict) -> str:
             lines.append(
                 f"    تنفيذ {c['strike']:.2f}$ • ينتهي {c['expiry']}"
                 f" ({c['days']} يوم) • بريميوم {approx}{c['premium']:.2f}$"
-                f" = {approx}{c['premium'] * 100:.0f}$/عقد"
+                f" = {approx}{c['premium'] * 100:.0f}$/عقد{_greek_suffix(c)}"
             )
     return "\n".join(lines)
 

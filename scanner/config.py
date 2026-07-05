@@ -115,11 +115,10 @@ CHART_BARS = _int("CHART_BARS", 80)     # most recent hourly bars plotted
 
 # --- Options picks (attached to each alerted stock) ---
 OPTIONS_ENABLED = os.environ.get("OPTIONS_ENABLED", "1") == "1"
-OPTIONS_MAX_WEEKS = _int("OPTIONS_MAX_WEEKS", 6)      # nearest expiry .. 6 weeks
-OPTIONS_MAX_EXPIRIES = _int("OPTIONS_MAX_EXPIRIES", 4)  # chain requests per stock
+OPTIONS_MAX_WEEKS = _int("OPTIONS_MAX_WEEKS", 13)     # nearest expiry .. ~3 months
+OPTIONS_MAX_EXPIRIES = _int("OPTIONS_MAX_EXPIRIES", 6)  # chain requests per stock
 OPTIONS_TOP_N = _int("OPTIONS_TOP_N", 3)              # picks per side (call/put)
 OPTIONS_MIN_ACTIVITY = _int("OPTIONS_MIN_ACTIVITY", 20)  # min OI+volume per contract
-OPTIONS_MONEYNESS_WINDOW = _float("OPTIONS_MONEYNESS_WINDOW", 0.25)  # strike within 25% of spot
 
 # --- On-demand /cheapoptions search: scans the current qualified list for
 # --- contracts priced at or under a cap (contract cost = premium * 100) ---
