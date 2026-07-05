@@ -36,7 +36,7 @@ from telegram import (BotCommand, BotCommandScopeChat, BotCommandScopeDefault,
                       InlineKeyboardButton, InlineKeyboardMarkup, Update)
 from telegram.constants import ParseMode
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
-                          ContextTypes)
+                          ContextTypes, MessageHandler, filters)
 
 from scanner import chart, config, engine, market_calendar, options, performance, sentiment, universe
 from scanner import data as data_mod
@@ -59,6 +59,7 @@ hot_lock = asyncio.Lock()
 cheap_options_lock = asyncio.Lock()
 throttle = Throttle()
 hotlist: set[str] = set()  # near-signal symbols, rebuilt every full cycle
+pending_check: dict[int, float] = {}  # chat id -> time /check asked for a symbol
 
 # Batches run in a single recycled worker process ("spawn" to stay safe with
 # the bot's own threads): pandas/yfinance memory otherwise accumulates in the
@@ -584,14 +585,26 @@ async def _reply_match(update: Update, header: str, m):
 async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/check <symbol> — fetch a stock on demand with the same additions as a
     real alert (chart, options, وجهة نظر البوت), for both directions, replied
-    privately to whoever asked. Not a real alert: no performance tracking."""
+    privately to whoever asked. Not a real alert: no performance tracking.
+
+    Tapping the command from Telegram's own "/" suggestion list sends it
+    immediately with no way to type a symbol alongside it — a Telegram
+    client behavior, not something a bot can override. So when /check
+    arrives with no argument, we ask for the symbol as a follow-up message
+    instead of forcing the user to retype the whole command by hand.
+    """
     if not await require_subscription(update):
         return
     if not context.args:
+        pending_check[update.effective_chat.id] = time.time()
         await update.message.reply_text(
-            "الصيغة: /check <رمز السهم>\nمثال: /check AAPL")
+            "أرسل الآن رمز السهم فقط في رسالة منفصلة (مثال: AAPL)\n"
+            "أو اكتب الأمر كاملاً دفعة واحدة: /check AAPL")
         return
-    symbol = context.args[0].upper()
+    await _do_check(update, context, context.args[0].upper())
+
+
+async def _do_check(update: Update, context: ContextTypes.DEFAULT_TYPE, symbol: str):
     await update.message.reply_text(f"⏳ يجلب بيانات {symbol}...")
     try:
         frames = await asyncio.to_thread(data_mod.fetch_batch, [symbol])
@@ -610,6 +623,24 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await attach_sentiment(matches)
     for m in matches:
         await _reply_match(update, CHECK_HEADERS[m.kind], m)
+
+
+CHECK_PENDING_TTL = 180  # seconds a "waiting for a symbol" prompt stays active
+
+
+async def handle_pending_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Follow-up to a bare /check: the next plain-text message from that chat
+    (within CHECK_PENDING_TTL) is treated as the symbol. Any other free text,
+    or one that arrives too late, is silently ignored — the bot has no
+    general chat feature."""
+    chat_id = update.effective_chat.id
+    asked_at = pending_check.pop(chat_id, None)
+    if asked_at is None or time.time() - asked_at > CHECK_PENDING_TTL:
+        return
+    text = (update.message.text or "").strip()
+    if not text:
+        return
+    await _do_check(update, context, text.split()[0].upper())
 
 
 async def cmd_cheap_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -940,6 +971,7 @@ def main():
     app.add_handler(CommandHandler("performance", cmd_performance))
     app.add_handler(CommandHandler("previewalert", cmd_preview_alert))
     app.add_handler(CallbackQueryHandler(on_accept, pattern="^accept_disclaimer$"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_pending_check))
     # Self-rescheduling jobs (see scan_loop_job/hot_job) so the pace can
     # widen at night; just kick off the first run of each here.
     app.job_queue.run_once(scan_loop_job, when=10)
