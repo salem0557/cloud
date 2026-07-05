@@ -24,6 +24,9 @@ PROMPT_TEMPLATE = """اجمع المعلومات التالية عن سهم {sym
 لا تُبدِ رأياً أو تحليلاً أو توصية خاصة بك بأي شكل؛ فقط لخّص وادمج ما ورد في المصادر التالية بأسلوب \
 محايد، مع ذكر الاتجاه العام (إيجابي/سلبي/متباين) الذي تعكسه هذه المصادر فقط دون أي استنتاج إضافي منك.
 
+إذا كانت المصادر أدناه فارغة أو عامة جداً بحيث لا تكفي لتلخيص فعلي ذي معنى، أجب بكلمة واحدة فقط: \
+NONE — لا تكتب فقرة عامة أو حشو بلا مضمون حقيقي في هذه الحالة.
+
 عناوين إخبارية حديثة:
 {headlines}
 
@@ -74,7 +77,16 @@ def _call_gemini(prompt: str) -> str | None:
                      "Content-Type": "application/json"},
             json={
                 "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"maxOutputTokens": 300, "temperature": 0.2},
+                "generationConfig": {
+                    "maxOutputTokens": 500,
+                    "temperature": 0.2,
+                    # Newer Gemini models spend part of maxOutputTokens on
+                    # hidden "thinking" before the visible answer, which can
+                    # leave a short/blank/truncated-looking summary here.
+                    # This call needs no reasoning, just consolidation, so
+                    # disable it and give the full budget to the answer.
+                    "thinkingConfig": {"thinkingBudget": 0},
+                },
             },
             timeout=20,
         )
@@ -82,8 +94,11 @@ def _call_gemini(prompt: str) -> str | None:
         candidates = resp.json().get("candidates") or []
         if not candidates:
             return None
+        finish_reason = candidates[0].get("finishReason")
         parts = candidates[0].get("content", {}).get("parts") or []
         text = "".join(p.get("text", "") for p in parts).strip()
+        if finish_reason == "MAX_TOKENS" and not text:
+            log.warning("Gemini summary truncated to nothing (finishReason=MAX_TOKENS)")
         return text or None
     except Exception:
         log.warning("Gemini summarization failed", exc_info=True)
@@ -105,6 +120,8 @@ def get_sentiment_summary(symbol: str) -> str | None:
         social="\n".join(f"- {s}" for s in social) or "(لا توجد)",
     )
     summary = _call_gemini(prompt)
+    if summary and summary.strip().upper() == "NONE":
+        return None
     if summary and len(summary) > config.SENTIMENT_MAX_CHARS:
         summary = summary[:config.SENTIMENT_MAX_CHARS].rsplit(" ", 1)[0] + "…"
     return summary

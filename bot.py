@@ -227,9 +227,13 @@ async def attach_options(matches):
         if m.options_text:
             continue
         no_options_line = "  📊 لا يوجد أوبشن لهذا السهم"
+        no_near_term_line = (f"  📊 لا توجد عقود ضمن {config.OPTIONS_MAX_WEEKS} أسابيع القادمة "
+                             "(قد تتوفر عقود بتواريخ أبعد)")
         try:
             picks = await asyncio.to_thread(options.best_options, m.symbol, m.price)
             m.options_text = format_options(picks) or no_options_line
+        except options.NoNearTermOptions:
+            m.options_text = no_near_term_line
         except options.OptionsFetchError:
             log.warning("Options fetch failed for %s (both providers)", m.symbol)
             m.options_text = no_options_line
@@ -693,7 +697,7 @@ async def cmd_cheap_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 try:
                     picks = await asyncio.to_thread(
                         options.find_cheap_contracts, sym, price, max_premium)
-                except options.OptionsFetchError:
+                except (options.OptionsFetchError, options.NoNearTermOptions):
                     picks = {"call": [], "put": []}
                 if picks["call"] or picks["put"]:
                     found.append((sym, price, picks))
