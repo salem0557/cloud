@@ -1,17 +1,9 @@
-"""Telegram bot: continuous scanner for US stocks, both directions.
-
-Bullish reversal-up (a stock is reported when >= FILTERS_REQUIRED match):
+"""Telegram bot: continuous scanner for US stocks, reversal-up setups only
+(a stock is reported when >= FILTERS_REQUIRED match):
   1. Price at the lower Bollinger Band
   2. RSI < 30 (oversold)
   3. Price at a support zone
   4. Falling wedge pattern
-
-Bearish reversal-down / overbought (>= BEARISH_FILTERS_REQUIRED match):
-  1. Price at the upper Bollinger Band
-  2. RSI > 70 (overbought)
-  3. Price at a resistance zone
-  4. Rising wedge pattern
-  5. Bearish MACD signal-line crossover
 
 Run:  TELEGRAM_BOT_TOKEN=xxx python bot.py
 """
@@ -40,7 +32,7 @@ from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
 
 from scanner import chart, config, engine, market_calendar, options, performance, sentiment, universe
 from scanner import data as data_mod
-from scanner.indicators import FILTERS, FILTERS_BEARISH, fmt_price
+from scanner.indicators import FILTERS, fmt_price
 from scanner.state import State
 from scanner.throttle import Throttle
 
@@ -99,28 +91,22 @@ def market_is_open(now: dt.datetime | None = None) -> bool:
 
 # ------------------------------------------------------------- formatting
 
-ALERT_HEADERS = {
-    "bullish": "⚡ إشارة فورية — 📈 احتمال صعود",
-    "bearish": "⚡ إشارة فورية — 📉 تشبع شرائي/احتمال هبوط",
-}
+ALERT_HEADER = "⚡ إشارة فورية — 📈 احتمال صعود"
 
 # /check <symbol>: an on-demand personal lookup, replied privately to whoever
-# asked — distinct wording from ALERT_HEADERS so it's never mistaken for a
+# asked — distinct wording from ALERT_HEADER so it's never mistaken for a
 # real streamed alert.
-CHECK_HEADERS = {
-    "bullish": "🔍 نتيجة الفحص اليدوي — 📈 صعود",
-    "bearish": "🔍 نتيجة الفحص اليدوي — 📉 هبوط",
-}
+CHECK_HEADER = "🔍 نتيجة الفحص اليدوي — 📈 احتمال صعود"
 
 ALERT_FOOTER = "⚠️ تحليل فني آلي — ليس توصية بشراء أو بيع"
 
 DISCLAIMER = (
     "⚠️ *إخلاء مسؤولية — يُرجى القراءة بعناية*\n\n"
     "هذه الخدمة *أداة تحليل فني آلية* تعتمد على مؤشرات رياضية "
-    "(بولينجر باند، مؤشر القوة النسبية RSI، مستويات الدعم والمقاومة، MACD، "
-    "الأنماط السعرية) لرصد الحالات الفنية في سوق الأسهم الأمريكية — سواء "
-    "حالات تشبع بيعي (احتمال صعود) أو تشبع شرائي (احتمال هبوط) — "
-    "وعرض بيانات عقود الخيارات الأنشط سيولةً وفق معايير آلية بحتة.\n\n"
+    "(بولينجر باند، مؤشر القوة النسبية RSI، مستويات الدعم، "
+    "الأنماط السعرية) لرصد حالات التشبع البيعي واحتمال الصعود في سوق "
+    "الأسهم الأمريكية، "
+    "وعرض بيانات عقود الخيارات (Call) الأنشط سيولةً وفق معايير آلية بحتة.\n\n"
     "1️⃣ ما تقدمه هذه الخدمة *ليس توصية ولا مشورة استثمارية* ولا دعوة أو تحريضاً "
     "على شراء أو بيع أي ورقة مالية أو أصل رقمي أو عقد مشتقات، ولا يجوز تفسيره "
     "أو الاعتماد عليه بهذه الصفة.\n\n"
@@ -164,9 +150,8 @@ def eligible(chat_id: int) -> bool:
 
 
 def format_match(m) -> str:
-    filters = FILTERS if m.kind == "bullish" else FILTERS_BEARISH
     lines = [f"*{m.symbol}* — {m.score}/{m.total_filters} — {fmt_price(m.price)}"]
-    for key, (name, _) in filters.items():
+    for key, (name, _) in FILTERS.items():
         mark = "✅" if key in m.matched else "❌"
         lines.append(f"  {mark} {name}: {m.details.get(key, '-')}")
     if m.options_text:
@@ -174,9 +159,6 @@ def format_match(m) -> str:
     if m.sentiment_text:
         lines.append(f"  💬 وجهة نظر البوت (ملخص لما يُتداول من أخبار وآراء):\n  {m.sentiment_text}")
     return "\n".join(lines)
-
-
-SIDE_LABELS = {"call": "🟢📈 CALL", "put": "🔴📉 PUT"}
 
 
 def _greek_suffix(c: dict) -> str:
@@ -193,45 +175,35 @@ def _greek_suffix(c: dict) -> str:
 
 
 def format_options(picks: dict) -> str:
-    """Best-contracts block: top picks per side, ranked by a composite score
-    (spread/volume/open interest + IV/delta/theta), best first — not by
-    cheapest premium."""
-    if not picks or not (picks.get("call") or picks.get("put")):
+    """Best CALL-contracts block, ranked by a composite score (spread/volume/
+    open interest + IV/delta/theta), best first — not by cheapest premium."""
+    contracts = picks.get("call") if picks else None
+    if not contracts:
         return ""
-    lines = ["  📊 أفضل عقود الأوبشنز (الأعلى جودة أولاً):"]
-    for side in ("call", "put"):
-        contracts = picks.get(side) or []
-        if not contracts:
-            continue
-        lines.append(f"  {SIDE_LABELS[side]}:")
-        for i, c in enumerate(contracts, 1):
-            approx = "≈" if c.get("estimated") else ""
-            lines.append(
-                f"    {i}) تنفيذ {c['strike']:.2f}$ • ينتهي {c['expiry']}"
-                f" ({c['days']} يوم) • بريميوم {approx}{c['premium']:.2f}$"
-                f" = {approx}{c['premium'] * 100:.0f}$/عقد{_greek_suffix(c)}"
-            )
-    if any(c.get("estimated") for side in ("call", "put") for c in picks.get(side) or []):
+    lines = ["  📊 أفضل عقود CALL 🟢📈 (الأعلى جودة أولاً):"]
+    for i, c in enumerate(contracts, 1):
+        approx = "≈" if c.get("estimated") else ""
+        lines.append(
+            f"    {i}) تنفيذ {c['strike']:.2f}$ • ينتهي {c['expiry']}"
+            f" ({c['days']} يوم) • بريميوم {approx}{c['premium']:.2f}$"
+            f" = {approx}{c['premium'] * 100:.0f}$/عقد{_greek_suffix(c)}"
+        )
+    if any(c.get("estimated") for c in contracts):
         lines.append("  (≈ آخر سعر تداول — سوق الأوبشنز مغلق الآن)")
     return "\n".join(lines)
 
 
 def format_cheap_picks(symbol: str, price: float, picks: dict) -> str:
-    """One /cheapoptions result block: symbol + its qualifying contracts,
-    best-scored first among those under the price cap."""
+    """One /cheapoptions result block: symbol + its qualifying CALL
+    contracts, best-scored first among those under the price cap."""
     lines = [f"*{symbol}* — {fmt_price(price)}"]
-    for side in ("call", "put"):
-        contracts = picks.get(side) or []
-        if not contracts:
-            continue
-        lines.append(f"  {SIDE_LABELS[side]}:")
-        for c in contracts:
-            approx = "≈" if c.get("estimated") else ""
-            lines.append(
-                f"    تنفيذ {c['strike']:.2f}$ • ينتهي {c['expiry']}"
-                f" ({c['days']} يوم) • بريميوم {approx}{c['premium']:.2f}$"
-                f" = {approx}{c['premium'] * 100:.0f}$/عقد{_greek_suffix(c)}"
-            )
+    for c in picks.get("call") or []:
+        approx = "≈" if c.get("estimated") else ""
+        lines.append(
+            f"    تنفيذ {c['strike']:.2f}$ • ينتهي {c['expiry']}"
+            f" ({c['days']} يوم) • بريميوم {approx}{c['premium']:.2f}$"
+            f" = {approx}{c['premium'] * 100:.0f}$/عقد{_greek_suffix(c)}"
+        )
     return "\n".join(lines)
 
 
@@ -289,7 +261,7 @@ async def attach_charts(matches):
             continue
         try:
             m.chart_png = await asyncio.to_thread(
-                chart.render_chart, m.symbol, m.chart_df, m.details, m.kind)
+                chart.render_chart, m.symbol, m.chart_df, m.details)
         except Exception:
             log.exception("Chart render failed for %s", m.symbol)
         m.chart_df = None
@@ -362,9 +334,9 @@ async def send_matches(app, to_send, hot: bool = False):
     await attach_sentiment(to_send)
     await asyncio.to_thread(performance.track_alerts, to_send)
     flame = "🔥 " if hot else ""
+    perf_line = await asyncio.to_thread(performance.compact_summary)
     for m in to_send:
-        header = f"{flame}{ALERT_HEADERS[m.kind]} — {dt.datetime.now(NY):%H:%M} ET"
-        perf_line = await asyncio.to_thread(performance.compact_summary, m.kind)
+        header = f"{flame}{ALERT_HEADER} — {dt.datetime.now(NY):%H:%M} ET"
         text = f"{header}\n\n{format_match(m)}\n\n{ALERT_FOOTER}"
         if perf_line:
             text += f"\n{perf_line}"
@@ -397,7 +369,7 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
         log.info("Scan started (paused=%s, full_pass=%s, %d stocks)",
                  paused, full_pass, len(stock_symbols))
         stats = engine.new_stats(len(stock_symbols))
-        matched = {"bullish": 0, "bearish": 0}
+        matched = 0
         sent_count = 0
         new_hot: set[str] = set()
         qualified: list[str] = []
@@ -405,8 +377,7 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
         for batch in engine.make_batches(stock_symbols):
             result, delta = await scan_batch_async(batch)
             merge_stats(stats, delta)
-            for m in result.matches:
-                matched[m.kind] += 1
+            matched += len(result.matches)
             new_hot.update(result.hot)
             qualified.extend(result.liquid)
             to_send = state.fresh_matches(result.matches) if only_changes else result.matches
@@ -430,20 +401,19 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
         state.save()
         gc.collect()  # drop per-cycle DataFrames before the next cycle starts
         rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
-        log.info("Scan done: matched=%s sent=%d hot=%d peak_rss=%.0fMB stats=%s",
+        log.info("Scan done: matched=%d sent=%d hot=%d peak_rss=%.0fMB stats=%s",
                  matched, sent_count, len(hotlist), rss_mb, stats)
 
         if paused:
             breakdown = "📈 الأسهم: متوقف مؤقتاً (نهاية أسبوع/عطلة رسمية)"
         else:
-            breakdown = (f"📈 صعود: {matched['bullish']} مطابق • "
-                        f"📉 هبوط: {matched['bearish']} مطابق — من {stats['liquid']} مفحوص")
+            breakdown = f"📈 الأسهم: {matched} مطابق من {stats['liquid']} مفحوص"
 
         if sent_count == 0 and notify_empty:
             await broadcast(
                 app,
-                f"🔎 اكتمل المسح ({started:%H:%M} ET) — لا إشارات تحقق الحد "
-                f"الأدنى من الفلاتر.\n{breakdown}",
+                f"🔎 اكتمل المسح ({started:%H:%M} ET) — لا إشارات تحقق "
+                f"{config.FILTERS_REQUIRED}/4 من الفلاتر.\n{breakdown}",
             )
         elif not only_changes:
             await broadcast(app, f"✅ اكتمل المسح:\n{breakdown}")
@@ -500,18 +470,12 @@ async def performance_job(context: ContextTypes.DEFAULT_TYPE):
 
 WELCOME = (
     "أهلاً بك في بوت المسح الفني للسوق الأمريكي 📊\n\n"
-    "تفحص الخدمة كل الأسهم الأمريكية بشكل متواصل (فريم الساعة) وترصد اتجاهين:\n\n"
-    f"📈 *احتمال صعود* — تحقق {config.FILTERS_REQUIRED} شروط من 4:\n"
+    "تفحص الخدمة كل الأسهم الأمريكية بشكل متواصل (فريم الساعة) بحثاً عن "
+    f"احتمالات الصعود — تحقق {config.FILTERS_REQUIRED} شروط من 4:\n"
     "1️⃣ السعر عند الحد السفلي لبولينجر باند\n"
     "2️⃣ RSI أقل من 30 (تشبع بيعي)\n"
     "3️⃣ السعر عند منطقة دعم\n"
     "4️⃣ نموذج وتد هابط\n\n"
-    f"📉 *احتمال هبوط (تشبع شرائي)* — تحقق {config.BEARISH_FILTERS_REQUIRED} شروط من 5:\n"
-    "1️⃣ السعر عند الحد العلوي لبولينجر باند\n"
-    "2️⃣ RSI أكبر من 70 (تشبع شرائي)\n"
-    "3️⃣ السعر عند منطقة مقاومة\n"
-    "4️⃣ نموذج وتد صاعد\n"
-    "5️⃣ تقاطع MACD هابط\n\n"
     "قبل تفعيل الخدمة يجب قراءة إخلاء المسؤولية التالي والموافقة عليه:"
 )
 
@@ -604,8 +568,8 @@ async def _reply_match(update: Update, header: str, m):
 
 async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/check <symbol> — fetch a stock on demand with the same additions as a
-    real alert (chart, options, وجهة نظر البوت), for both directions, replied
-    privately to whoever asked. Not a real alert: no performance tracking.
+    real alert (chart, options, وجهة نظر البوت), replied privately to
+    whoever asked. Not a real alert: no performance tracking.
 
     Tapping the command from Telegram's own "/" suggestion list sends it
     immediately with no way to type a symbol alongside it — a Telegram
@@ -637,12 +601,11 @@ async def _do_check(update: Update, context: ContextTypes.DEFAULT_TYPE, symbol: 
             f"⚠️ تعذر جلب بيانات لسهم {symbol}. تأكد من صحة الرمز.")
         return
 
-    matches = await asyncio.to_thread(engine.evaluate_symbol, symbol, df)
-    await attach_options(matches)
-    await attach_charts(matches)
-    await attach_sentiment(matches)
-    for m in matches:
-        await _reply_match(update, CHECK_HEADERS[m.kind], m)
+    m = await asyncio.to_thread(engine.evaluate_symbol, symbol, df)
+    await attach_options([m])
+    await attach_charts([m])
+    await attach_sentiment([m])
+    await _reply_match(update, CHECK_HEADER, m)
 
 
 CHECK_PENDING_TTL = 180  # seconds a "waiting for a symbol" prompt stays active
@@ -666,10 +629,10 @@ async def handle_pending_check(update: Update, context: ContextTypes.DEFAULT_TYP
 async def cmd_cheap_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/cheapoptions [max_contract_price] — scan the current qualified list
     (the same liquid symbols the regular cycle scans) for stocks with at
-    least one reliable call/put contract at or under the price cap (default
-    50$, meaning premium <= 0.50$/share since a contract is 100 shares).
-    Replies privately; can take several minutes (one options-chain fetch per
-    liquid symbol — there is no batched cross-symbol options API)."""
+    least one reliable CALL contract at or under the price cap (default 50$,
+    meaning premium <= 0.50$/share since a contract is 100 shares). Replies
+    privately; can take several minutes (one options-chain fetch per liquid
+    symbol — there is no batched cross-symbol options API)."""
     if not await require_subscription(update):
         return
     if cheap_options_lock.locked():
@@ -714,8 +677,8 @@ async def cmd_cheap_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     picks = await asyncio.to_thread(
                         options.find_cheap_contracts, sym, price, max_premium)
                 except (options.OptionsFetchError, options.NoNearTermOptions):
-                    picks = {"call": [], "put": []}
-                if picks["call"] or picks["put"]:
+                    picks = {"call": []}
+                if picks["call"]:
                     found.append((sym, price, picks))
                 processed += 1
                 if processed % config.CHEAP_OPTIONS_PROGRESS_EVERY == 0:
@@ -867,29 +830,27 @@ async def cmd_preview_alert(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⚠️ تعذر جلب بيانات لسهم {symbol}. جرّب رمزاً آخر، مثل: /previewalert MSFT")
         return
 
-    matches = await asyncio.to_thread(engine.evaluate_symbol, symbol, df)
-    await attach_options(matches)
-    await attach_charts(matches)
-    await attach_sentiment(matches)
+    m = await asyncio.to_thread(engine.evaluate_symbol, symbol, df)
+    await attach_options([m])
+    await attach_charts([m])
+    await attach_sentiment([m])
 
-    for m in matches:
-        perf_line = await asyncio.to_thread(performance.compact_summary, m.kind)
-        header = f"{ALERT_HEADERS[m.kind]}"
-        body = f"{PREVIEW_BANNER}\n{header}\n\n{format_match(m)}\n\n{ALERT_FOOTER}"
-        if perf_line:
-            body += f"\n{perf_line}"
+    perf_line = await asyncio.to_thread(performance.compact_summary)
+    body = f"{PREVIEW_BANNER}\n{ALERT_HEADER}\n\n{format_match(m)}\n\n{ALERT_FOOTER}"
+    if perf_line:
+        body += f"\n{perf_line}"
 
-        if not m.chart_png:
-            await broadcast(context.application, body)
-        elif len(body) <= CHART_CAPTION_LIMIT:
-            await broadcast_photo(context.application, m.chart_png, body)
-        else:
-            await broadcast_photo(context.application, m.chart_png,
-                                  f"{PREVIEW_BANNER}\n{header}")
-            await broadcast(context.application, body)
+    if not m.chart_png:
+        await broadcast(context.application, body)
+    elif len(body) <= CHART_CAPTION_LIMIT:
+        await broadcast_photo(context.application, m.chart_png, body)
+    else:
+        await broadcast_photo(context.application, m.chart_png,
+                              f"{PREVIEW_BANNER}\n{ALERT_HEADER}")
+        await broadcast(context.application, body)
 
     await update.message.reply_text(
-        f"✅ تم إرسال المثال التوضيحي (صعود وهبوط) لكل المشتركين ({len(state.subscribers)}).")
+        f"✅ تم إرسال المثال التوضيحي لكل المشتركين ({len(state.subscribers)}).")
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -922,8 +883,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"مسح قيد التنفيذ: {scanning}\n"
         f"عدد المشتركين: {len(state.subscribers)}\n"
         f"إشارات في الذاكرة: {len(state.last_alerts)}\n"
-        f"شرط الصعود: {config.FILTERS_REQUIRED}/4 فلاتر • "
-        f"شرط الهبوط: {config.BEARISH_FILTERS_REQUIRED}/5 فلاتر • الفريم: {config.INTERVAL}"
+        f"الشرط: {config.FILTERS_REQUIRED}/4 فلاتر • الفريم: {config.INTERVAL}"
     )
 
 

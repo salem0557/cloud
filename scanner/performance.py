@@ -8,11 +8,7 @@ same window. Once every horizon for an entry is settled, its result is
 folded into a running aggregate and the raw entry is dropped — so the file
 stays small no matter how long the bot runs.
 
-Bullish and bearish signals are tracked in separate summary buckets with an
-inverted "win" definition: a bullish signal wins when the stock beat SPY
-(alpha > 0); a bearish (overbought/reversal-down) signal wins when the stock
-underperformed SPY (alpha < 0, i.e. it fell more / rose less than the market
-— the outcome that thesis was calling for).
+A signal wins when the stock beat SPY over that window (alpha > 0).
 
 Pure price arithmetic; no LLM involved.
 """
@@ -33,10 +29,6 @@ SPY_CACHE_TTL = 300    # seconds; avoid re-fetching SPY on every track_alerts ca
 _spy_cache = {"price": None, "ts": 0.0}
 
 
-def _is_win(kind: str, alpha: float) -> bool:
-    return alpha > 0 if kind == "bullish" else alpha < 0
-
-
 def _load() -> dict:
     try:
         with open(config.PERFORMANCE_FILE) as f:
@@ -46,17 +38,16 @@ def _load() -> dict:
     data.setdefault("summary", {})
     data.setdefault("tracked", [])
 
-    # Migrate the pre-bearish-signals shape: summary used to be flat
-    # {horizon: {...}} (only bullish signals existed then); tracked entries
-    # had no "kind" field. Both default to "bullish", the only kind that
-    # existed at the time.
+    # Migrate the old bullish/bearish-split shape back to a flat
+    # {horizon: {...}} now that only one signal direction exists; any
+    # still-pending bearish entries are dropped, there's nothing to resolve
+    # them against anymore.
     summary = data["summary"]
-    if summary and "bullish" not in summary and "bearish" not in summary:
-        data["summary"] = {"bullish": summary}
-    data["summary"].setdefault("bullish", {})
-    data["summary"].setdefault("bearish", {})
+    if "bullish" in summary or "bearish" in summary:
+        data["summary"] = summary.get("bullish", {})
+    data["tracked"] = [e for e in data["tracked"] if e.get("kind", "bullish") == "bullish"]
     for entry in data["tracked"]:
-        entry.setdefault("kind", "bullish")
+        entry.pop("kind", None)
 
     return data
 
@@ -116,7 +107,6 @@ def track_alerts(matches: list):
     for m in matches:
         data["tracked"].append({
             "symbol": m.symbol,
-            "kind": m.kind,
             "score": m.score,
             "alert_ts": now,
             "alert_price": m.price,
@@ -148,7 +138,6 @@ def resolve_due():
 
     still_pending = []
     for entry in data["tracked"]:
-        kind = entry.get("kind", "bullish")
         price_now = prices.get(entry["symbol"])
         for h, check in entry["checks"].items():
             if check.get("resolved") or check["due_ts"] > now:
@@ -162,11 +151,11 @@ def resolve_due():
             alpha = ((price_now / entry["alert_price"] - 1)
                      - (spy_now / entry["spy_price"] - 1))
             check["resolved"] = True
-            bucket = data["summary"].setdefault(kind, {}).setdefault(
+            bucket = data["summary"].setdefault(
                 h, {"count": 0, "wins": 0, "sum_alpha": 0.0})
             bucket["count"] += 1
             bucket["sum_alpha"] += alpha
-            if _is_win(kind, alpha):
+            if alpha > 0:
                 bucket["wins"] += 1
 
         if all(c.get("resolved") for c in entry["checks"].values()):
@@ -177,22 +166,18 @@ def resolve_due():
     _save(data)
 
 
-def compact_summary(kind: str = "bullish") -> str | None:
-    """One-line blurb for embedding directly in every alert of `kind` (the
-    full breakdown lives in the dedicated /performance command). Withheld
-    until a horizon has at least PERFORMANCE_MIN_SAMPLE resolved signals, so
-    a lucky early streak isn't advertised as a real track record."""
+def compact_summary() -> str | None:
+    """One-line blurb for embedding directly in every alert (the full
+    breakdown lives in the dedicated /performance command). Withheld until a
+    horizon has at least PERFORMANCE_MIN_SAMPLE resolved signals, so a lucky
+    early streak isn't advertised as a real track record."""
     data = _load()
-    bucket_by_h = data["summary"].get(kind, {})
-    for h in sorted(bucket_by_h, key=int):
-        b = bucket_by_h[h]
+    for h in sorted(data["summary"], key=int):
+        b = data["summary"][h]
         if b["count"] >= config.PERFORMANCE_MIN_SAMPLE:
             win_rate = b["wins"] / b["count"] * 100
-            if kind == "bullish":
-                return (f"📊 سجل الأداء: تفوق على السوق في {win_rate:.0f}% من آخر "
-                        f"{b['count']} إشارة (بعد {h} ساعة) — التفاصيل: /performance")
-            return (f"📉 سجل الأداء: تفوقت في {win_rate:.0f}% من آخر {b['count']} إشارة "
-                    f"(انخفض السهم أكثر من السوق، بعد {h} ساعة) — التفاصيل: /performance")
+            return (f"📊 سجل الأداء: تفوق على السوق في {win_rate:.0f}% من آخر "
+                    f"{b['count']} إشارة (بعد {h} ساعة) — التفاصيل: /performance")
     return None
 
 
@@ -215,24 +200,14 @@ def summary_text() -> str:
     """Human-readable (Arabic) track record for the /performance command."""
     data = _load()
     pending = len(data["tracked"])
-    bullish = data["summary"].get("bullish", {})
-    bearish = data["summary"].get("bearish", {})
-    has_bullish = any(b["count"] for b in bullish.values())
-    has_bearish = any(b["count"] for b in bearish.values())
+    has_data = any(b["count"] for b in data["summary"].values())
 
-    if not has_bullish and not has_bearish:
+    if not has_data:
         base = "📊 لا توجد نتائج مؤكدة بعد"
         return f"{base} ({pending} إشارة قيد المتابعة)" if pending else f"{base}."
 
-    lines = []
-    if has_bullish:
-        lines += _section("📊 سجل أداء إشارات الصعود (السهم مقابل مؤشر SPY):",
-                          bullish, "تفوق على السوق في")
-    if has_bearish:
-        if lines:
-            lines.append("")
-        lines += _section("📉 سجل أداء إشارات الهبوط (انخفاض السهم مقابل مؤشر SPY):",
-                          bearish, "تفوقت في")
+    lines = _section("📊 سجل أداء الإشارات (السهم مقابل مؤشر SPY):",
+                     data["summary"], "تفوق على السوق في")
     if pending:
         lines.append(f"⏳ {pending} إشارة قيد المتابعة (لم يحن وقت تقييمها بعد)")
     return "\n".join(lines)

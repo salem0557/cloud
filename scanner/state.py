@@ -63,12 +63,10 @@ class State:
     # scan must NOT cause the identical alert to be sent again next hour.
 
     def fresh_matches(self, matches) -> list:
-        """Matches that are new or whose matched-filter set changed. Keyed
-        by state_key (symbol+direction) so a bullish and a bearish signal on
-        the same symbol are tracked independently."""
+        """Matches that are new or whose matched-filter set changed."""
         fresh = []
         for m in matches:
-            entry = self.last_alerts.get(m.state_key)
+            entry = self.last_alerts.get(m.symbol)
             if entry is None or entry["sig"] != m.signature():
                 fresh.append(m)
         return fresh
@@ -76,7 +74,7 @@ class State:
     def record(self, matches):
         now = time.time()
         for m in matches:
-            self.last_alerts[m.state_key] = {"sig": m.signature(), "ts": now}
+            self.last_alerts[m.symbol] = {"sig": m.signature(), "ts": now}
 
     def prune(self):
         cutoff = time.time() - config.ALERT_MEMORY_HOURS * 3600

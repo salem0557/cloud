@@ -1,11 +1,12 @@
-"""Pick the best option contracts for an alerted stock.
+"""Pick the best CALL option contracts for an alerted stock (the strategy
+only trades reversal-up setups, so only bullish/long-call contracts apply).
 
 For each signal the bot fetches the Yahoo option chain (nearest expiry up to
-OPTIONS_MAX_WEEKS out, ~3 months by default) and ranks contracts per side
-(call/put) by a composite score across bid/ask spread quality, volume, open
-interest, implied volatility, delta, and theta — not by cheapest premium.
-Liquidity (spread/volume/OI) is weighted higher than the Greeks, since it
-determines whether a contract can actually be traded at a sane price at all.
+OPTIONS_MAX_WEEKS out, ~3 months by default) and ranks contracts by a
+composite score across bid/ask spread quality, volume, open interest,
+implied volatility, delta, and theta — not by cheapest premium. Liquidity
+(spread/volume/OI) is weighted higher than the Greeks, since it determines
+whether a contract can actually be traded at a sane price at all.
 
 Neither Yahoo nor CBOE's free feeds reliably publish delta/theta, so both are
 derived from Black-Scholes (spot, strike, days-to-expiry, implied volatility)
@@ -154,10 +155,10 @@ def _raw_candidate(row, spot: float, expiry: str, days: int, is_call: bool) -> d
     }
 
 
-def _add_candidate(candidates, side, row, spot, expiry, days):
-    raw = _raw_candidate(row, spot, expiry, days, is_call=(side == "call"))
+def _add_candidate(candidates, row, spot, expiry, days):
+    raw = _raw_candidate(row, spot, expiry, days, is_call=True)
     if raw is not None:
-        candidates[side].append(raw)
+        candidates["call"].append(raw)
 
 
 def _rank_candidates(rows: list[dict]) -> list[dict]:
@@ -223,7 +224,7 @@ def _yahoo_candidates(symbol, spot, today, cutoff):
     ticker = yf.Ticker(symbol)
     expiries = _expiries_with_retry(ticker, symbol)
     if not expiries:
-        return {"call": [], "put": []}, False
+        return {"call": []}, False
 
     upcoming = []
     for exp in expiries:
@@ -241,7 +242,7 @@ def _yahoo_candidates(symbol, spot, today, cutoff):
     if not upcoming:
         raise NoNearTermOptions(symbol)
 
-    candidates = {"call": [], "put": []}
+    candidates = {"call": []}
     fetched = 0
     for exp, days in upcoming:
         chain = None
@@ -256,9 +257,8 @@ def _yahoo_candidates(symbol, spot, today, cutoff):
             log.warning("Yahoo option chain failed: %s %s", symbol, exp)
             continue
         fetched += 1
-        for side, df in (("call", chain.calls), ("put", chain.puts)):
-            for _, row in df.iterrows():
-                _add_candidate(candidates, side, row, spot, exp, days)
+        for _, row in chain.calls.iterrows():
+            _add_candidate(candidates, row, spot, exp, days)
 
     if fetched == 0:
         raise OptionsFetchError(symbol)
@@ -271,7 +271,7 @@ def _cboe_candidates(symbol, spot, today, cutoff):
         resp = requests.get(CBOE_URL.format(symbol=symbol.upper()), timeout=20,
                             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 404:
-            return {"call": [], "put": []}, False  # not an optionable symbol
+            return {"call": []}, False  # not an optionable symbol
         resp.raise_for_status()
         contracts = resp.json()["data"].get("options") or []
     except OptionsFetchError:
@@ -279,15 +279,15 @@ def _cboe_candidates(symbol, spot, today, cutoff):
     except Exception as exc:
         raise OptionsFetchError(symbol) from exc
     if not contracts:
-        return {"call": [], "put": []}, False
+        return {"call": []}, False
 
     # Contract names look like DDD261218C00005000: yymmdd, C/P, strike*1000
     pat = re.compile(rf"^{re.escape(symbol.upper())}(\d{{6}})([CP])(\d{{8}})$")
-    candidates = {"call": [], "put": []}
+    candidates = {"call": []}
     any_in_window = False
     for c in contracts:
         m = pat.match(c.get("option", ""))
-        if not m:
+        if not m or m.group(2) != "C":  # only calls: this strategy is long-only
             continue
         try:
             exp_date = dt.datetime.strptime(m.group(1), "%y%m%d").date()
@@ -296,7 +296,6 @@ def _cboe_candidates(symbol, spot, today, cutoff):
         if not today <= exp_date <= cutoff:
             continue
         any_in_window = True
-        side = "call" if m.group(2) == "C" else "put"
         row = {
             "strike": int(m.group(3)) / 1000,
             "bid": c.get("bid"),
@@ -306,7 +305,7 @@ def _cboe_candidates(symbol, spot, today, cutoff):
             "volume": c.get("volume"),
             "iv": c.get("iv"),
         }
-        _add_candidate(candidates, side, row, spot,
+        _add_candidate(candidates, row, spot,
                        exp_date.isoformat(), (exp_date - today).days)
 
     # Contracts exist for this symbol, but every one of them expires beyond
@@ -355,16 +354,15 @@ def _gather_candidates(symbol: str, spot: float, today, cutoff) -> dict | None:
     return None  # both providers cleanly confirm: genuinely no listed options
 
 
-def find_cheap_contracts(symbol: str, spot: float, max_premium: float,
-                         sides=("call", "put")) -> dict[str, list[dict]]:
-    """Contracts on `symbol` priced at or under `max_premium` per share
-    (contract cost = premium * 100), among the requested sides.
+def find_cheap_contracts(symbol: str, spot: float, max_premium: float) -> dict[str, list[dict]]:
+    """CALL contracts on `symbol` priced at or under `max_premium` per share
+    (contract cost = premium * 100).
 
     Reuses the same reliability screen and composite ranking as best_options
     — just pre-filtered to the price cap first; among the ones under the
     cap, the best-scored (not just the cheapest) come first.
     """
-    out = {"call": [], "put": []}
+    out = {"call": []}
     if _no_options.get(symbol, 0) > time.time() - NO_OPTIONS_TTL:
         return out
 
@@ -374,24 +372,23 @@ def find_cheap_contracts(symbol: str, spot: float, max_premium: float,
     if candidates is None:
         _no_options[symbol] = time.time()
         return out
-    for side in sides:
-        cheap = [c for c in candidates[side] if c["premium"] <= max_premium]
-        out[side] = _rank_candidates(cheap)[:config.OPTIONS_TOP_N]
+    cheap = [c for c in candidates["call"] if c["premium"] <= max_premium]
+    out["call"] = _rank_candidates(cheap)[:config.OPTIONS_TOP_N]
     return out
 
 
 def best_options(symbol: str, spot: float) -> dict[str, list[dict]]:
-    """{'call': [top picks, best composite score first], 'put': [...]}.
+    """{'call': [top picks, best composite score first]}.
 
     Ranks by a composite score across bid/ask spread, volume, open interest,
     implied volatility, delta, and theta (see module docstring) — not by
     cheapest premium. Tries Yahoo first, then CBOE's free delayed chain as
-    an independent fallback. Empty lists mean the stock genuinely has no
+    an independent fallback. Empty list means the stock genuinely has no
     suitable contracts; OptionsFetchError means both providers failed;
     NoNearTermOptions means the stock has options, just none within
     OPTIONS_MAX_WEEKS.
     """
-    out = {"call": [], "put": []}
+    out = {"call": []}
     if _no_options.get(symbol, 0) > time.time() - NO_OPTIONS_TTL:
         return out
 
@@ -402,6 +399,5 @@ def best_options(symbol: str, spot: float) -> dict[str, list[dict]]:
         _no_options[symbol] = time.time()
         log.info("%s has no listed options", symbol)
         return out
-    for side, rows in candidates.items():
-        out[side] = _rank_candidates(rows)[:config.OPTIONS_TOP_N]
+    out["call"] = _rank_candidates(candidates["call"])[:config.OPTIONS_TOP_N]
     return out

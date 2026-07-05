@@ -12,32 +12,24 @@ matplotlib.use("Agg")  # headless: no display available on the server
 import mplfinance as mpf
 
 from . import config
-from .indicators import bollinger, find_nearest_resistance, find_nearest_support, rsi
+from .indicators import bollinger, find_nearest_support, rsi
 
 log = logging.getLogger(__name__)
 
 
-def render_chart(symbol: str, df, details: dict, kind: str = "bullish") -> bytes | None:
-    """PNG bytes of the chart, or None if rendering isn't possible.
-
-    Mirrors the signal direction: bullish charts show the support level
-    (green) and the RSI oversold line; bearish charts show the resistance
-    level (red) and the RSI overbought line instead.
-    """
+def render_chart(symbol: str, df, details: dict) -> bytes | None:
+    """PNG bytes of the chart, or None if rendering isn't possible: candles +
+    Bollinger Bands + the support level (green) + an RSI panel with the
+    oversold reference line."""
     try:
         if df is None or len(df) < config.BB_PERIOD + 5:
             return None
 
         lower, mid, upper = bollinger(df["Close"], config.BB_PERIOD, config.BB_STD)
         rsi_series = rsi(df["Close"], config.RSI_PERIOD)
-        if kind == "bearish":
-            level = find_nearest_resistance(df)
-            level_color = "#ef4444"
-            rsi_ref, rsi_ref_color = config.RSI_OVERBOUGHT, "#ef4444"
-        else:
-            level = find_nearest_support(df)
-            level_color = "#22c55e"
-            rsi_ref, rsi_ref_color = config.RSI_OVERSOLD, "#ef4444"
+        level = find_nearest_support(df)
+        level_color = "#22c55e"
+        rsi_ref, rsi_ref_color = config.RSI_OVERSOLD, "#ef4444"
 
         tail = df.tail(config.CHART_BARS).copy()
         tail["bb_lower"] = lower.reindex(tail.index)
