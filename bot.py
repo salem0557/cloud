@@ -440,8 +440,11 @@ async def do_hot_scan(app: Application):
 
 
 async def hot_job(context: ContextTypes.DEFAULT_TYPE):
-    if state.subscribers:
-        await do_hot_scan(context.application)
+    # Runs on its own schedule regardless of subscriber count, so scanning
+    # starts automatically the moment the bot boots rather than waiting for
+    # a first /start — do_hot_scan itself already no-ops cleanly if hotlist
+    # is empty or the market is paused.
+    await do_hot_scan(context.application)
     delay = (config.NIGHT_HOTLIST_INTERVAL_SECONDS if market_calendar.is_night_hours()
              else config.HOTLIST_INTERVAL_SECONDS)
     context.application.job_queue.run_once(hot_job, when=delay)
@@ -453,8 +456,11 @@ async def scan_loop_job(context: ContextTypes.DEFAULT_TYPE):
     # fixed wall-clock interval) — and that gap widens overnight to save
     # compute/requests during the quietest hours. The dedup layer ensures
     # only new or changed signals are ever sent regardless of pace.
-    if state.subscribers:
-        await do_scan(context.application, only_changes=True, notify_empty=False)
+    #
+    # Runs regardless of subscriber count: scanning starts automatically as
+    # soon as the bot boots (building the qualified/hot lists right away),
+    # instead of sitting idle until someone sends /start.
+    await do_scan(context.application, only_changes=True, notify_empty=False)
     delay = (config.NIGHT_SCAN_PAUSE_SECONDS if market_calendar.is_night_hours()
              else config.SCAN_PAUSE_SECONDS)
     context.application.job_queue.run_once(scan_loop_job, when=delay)
