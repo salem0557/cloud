@@ -29,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="sp500 | all | comma,separated,tickers | path/to/file.txt (default: sp500)",
     )
     p.add_argument("--option-type", choices=["call", "put", "both"], default="both")
-    p.add_argument("--min-dte", type=int, default=7, help="minimum days to expiry")
+    p.add_argument("--min-dte", type=int, default=1, help="minimum days to expiry")
     p.add_argument("--max-dte", type=int, default=45, help="maximum days to expiry")
     p.add_argument("--min-volume", type=int, default=100)
     p.add_argument("--min-open-interest", type=int, default=500)
