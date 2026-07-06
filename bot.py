@@ -1,9 +1,8 @@
 """Telegram bot: continuous scanner for US stocks, reversal-up setups only
 (a stock is reported when >= FILTERS_REQUIRED match):
   1. Price at the lower Bollinger Band
-  2. RSI < 30 (oversold)
-  3. Price at a support zone
-  4. Falling wedge pattern
+  2. Price at a support zone
+  3. Falling wedge pattern
 
 Run:  TELEGRAM_BOT_TOKEN=xxx python bot.py
 """
@@ -103,9 +102,8 @@ ALERT_FOOTER = "⚠️ تحليل فني آلي — ليس توصية بشراء
 DISCLAIMER = (
     "⚠️ *إخلاء مسؤولية — يُرجى القراءة بعناية*\n\n"
     "هذه الخدمة *أداة تحليل فني آلية* تعتمد على مؤشرات رياضية "
-    "(بولينجر باند، مؤشر القوة النسبية RSI، مستويات الدعم، "
-    "الأنماط السعرية) لرصد حالات التشبع البيعي واحتمال الصعود في سوق "
-    "الأسهم الأمريكية، "
+    "(بولينجر باند، مستويات الدعم، الأنماط السعرية) لرصد حالات التشبع "
+    "البيعي واحتمال الصعود في سوق الأسهم الأمريكية، "
     "وعرض بيانات عقود الخيارات (Call) الأنشط سيولةً وفق معايير آلية بحتة.\n\n"
     "1️⃣ ما تقدمه هذه الخدمة *ليس توصية ولا مشورة استثمارية* ولا دعوة أو تحريضاً "
     "على شراء أو بيع أي ورقة مالية أو أصل رقمي أو عقد مشتقات، ولا يجوز تفسيره "
@@ -175,8 +173,8 @@ def _greek_suffix(c: dict) -> str:
 
 
 def format_options(picks: dict) -> str:
-    """Best CALL-contracts block, ranked by a composite score (spread/volume/
-    open interest + IV/delta/theta), best first — not by cheapest premium."""
+    """Best CALL-contracts block, ranked by delta (highest first) among
+    contracts clearing DELTA_MIN — not by cheapest premium."""
     contracts = picks.get("call") if picks else None
     if not contracts:
         return ""
@@ -445,7 +443,7 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
             await broadcast(
                 app,
                 f"🔎 اكتمل المسح ({started:%H:%M} ET) — لا إشارات تحقق "
-                f"{config.FILTERS_REQUIRED}/4 من الفلاتر.\n{breakdown}",
+                f"{config.FILTERS_REQUIRED}/{len(FILTERS)} من الفلاتر.\n{breakdown}",
             )
         elif not only_changes:
             await broadcast(app, f"✅ اكتمل المسح:\n{breakdown}")
@@ -528,11 +526,10 @@ async def performance_job(context: ContextTypes.DEFAULT_TYPE):
 WELCOME = (
     "أهلاً بك في بوت المسح الفني للسوق الأمريكي 📊\n\n"
     "تفحص الخدمة كل الأسهم الأمريكية بشكل متواصل (فريم الساعة) بحثاً عن "
-    f"احتمالات الصعود — تحقق {config.FILTERS_REQUIRED} شروط من 4:\n"
+    f"احتمالات الصعود — تحقق {config.FILTERS_REQUIRED} شروط من {len(FILTERS)}:\n"
     "1️⃣ السعر عند الحد السفلي لبولينجر باند\n"
-    "2️⃣ RSI أقل من 30 (تشبع بيعي)\n"
-    "3️⃣ السعر عند منطقة دعم\n"
-    "4️⃣ نموذج وتد هابط\n\n"
+    "2️⃣ السعر عند منطقة دعم\n"
+    "3️⃣ نموذج وتد هابط\n\n"
     "قبل تفعيل الخدمة يجب قراءة إخلاء المسؤولية التالي والموافقة عليه:"
 )
 
@@ -983,7 +980,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"مسح قيد التنفيذ: {scanning}\n"
         f"عدد المشتركين: {len(state.subscribers)}\n"
         f"إشارات في الذاكرة: {len(state.last_alerts)}\n"
-        f"الشرط: {config.FILTERS_REQUIRED}/4 فلاتر • الفريم: {config.INTERVAL}"
+        f"الشرط: {config.FILTERS_REQUIRED}/{len(FILTERS)} فلاتر • الفريم: {config.INTERVAL}"
     )
 
 

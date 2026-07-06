@@ -1,4 +1,4 @@
-"""Technical indicators and the four scan filters.
+"""Technical indicators and the three scan filters.
 
 Each filter takes an OHLCV DataFrame (columns: Open, High, Low, Close, Volume)
 and returns (matched: bool, detail: str) where detail is a short human-readable
@@ -67,16 +67,6 @@ def check_bollinger_lower(df: pd.DataFrame):
     touched = (last_close <= last_lower * (1 + config.BB_TOUCH_TOLERANCE)
                or df["Low"].iloc[-1] <= last_lower)
     return bool(touched), f"الحد السفلي {fmt_price(last_lower)}"
-
-
-def check_rsi_oversold(df: pd.DataFrame):
-    close = df["Close"]
-    if len(close) < config.RSI_PERIOD + 1:
-        return False, "بيانات غير كافية"
-    value = rsi(close, config.RSI_PERIOD).iloc[-1]
-    if np.isnan(value):
-        return False, "بيانات غير كافية"
-    return bool(value < config.RSI_OVERSOLD), f"RSI={value:.1f}"
 
 
 def find_nearest_support(df: pd.DataFrame):
@@ -168,7 +158,6 @@ def check_falling_wedge(df: pd.DataFrame):
 
 FILTERS = {
     "bollinger": ("بولينجر السفلي", check_bollinger_lower),
-    "rsi": ("RSI تشبع بيعي", check_rsi_oversold),
     "support": ("منطقة دعم", check_support),
     "wedge": ("وتد هابط", check_falling_wedge),
 }
