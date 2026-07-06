@@ -1,12 +1,11 @@
-"""Pick the best CALL option contracts for an alerted stock (the strategy
+"""Pick the best CALL option contract for an alerted stock (the strategy
 only trades reversal-up setups, so only bullish/long-call contracts apply).
 
 For each signal the bot fetches the Yahoo option chain (nearest expiry up to
-OPTIONS_MAX_WEEKS out, ~3 months by default) and ranks contracts by a
-composite score across bid/ask spread quality, volume, open interest,
-implied volatility, delta, and theta — not by cheapest premium. Liquidity
-(spread/volume/OI) is weighted higher than the Greeks, since it determines
-whether a contract can actually be traded at a sane price at all.
+OPTIONS_MAX_WEEKS out, ~3 months by default) and selects a single contract
+per symbol via a hard filter (delta band, DTE window, volume, open interest,
+IV cap, bid/ask spread cap) with an automatic relaxed-filter fallback when
+nothing qualifies strictly — see select_best_call() below.
 
 Neither Yahoo nor CBOE's free feeds reliably publish delta/theta, so both are
 derived from Black-Scholes (spot, strike, days-to-expiry, implied volatility)
@@ -27,19 +26,21 @@ from . import config
 log = logging.getLogger(__name__)
 
 RISK_FREE_RATE = 0.045  # ~ current T-bill yield; only used to estimate delta/theta
-# Preferred delta magnitude band for a directional pick: enough sensitivity
-# to the stock's move without paying for a deep-ITM contract.
-DELTA_TARGET_LOW = 0.30
-DELTA_TARGET_HIGH = 0.50
-# Composite score weights: liquidity (spread+volume+OI) outweighs the Greeks,
-# since it determines whether a contract is actually tradeable at a sane
-# price at all; the Greeks then decide between similarly-liquid contracts.
-WEIGHT_SPREAD = 0.25
-WEIGHT_VOLUME = 0.20
-WEIGHT_OI = 0.20
-WEIGHT_IV = 0.12
-WEIGHT_DELTA = 0.12
-WEIGHT_THETA = 0.11
+
+# --- شروط الفلترة الصارمة لاختيار "أفضل عقد" لكل سهم ---
+# Delta بين 0.60 و0.80: عقد ITM بدرجة كافية يتحرك مع السهم بقوة، دون أن يكون
+# عميق الـITM لدرجة تكلفة رأس مال زائدة. DTE بين يوم و90 يوماً يوازن بين وقت
+# كافٍ لتحقق الفكرة وعدم دفع premium زمنية طويلة بلا داعٍ.
+STRICT_FILTERS = {
+    "delta_min": 0.60, "delta_max": 0.80,
+    "dte_min": 1, "dte_max": 90,
+    "volume_min": 100, "oi_min": 500,
+    "iv_max": 0.40, "spread_max": 0.10,
+}
+# شروط احتياطية أخف: تُجرَّب فقط إذا لم يحقق أي عقد الشروط المثالية أعلاه،
+# حتى لا يبقى السهم بلا أي عقد مقترح رغم توفر خيارات مقبولة (أقل سيولة/تذبذب
+# أعلى قليلاً).
+RELAXED_FILTERS = {**STRICT_FILTERS, "volume_min": 50, "iv_max": 0.50}
 
 # Fallback provider: CBOE publishes full delayed option chains (all expiries
 # in ONE request) with no API key. Independent of Yahoo, so it keeps working
@@ -145,6 +146,9 @@ def _raw_candidate(row, spot: float, expiry: str, days: int, is_call: bool) -> d
     iv_raw = row.get("impliedVolatility", row.get("iv"))
     iv = float(iv_raw) if iv_raw not in (None, "") else None
     delta, theta = _bs_delta_theta(spot, strike, days, iv, is_call)
+    # نقطة التعادل لعقد CALL: سعر السهم الذي يجب الوصول إليه عند الانتهاء
+    # حتى لا يخسر حامل العقد شيئاً (تنفيذ + بريميوم المدفوع).
+    breakeven = round(strike + ask, 2) if ask > 0 else None
 
     return {
         "strike": strike, "expiry": expiry, "days": days,
@@ -152,6 +156,7 @@ def _raw_candidate(row, spot: float, expiry: str, days: int, is_call: bool) -> d
         "bid": bid, "ask": ask, "spread_pct": spread_pct,
         "volume": vol, "openInterest": oi,
         "iv": iv, "delta": delta, "theta": theta,
+        "breakeven": breakeven,
     }
 
 
@@ -161,61 +166,46 @@ def _add_candidate(candidates, row, spot, expiry, days):
         candidates["call"].append(raw)
 
 
-def _rank_candidates(rows: list[dict]) -> list[dict]:
-    """Composite score, best first: bid/ask spread + volume + open interest
-    (65% combined) and IV + delta + theta (35% combined) — replacing the old
-    "cheapest, near-the-money" ranking entirely.
+def _passes_filters(c: dict, f: dict) -> bool:
+    """يتحقق أن العقد c يحقق كل شروط الفلتر f دفعة واحدة. أي بيانات ناقصة أو
+    غير قابلة للقراءة (دلتا/تذبذب ضمني غير محسوبة، لا يوجد عرض/طلب حي...)
+    تعني رفض العقد مباشرة بدل تخمين قيمة له."""
+    try:
+        delta = c["delta"]
+        iv = c["iv"]
+        spread_pct = c["spread_pct"]
+        if delta is None or iv is None or spread_pct is None:
+            return False
+        delta = abs(delta)
+        return (f["delta_min"] <= delta <= f["delta_max"]
+                and f["dte_min"] <= c["days"] <= f["dte_max"]
+                and c["volume"] >= f["volume_min"]
+                and c["openInterest"] >= f["oi_min"]
+                and iv < f["iv_max"]
+                and spread_pct < f["spread_max"])
+    except (KeyError, TypeError):
+        return False
 
-    IV and theta are scored relative to the other contracts fetched for the
-    same symbol/side (their usable range varies too much across underlyings
-    for one fixed global threshold to mean anything); delta is scored against
-    a fixed 0.30-0.50 target band, since that's a stated preference, not
-    something relative to peers.
+
+def select_best_call(contracts: list[dict]) -> tuple[dict | None, bool]:
+    """يختار أفضل عقد CALL واحد من قائمة عقود سهم معين.
+
+    يجرّب أولاً الشروط الصارمة (STRICT_FILTERS)؛ إن لم يحقق أي عقد كل
+    الشروط، يعيد المحاولة بالشروط المخففة (RELAXED_FILTERS: حجم تداول أقل
+    وتذبذب ضمني أعلى مسموح). العقود المؤهلة تُرتَّب حسب أعلى open_interest
+    أولاً، ثم أقل سعر ask.
+
+    يرجع (أفضل عقد أو None, هل استُخدمت الشروط المخففة). None يعني عدم وجود
+    أي عقد مناسب حتى بعد التخفيف.
     """
-    if not rows:
-        return rows
-
-    ivs = [r["iv"] for r in rows if r["iv"] is not None]
-    iv_lo, iv_hi = (min(ivs), max(ivs)) if ivs else (None, None)
-    thetas = [abs(r["theta"]) / r["premium"] for r in rows
-             if r["theta"] is not None and r["premium"]]
-    th_lo, th_hi = (min(thetas), max(thetas)) if thetas else (None, None)
-
-    for r in rows:
-        if r["spread_pct"] is not None:
-            spread_score = max(0.0, 1 - r["spread_pct"] * 2)  # 0 at a 50% spread
-        else:
-            spread_score = 0.3  # after-hours last-trade quote: can't judge, partial credit
-
-        volume_score = min(1.0, math.log10(1 + r["volume"]) / 3.0)   # ~1.0 at 1,000 volume
-        oi_score = min(1.0, math.log10(1 + r["openInterest"]) / 4.0)  # ~1.0 at 10,000 OI
-
-        if r["iv"] is not None and iv_hi is not None and iv_hi > iv_lo:
-            iv_score = 1 - (r["iv"] - iv_lo) / (iv_hi - iv_lo)  # lower IV wins
-        else:
-            iv_score = 0.5  # no peer spread to compare against -> neutral
-
-        if r["delta"] is not None:
-            d = abs(r["delta"])
-            if DELTA_TARGET_LOW <= d <= DELTA_TARGET_HIGH:
-                delta_score = 1.0
-            else:
-                dist = (DELTA_TARGET_LOW - d) if d < DELTA_TARGET_LOW else (d - DELTA_TARGET_HIGH)
-                delta_score = max(0.0, 1 - dist / DELTA_TARGET_LOW)
-        else:
-            delta_score = 0.5
-
-        if r["theta"] is not None and r["premium"] and th_hi is not None and th_hi > th_lo:
-            theta_pct = abs(r["theta"]) / r["premium"]
-            theta_score = 1 - (theta_pct - th_lo) / (th_hi - th_lo)  # slower decay wins
-        else:
-            theta_score = 0.5
-
-        r["score"] = (WEIGHT_SPREAD * spread_score + WEIGHT_VOLUME * volume_score
-                      + WEIGHT_OI * oi_score + WEIGHT_IV * iv_score
-                      + WEIGHT_DELTA * delta_score + WEIGHT_THETA * theta_score)
-
-    return sorted(rows, key=lambda r: -r["score"])
+    for filters, relaxed in ((STRICT_FILTERS, False), (RELAXED_FILTERS, True)):
+        qualified = [c for c in contracts if _passes_filters(c, filters)]
+        if qualified:
+            qualified.sort(key=lambda c: (-c["openInterest"], c["ask"]))
+            best = qualified[0]
+            best["relaxed"] = relaxed
+            return best, relaxed
+    return None, False
 
 
 def _yahoo_candidates(symbol, spot, today, cutoff):
@@ -356,11 +346,9 @@ def _gather_candidates(symbol: str, spot: float, today, cutoff) -> dict | None:
 
 def find_cheap_contracts(symbol: str, spot: float, max_premium: float) -> dict[str, list[dict]]:
     """CALL contracts on `symbol` priced at or under `max_premium` per share
-    (contract cost = premium * 100).
-
-    Reuses the same reliability screen and composite ranking as best_options
-    — just pre-filtered to the price cap first; among the ones under the
-    cap, the best-scored (not just the cheapest) come first.
+    (contract cost = premium * 100), sorted by open interest (desc) then
+    ask (asc) — this command searches for cheap contracts specifically, so
+    the strict delta/IV filters used by best_options() don't apply here.
     """
     out = {"call": []}
     if _no_options.get(symbol, 0) > time.time() - NO_OPTIONS_TTL:
@@ -373,22 +361,23 @@ def find_cheap_contracts(symbol: str, spot: float, max_premium: float) -> dict[s
         _no_options[symbol] = time.time()
         return out
     cheap = [c for c in candidates["call"] if c["premium"] <= max_premium]
-    out["call"] = _rank_candidates(cheap)[:config.OPTIONS_TOP_N]
+    cheap.sort(key=lambda c: (-c["openInterest"], c["ask"]))
+    out["call"] = cheap[:config.OPTIONS_TOP_N]
     return out
 
 
-def best_options(symbol: str, spot: float) -> dict[str, list[dict]]:
-    """{'call': [top picks, best composite score first]}.
+def best_options(symbol: str, spot: float) -> dict:
+    """يرجع أفضل عقد CALL واحد لهذا السهم وفق select_best_call(): شروط
+    صارمة على الدلتا (0.60-0.80) وأيام الانتهاء (1-90) والسيولة (حجم
+    التداول والفائدة المفتوحة) والتذبذب الضمني وسبريد العرض/الطلب، مع
+    تخفيف تلقائي للشروط إذا لم يتحقق أي عقد الشروط المثالية.
 
-    Ranks by a composite score across bid/ask spread, volume, open interest,
-    implied volatility, delta, and theta (see module docstring) — not by
-    cheapest premium. Tries Yahoo first, then CBOE's free delayed chain as
-    an independent fallback. Empty list means the stock genuinely has no
-    suitable contracts; OptionsFetchError means both providers failed;
-    NoNearTermOptions means the stock has options, just none within
-    OPTIONS_MAX_WEEKS.
+    الناتج: {'call': [أفضل عقد] أو [], 'relaxed': هل استُخدمت شروط مخففة}.
+    قائمة فارغة تعني عدم وجود عقد مناسب حتى بالشروط المخففة؛
+    OptionsFetchError يعني فشل المزوّدَين معاً؛ NoNearTermOptions يعني أن
+    للسهم عقوداً لكنها كلها تنتهي بعد OPTIONS_MAX_WEEKS.
     """
-    out = {"call": []}
+    out = {"call": [], "relaxed": False}
     if _no_options.get(symbol, 0) > time.time() - NO_OPTIONS_TTL:
         return out
 
@@ -399,5 +388,14 @@ def best_options(symbol: str, spot: float) -> dict[str, list[dict]]:
         _no_options[symbol] = time.time()
         log.info("%s has no listed options", symbol)
         return out
-    out["call"] = _rank_candidates(candidates["call"])[:config.OPTIONS_TOP_N]
+
+    try:
+        best, relaxed = select_best_call(candidates["call"])
+    except Exception:
+        log.exception("select_best_call failed for %s; treating as no pick", symbol)
+        best, relaxed = None, False
+
+    if best is not None:
+        out["call"] = [best]
+        out["relaxed"] = relaxed
     return out

@@ -175,21 +175,26 @@ def _greek_suffix(c: dict) -> str:
 
 
 def format_options(picks: dict) -> str:
-    """Best CALL-contracts block, ranked by a composite score (spread/volume/
-    open interest + IV/delta/theta), best first — not by cheapest premium."""
+    """أفضل عقد CALL واحد لهذا السهم، مُختار بفلترة صارمة (دلتا/أيام
+    الانتهاء/سيولة/تذبذب ضمني/سبريد) — وليس بالأرخص. ينبّه إذا لجأ الاختيار
+    للشروط المخففة لعدم توفر عقد يحقق الشروط المثالية."""
     contracts = picks.get("call") if picks else None
     if not contracts:
         return ""
-    lines = ["  📊 أفضل عقود CALL 🟢📈 (الأعلى جودة أولاً):"]
-    for i, c in enumerate(contracts, 1):
-        approx = "≈" if c.get("estimated") else ""
-        lines.append(
-            f"    {i}) تنفيذ {c['strike']:.2f}$ • ينتهي {c['expiry']}"
-            f" ({c['days']} يوم) • بريميوم {approx}{c['premium']:.2f}$"
-            f" = {approx}{c['premium'] * 100:.0f}$/عقد{_greek_suffix(c)}"
-        )
-    if any(c.get("estimated") for c in contracts):
+    c = contracts[0]
+    approx = "≈" if c.get("estimated") else ""
+    lines = ["  📊 أفضل عقد CALL 🟢📈:"]
+    lines.append(
+        f"    تنفيذ {c['strike']:.2f}$ • ينتهي {c['expiry']}"
+        f" ({c['days']} يوم) • بريميوم {approx}{c['premium']:.2f}$"
+        f" = {approx}{c['premium'] * 100:.0f}$/عقد{_greek_suffix(c)}"
+    )
+    if c.get("breakeven") is not None:
+        lines.append(f"    نقطة التعادل: {c['breakeven']:.2f}$")
+    if c.get("estimated"):
         lines.append("  (≈ آخر سعر تداول — سوق الأوبشنز مغلق الآن)")
+    if picks.get("relaxed") or c.get("relaxed"):
+        lines.append("  ⚠️ شروط مخففة: لم يتوفر عقد يحقق الشروط المثالية")
     return "\n".join(lines)
 
 
@@ -199,10 +204,11 @@ def format_cheap_picks(symbol: str, price: float, picks: dict) -> str:
     lines = [f"*{symbol}* — {fmt_price(price)}"]
     for c in picks.get("call") or []:
         approx = "≈" if c.get("estimated") else ""
+        breakeven = f" • تعادل {c['breakeven']:.2f}$" if c.get("breakeven") is not None else ""
         lines.append(
             f"    تنفيذ {c['strike']:.2f}$ • ينتهي {c['expiry']}"
             f" ({c['days']} يوم) • بريميوم {approx}{c['premium']:.2f}$"
-            f" = {approx}{c['premium'] * 100:.0f}$/عقد{_greek_suffix(c)}"
+            f" = {approx}{c['premium'] * 100:.0f}$/عقد{_greek_suffix(c)}{breakeven}"
         )
     return "\n".join(lines)
 
