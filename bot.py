@@ -444,7 +444,14 @@ async def hot_job(context: ContextTypes.DEFAULT_TYPE):
     # starts automatically the moment the bot boots rather than waiting for
     # a first /start — do_hot_scan itself already no-ops cleanly if hotlist
     # is empty or the market is paused.
-    await do_hot_scan(context.application)
+    #
+    # The reschedule call below MUST always run: this is a self-rescheduling
+    # chain (each run queues the next), so one uncaught exception here would
+    # silently kill all future scanning forever, not just this one cycle.
+    try:
+        await do_hot_scan(context.application)
+    except Exception:
+        log.exception("Hot-lane cycle failed; will retry next cycle")
     delay = (config.NIGHT_HOTLIST_INTERVAL_SECONDS if market_calendar.is_night_hours()
              else config.HOTLIST_INTERVAL_SECONDS)
     context.application.job_queue.run_once(hot_job, when=delay)
@@ -460,7 +467,16 @@ async def scan_loop_job(context: ContextTypes.DEFAULT_TYPE):
     # Runs regardless of subscriber count: scanning starts automatically as
     # soon as the bot boots (building the qualified/hot lists right away),
     # instead of sitting idle until someone sends /start.
-    await do_scan(context.application, only_changes=True, notify_empty=False)
+    #
+    # The reschedule call below MUST always run, no matter what happens in
+    # do_scan (e.g. universe.get_universe() raises on a fresh deploy with no
+    # cached symbol list yet and a transient network failure) — this is a
+    # self-rescheduling chain, so one uncaught exception here would silently
+    # end all future scanning forever, not just skip this one cycle.
+    try:
+        await do_scan(context.application, only_changes=True, notify_empty=False)
+    except Exception:
+        log.exception("Scan cycle failed; will retry next cycle")
     delay = (config.NIGHT_SCAN_PAUSE_SECONDS if market_calendar.is_night_hours()
              else config.SCAN_PAUSE_SECONDS)
     context.application.job_queue.run_once(scan_loop_job, when=delay)
