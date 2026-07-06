@@ -175,23 +175,20 @@ def _greek_suffix(c: dict) -> str:
 
 
 def format_options(picks: dict) -> str:
-    """أفضل عقد CALL واحد لهذا السهم، مُختار وفق فلترة الدلتا/أيام الانتهاء/
-    الحد الأدنى الرمزي لحجم التداول (بلا قيد على العقود المفتوحة أو التذبذب
-    الضمني أو السبريد) — وليس بالأرخص."""
+    """Best CALL-contracts block, ranked by a composite score (spread/volume/
+    open interest + IV/delta/theta), best first — not by cheapest premium."""
     contracts = picks.get("call") if picks else None
     if not contracts:
         return ""
-    c = contracts[0]
-    approx = "≈" if c.get("estimated") else ""
-    lines = ["  📊 أفضل عقد CALL 🟢📈:"]
-    lines.append(
-        f"    تنفيذ {c['strike']:.2f}$ • ينتهي {c['expiry']}"
-        f" ({c['days']} يوم) • بريميوم {approx}{c['premium']:.2f}$"
-        f" = {approx}{c['premium'] * 100:.0f}$/عقد{_greek_suffix(c)}"
-    )
-    if c.get("breakeven") is not None:
-        lines.append(f"    نقطة التعادل: {c['breakeven']:.2f}$")
-    if c.get("estimated"):
+    lines = ["  📊 أفضل عقود CALL 🟢📈 (الأعلى جودة أولاً):"]
+    for i, c in enumerate(contracts, 1):
+        approx = "≈" if c.get("estimated") else ""
+        lines.append(
+            f"    {i}) تنفيذ {c['strike']:.2f}$ • ينتهي {c['expiry']}"
+            f" ({c['days']} يوم) • بريميوم {approx}{c['premium']:.2f}$"
+            f" = {approx}{c['premium'] * 100:.0f}$/عقد{_greek_suffix(c)}"
+        )
+    if any(c.get("estimated") for c in contracts):
         lines.append("  (≈ آخر سعر تداول — سوق الأوبشنز مغلق الآن)")
     return "\n".join(lines)
 
@@ -202,20 +199,19 @@ def format_cheap_picks(symbol: str, price: float, picks: dict) -> str:
     lines = [f"*{symbol}* — {fmt_price(price)}"]
     for c in picks.get("call") or []:
         approx = "≈" if c.get("estimated") else ""
-        breakeven = f" • تعادل {c['breakeven']:.2f}$" if c.get("breakeven") is not None else ""
         lines.append(
             f"    تنفيذ {c['strike']:.2f}$ • ينتهي {c['expiry']}"
             f" ({c['days']} يوم) • بريميوم {approx}{c['premium']:.2f}$"
-            f" = {approx}{c['premium'] * 100:.0f}$/عقد{_greek_suffix(c)}{breakeven}"
+            f" = {approx}{c['premium'] * 100:.0f}$/عقد{_greek_suffix(c)}"
         )
     return "\n".join(lines)
 
 
 async def attach_options(matches):
     """Fill options_text (and has_option) on each match. has_option is only
-    True when a CALL contract actually cleared the filter in
-    select_best_call() — used by the scan loop to drop stocks with no
-    tradeable contract from the alert entirely (see filter_by_options)."""
+    True when best_options() returned at least one ranked CALL contract —
+    used by the scan loop to drop stocks with no tradeable contract from the
+    alert entirely (see filter_by_options)."""
     if not config.OPTIONS_ENABLED:
         return
     for m in matches:
@@ -333,10 +329,10 @@ async def broadcast_photo(app: Application, photo: bytes, caption: str):
 # ------------------------------------------------------------------ scans
 
 async def filter_by_options(matches: list) -> list:
-    """يُبقي فقط الأسهم التي وُجد لها عقد CALL يحقق شروط الفلترة — أي سهم
-    بدون عقد مناسب لا يُرسل تنبيهه إطلاقاً، بغض النظر عن السبب (لا يوجد
-    أوبشن أصلاً، فشل الجلب، لا عقود قريبة، أو لم يحقق أي عقد شروط
-    select_best_call). العقود تُجلب هنا مبكراً (قبل تسجيل الذاكرة) حتى لا
+    """يُبقي فقط الأسهم التي وُجد لها عقد CALL واحد على الأقل — أي سهم
+    بدون أي عقد مناسب لا يُرسل تنبيهه إطلاقاً، بغض النظر عن السبب (لا يوجد
+    أوبشن أصلاً، فشل الجلب، لا عقود قريبة، أو لا عقود ناجية بعد فلترة
+    best_options). العقود تُجلب هنا مبكراً (قبل تسجيل الذاكرة) حتى لا
     يُسجَّل السهم المستبعد في الذاكرة، فتبقى فرصة لإعادة تقييمه في الدورة
     التالية إن تحسّنت سيولة عقوده لاحقاً."""
     if not config.OPTIONS_ENABLED or not matches:
