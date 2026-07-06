@@ -6,6 +6,7 @@ from typing import List, Sequence
 
 from .config import ScreenerConfig
 from .filters import OptionContract
+from .report import write_html
 from .scanner import scan_universe
 from .universe import resolve_universe
 
@@ -49,6 +50,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--request-delay", type=float, default=0.25, help="base delay (s) between chain requests per worker")
     p.add_argument("--max-tickers", type=int, default=None, help="cap universe size, useful for a quick test run")
     p.add_argument("--csv", dest="csv_path", default=None, help="write all matching contracts to this CSV path")
+    p.add_argument(
+        "--html", dest="html_path", default=None,
+        help="write all matching contracts to a self-contained, sortable/searchable HTML report "
+             "(open the file directly in a browser, no server needed)",
+    )
     p.add_argument("-v", "--verbose", action="store_true")
     return p
 
@@ -96,6 +102,10 @@ def main(argv: Sequence[str] = None) -> int:
     if args.csv_path:
         write_csv(results, args.csv_path)
         print(f"Full results written to {args.csv_path}", file=sys.stderr)
+
+    if args.html_path:
+        write_html(results, args.html_path)
+        print(f"HTML report written to {args.html_path} (open it in a browser)", file=sys.stderr)
 
     return 0
 

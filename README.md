@@ -37,6 +37,10 @@ python3 main.py --universe all --max-tickers 200 -v
 
 # Save every matching contract, not just the top N shown on screen
 python3 main.py --universe sp500 --top 20 --csv results.csv
+
+# Generate a sortable/searchable HTML report - open results.html in any
+# browser afterwards, no server needed (works like a lightweight spreadsheet)
+python3 main.py --universe sp500 --html results.html
 ```
 
 `--universe` accepts:
