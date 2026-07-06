@@ -464,17 +464,16 @@ async def hot_job(context: ContextTypes.DEFAULT_TYPE):
         await do_hot_scan(context.application)
     except Exception:
         log.exception("Hot-lane cycle failed; will retry next cycle")
-    delay = (config.NIGHT_HOTLIST_INTERVAL_SECONDS if market_calendar.is_night_hours()
-             else config.HOTLIST_INTERVAL_SECONDS)
-    context.application.job_queue.run_once(hot_job, when=delay)
+    context.application.job_queue.run_once(hot_job, when=config.HOTLIST_INTERVAL_SECONDS)
 
 
 async def scan_loop_job(context: ContextTypes.DEFAULT_TYPE):
     # Self-rescheduling: each run queues the next one after it finishes, so a
     # new cycle starts SCAN_PAUSE_SECONDS after the previous one ends (not a
-    # fixed wall-clock interval) — and that gap widens overnight to save
-    # compute/requests during the quietest hours. The dedup layer ensures
-    # only new or changed signals are ever sent regardless of pace.
+    # fixed wall-clock interval). do_scan itself no-ops entirely outside the
+    # regular session (market_calendar.scan_paused()), so the bot goes fully
+    # idle after the close and resumes at the next open. The dedup layer
+    # ensures only new or changed signals are ever sent regardless of pace.
     #
     # Runs regardless of subscriber count: scanning starts automatically as
     # soon as the bot boots (building the qualified/hot lists right away),
@@ -489,9 +488,7 @@ async def scan_loop_job(context: ContextTypes.DEFAULT_TYPE):
         await do_scan(context.application, only_changes=True, notify_empty=False)
     except Exception:
         log.exception("Scan cycle failed; will retry next cycle")
-    delay = (config.NIGHT_SCAN_PAUSE_SECONDS if market_calendar.is_night_hours()
-             else config.SCAN_PAUSE_SECONDS)
-    context.application.job_queue.run_once(scan_loop_job, when=delay)
+    context.application.job_queue.run_once(scan_loop_job, when=config.SCAN_PAUSE_SECONDS)
 
 
 async def performance_job(context: ContextTypes.DEFAULT_TYPE):
@@ -947,15 +944,12 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      else "دورة تأهيل كاملة (كل الأسهم)")
     throttle_line = (f"نشطة مؤقتاً ({throttle.delay:.0f} ثانية بين الدفعات)"
                      if throttle.active else "غير نشطة")
-    pace_line = ("ليلي 🌙 (بطيء لتوفير الاستهلاك)" if market_calendar.is_night_hours()
-                else "نهاري (عادي)")
-    stock_scan_line = ("متوقف 🚫 (نهاية أسبوع/عطلة رسمية)"
+    stock_scan_line = ("متوقف 🚫 (خارج ساعات الجلسة الرسمية 9:30-16:00 ET)"
                        if market_calendar.scan_paused() else "نشط ✅")
     await update.message.reply_text(
         f"اشتراكك: {sub_line}\n"
         f"السوق الأمريكي الآن: {open_now}\n"
         f"مسح الأسهم: {stock_scan_line}\n"
-        f"وتيرة المسح: {pace_line}\n"
         f"نطاق الأسهم: {universe_line}\n"
         f"القائمة الساخنة 🔥: {len(hotlist)} رمز (فحص كل {config.HOTLIST_INTERVAL_SECONDS // 60} دقيقة)\n"
         f"التهدئة التلقائية: {throttle_line}\n"

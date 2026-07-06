@@ -1,6 +1,6 @@
-"""NYSE trading calendar helpers: holiday dates, weekend closure window, and
-the overnight-session hours — used to pause scanning entirely when no US
-stock can move (saving compute/requests) and to slow the scan pace overnight.
+"""NYSE trading calendar helpers: holiday dates and the regular trading
+session window — used to pause scanning entirely outside market hours
+(saving compute/requests) since no US stock can move then.
 """
 import datetime as dt
 from zoneinfo import ZoneInfo
@@ -56,29 +56,28 @@ def is_market_holiday(d: dt.date) -> bool:
     return d in year_holidays(d.year)
 
 
-def is_night_hours(now: dt.datetime | None = None) -> bool:
-    """Inside the overnight session window (default 20:00-04:00 ET)."""
+def is_regular_session(now: dt.datetime | None = None) -> bool:
+    """Inside the official trading session, 9:30-16:00 ET, on a weekday."""
     now = (now or dt.datetime.now(NY)).astimezone(NY)
-    h = now.hour
-    if config.NIGHT_START_HOUR <= config.NIGHT_END_HOUR:
-        return config.NIGHT_START_HOUR <= h < config.NIGHT_END_HOUR
-    return h >= config.NIGHT_START_HOUR or h < config.NIGHT_END_HOUR
+    if now.weekday() >= 5:
+        return False
+    open_t = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    close_t = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    return open_t <= now <= close_t
 
 
 def scan_paused(now: dt.datetime | None = None) -> bool:
-    """True when no US stock can possibly trade: weekend gap (Friday 20:00 ET
-    to Sunday 20:00 ET) or a full market holiday date.
+    """True whenever the bot should not be scanning: a full weekend, a
+    market holiday, or (when MARKET_HOURS_ONLY_ENABLED) any time outside
+    the regular 9:30-16:00 ET session.
     """
     if not config.WEEKEND_HOLIDAY_PAUSE_ENABLED:
         return False
     now = (now or dt.datetime.now(NY)).astimezone(NY)
+    if now.weekday() >= 5:
+        return True
     if is_market_holiday(now.date()):
         return True
-    wd = now.weekday()  # Monday=0 .. Sunday=6
-    if wd == 4 and now.hour >= 20:    # Friday: after-hours session just ended
-        return True
-    if wd == 5:                      # Saturday: fully closed
-        return True
-    if wd == 6 and now.hour < 20:     # Sunday: before the overnight session opens
+    if config.MARKET_HOURS_ONLY_ENABLED and not is_regular_session(now):
         return True
     return False
