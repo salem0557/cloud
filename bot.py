@@ -559,11 +559,22 @@ async def require_subscription(update: Update) -> bool:
 async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_subscription(update):
         return
-    if scan_lock.locked():
-        await update.message.reply_text("⏳ يوجد مسح قيد التنفيذ حالياً، انتظر انتهاءه.")
-        return
+    # Register the caller as a subscriber FIRST, before checking scan_lock:
+    # the background scan now runs continuously (see scan_loop_job), so a
+    # full pass holds scan_lock for most of every cycle (15-40+ minutes).
+    # Registering only after the lock check meant /scan almost always hit
+    # the "already running" branch and returned before ever subscribing the
+    # caller — they'd press /scan repeatedly and never receive anything,
+    # even though the background scan was actively finding and broadcasting
+    # matches to everyone already subscribed.
     state.subscribers.add(update.effective_chat.id)
     state.save()
+    if scan_lock.locked():
+        await update.message.reply_text(
+            "⏳ يوجد مسح قيد التنفيذ حالياً — تم تسجيلك الآن وستصلك أي إشارة "
+            "يكتشفها هذا المسح الجاري مباشرة، لا داعي لإعادة الإرسال."
+        )
+        return
     await update.message.reply_text(
         "🔎 بدأ المسح اليدوي لكل الأسهم الأمريكية... "
         "سأرسل كل إشارة فور اكتشافها، ثم رسالة عند اكتمال المسح "
