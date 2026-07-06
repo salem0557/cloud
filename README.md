@@ -264,4 +264,3 @@ this, in which case the CLI runs but reports zero results.
 
 This is a screening tool, not investment advice. Yahoo Finance data is
 unofficial and delayed; verify prices with your broker before trading.
- main
