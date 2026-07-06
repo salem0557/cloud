@@ -3,9 +3,8 @@ only trades reversal-up setups, so only bullish/long-call contracts apply).
 
 For each signal the bot fetches the Yahoo option chain (nearest expiry up to
 OPTIONS_MAX_WEEKS out, ~3 months by default) and selects a single contract
-per symbol via a hard filter (delta band, DTE window, volume, open interest,
-IV cap, bid/ask spread cap) with an automatic relaxed-filter fallback when
-nothing qualifies strictly — see select_best_call() below.
+per symbol via a simple filter (delta floor, DTE window, a minimal volume
+floor) — see select_best_call() below.
 
 Neither Yahoo nor CBOE's free feeds reliably publish delta/theta, so both are
 derived from Black-Scholes (spot, strike, days-to-expiry, implied volatility)
@@ -27,20 +26,17 @@ log = logging.getLogger(__name__)
 
 RISK_FREE_RATE = 0.045  # ~ current T-bill yield; only used to estimate delta/theta
 
-# --- شروط الفلترة الصارمة لاختيار "أفضل عقد" لكل سهم ---
-# Delta بين 0.60 و0.80: عقد ITM بدرجة كافية يتحرك مع السهم بقوة، دون أن يكون
-# عميق الـITM لدرجة تكلفة رأس مال زائدة. DTE بين يوم و90 يوماً يوازن بين وقت
-# كافٍ لتحقق الفكرة وعدم دفع premium زمنية طويلة بلا داعٍ.
-STRICT_FILTERS = {
-    "delta_min": 0.60, "delta_max": 0.80,
-    "dte_min": 1, "dte_max": 90,
-    "volume_min": 100, "oi_min": 500,
-    "iv_max": 0.40, "spread_max": 0.10,
+# --- شروط اختيار "أفضل عقد" لكل سهم ---
+# دلتا أكثر من 0.50 فقط (بدون حد أعلى): عقد ITM بدرجة كافية يتحرك مع السهم
+# بقوة. أيام حتى الانتهاء (DTE) بين 1 و120. حجم تداول أكثر من 2 فقط — شرط
+# رمزي يستبعد العقود المعدومة الحركة تماماً دون تقييد حقيقي على السيولة. لا
+# قيد على العقود المفتوحة (Open Interest) أو التذبذب الضمني (IV) أو سبريد
+# العرض/الطلب.
+OPTION_FILTERS = {
+    "delta_min": 0.50,
+    "dte_min": 1, "dte_max": 120,
+    "volume_min": 2,
 }
-# شروط احتياطية أخف: تُجرَّب فقط إذا لم يحقق أي عقد الشروط المثالية أعلاه،
-# حتى لا يبقى السهم بلا أي عقد مقترح رغم توفر خيارات مقبولة (أقل سيولة/تذبذب
-# أعلى قليلاً).
-RELAXED_FILTERS = {**STRICT_FILTERS, "volume_min": 50, "iv_max": 0.50}
 
 # Fallback provider: CBOE publishes full delayed option chains (all expiries
 # in ONE request) with no API key. Independent of Yahoo, so it keeps working
@@ -166,46 +162,30 @@ def _add_candidate(candidates, row, spot, expiry, days):
         candidates["call"].append(raw)
 
 
-def _passes_filters(c: dict, f: dict) -> bool:
-    """يتحقق أن العقد c يحقق كل شروط الفلتر f دفعة واحدة. أي بيانات ناقصة أو
-    غير قابلة للقراءة (دلتا/تذبذب ضمني غير محسوبة، لا يوجد عرض/طلب حي...)
-    تعني رفض العقد مباشرة بدل تخمين قيمة له."""
+def _passes_filters(c: dict) -> bool:
+    """يتحقق أن العقد c يحقق شروط OPTION_FILTERS. دلتا غير محسوبة (بيانات
+    ناقصة لتقدير Black-Scholes) تعني رفض العقد مباشرة بدل تخمين قيمة له."""
     try:
         delta = c["delta"]
-        iv = c["iv"]
-        spread_pct = c["spread_pct"]
-        if delta is None or iv is None or spread_pct is None:
+        if delta is None:
             return False
-        delta = abs(delta)
-        return (f["delta_min"] <= delta <= f["delta_max"]
-                and f["dte_min"] <= c["days"] <= f["dte_max"]
-                and c["volume"] >= f["volume_min"]
-                and c["openInterest"] >= f["oi_min"]
-                and iv < f["iv_max"]
-                and spread_pct < f["spread_max"])
+        return (abs(delta) > OPTION_FILTERS["delta_min"]
+                and OPTION_FILTERS["dte_min"] <= c["days"] <= OPTION_FILTERS["dte_max"]
+                and c["volume"] > OPTION_FILTERS["volume_min"])
     except (KeyError, TypeError):
         return False
 
 
-def select_best_call(contracts: list[dict]) -> tuple[dict | None, bool]:
-    """يختار أفضل عقد CALL واحد من قائمة عقود سهم معين.
+def select_best_call(contracts: list[dict]) -> dict | None:
+    """يختار أفضل عقد CALL واحد من قائمة عقود سهم معين وفق OPTION_FILTERS.
+    العقود المؤهلة تُرتَّب حسب أعلى open_interest أولاً، ثم أقل سعر ask.
 
-    يجرّب أولاً الشروط الصارمة (STRICT_FILTERS)؛ إن لم يحقق أي عقد كل
-    الشروط، يعيد المحاولة بالشروط المخففة (RELAXED_FILTERS: حجم تداول أقل
-    وتذبذب ضمني أعلى مسموح). العقود المؤهلة تُرتَّب حسب أعلى open_interest
-    أولاً، ثم أقل سعر ask.
-
-    يرجع (أفضل عقد أو None, هل استُخدمت الشروط المخففة). None يعني عدم وجود
-    أي عقد مناسب حتى بعد التخفيف.
-    """
-    for filters, relaxed in ((STRICT_FILTERS, False), (RELAXED_FILTERS, True)):
-        qualified = [c for c in contracts if _passes_filters(c, filters)]
-        if qualified:
-            qualified.sort(key=lambda c: (-c["openInterest"], c["ask"]))
-            best = qualified[0]
-            best["relaxed"] = relaxed
-            return best, relaxed
-    return None, False
+    يرجع أفضل عقد، أو None إن لم يحقق أي عقد الشروط."""
+    qualified = [c for c in contracts if _passes_filters(c)]
+    if not qualified:
+        return None
+    qualified.sort(key=lambda c: (-c["openInterest"], c["ask"]))
+    return qualified[0]
 
 
 def _yahoo_candidates(symbol, spot, today, cutoff):
@@ -367,17 +347,15 @@ def find_cheap_contracts(symbol: str, spot: float, max_premium: float) -> dict[s
 
 
 def best_options(symbol: str, spot: float) -> dict:
-    """يرجع أفضل عقد CALL واحد لهذا السهم وفق select_best_call(): شروط
-    صارمة على الدلتا (0.60-0.80) وأيام الانتهاء (1-90) والسيولة (حجم
-    التداول والفائدة المفتوحة) والتذبذب الضمني وسبريد العرض/الطلب، مع
-    تخفيف تلقائي للشروط إذا لم يتحقق أي عقد الشروط المثالية.
+    """يرجع أفضل عقد CALL واحد لهذا السهم وفق select_best_call(): دلتا أكثر
+    من 0.50، أيام انتهاء بين 1 و120، وحجم تداول أكثر من 2 فقط (بلا قيد على
+    العقود المفتوحة أو التذبذب الضمني أو السبريد).
 
-    الناتج: {'call': [أفضل عقد] أو [], 'relaxed': هل استُخدمت شروط مخففة}.
-    قائمة فارغة تعني عدم وجود عقد مناسب حتى بالشروط المخففة؛
-    OptionsFetchError يعني فشل المزوّدَين معاً؛ NoNearTermOptions يعني أن
-    للسهم عقوداً لكنها كلها تنتهي بعد OPTIONS_MAX_WEEKS.
+    الناتج: {'call': [أفضل عقد] أو []}. قائمة فارغة تعني عدم وجود عقد
+    مناسب؛ OptionsFetchError يعني فشل المزوّدَين معاً؛ NoNearTermOptions
+    يعني أن للسهم عقوداً لكنها كلها تنتهي بعد OPTIONS_MAX_WEEKS.
     """
-    out = {"call": [], "relaxed": False}
+    out = {"call": []}
     if _no_options.get(symbol, 0) > time.time() - NO_OPTIONS_TTL:
         return out
 
@@ -390,12 +368,11 @@ def best_options(symbol: str, spot: float) -> dict:
         return out
 
     try:
-        best, relaxed = select_best_call(candidates["call"])
+        best = select_best_call(candidates["call"])
     except Exception:
         log.exception("select_best_call failed for %s; treating as no pick", symbol)
-        best, relaxed = None, False
+        best = None
 
     if best is not None:
         out["call"] = [best]
-        out["relaxed"] = relaxed
     return out

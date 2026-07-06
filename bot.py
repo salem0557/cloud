@@ -175,9 +175,9 @@ def _greek_suffix(c: dict) -> str:
 
 
 def format_options(picks: dict) -> str:
-    """أفضل عقد CALL واحد لهذا السهم، مُختار بفلترة صارمة (دلتا/أيام
-    الانتهاء/سيولة/تذبذب ضمني/سبريد) — وليس بالأرخص. ينبّه إذا لجأ الاختيار
-    للشروط المخففة لعدم توفر عقد يحقق الشروط المثالية."""
+    """أفضل عقد CALL واحد لهذا السهم، مُختار وفق فلترة الدلتا/أيام الانتهاء/
+    الحد الأدنى الرمزي لحجم التداول (بلا قيد على العقود المفتوحة أو التذبذب
+    الضمني أو السبريد) — وليس بالأرخص."""
     contracts = picks.get("call") if picks else None
     if not contracts:
         return ""
@@ -193,8 +193,6 @@ def format_options(picks: dict) -> str:
         lines.append(f"    نقطة التعادل: {c['breakeven']:.2f}$")
     if c.get("estimated"):
         lines.append("  (≈ آخر سعر تداول — سوق الأوبشنز مغلق الآن)")
-    if picks.get("relaxed") or c.get("relaxed"):
-        lines.append("  ⚠️ شروط مخففة: لم يتوفر عقد يحقق الشروط المثالية")
     return "\n".join(lines)
 
 
@@ -215,7 +213,7 @@ def format_cheap_picks(symbol: str, price: float, picks: dict) -> str:
 
 async def attach_options(matches):
     """Fill options_text (and has_option) on each match. has_option is only
-    True when a CALL contract actually cleared the strict/relaxed filter in
+    True when a CALL contract actually cleared the filter in
     select_best_call() — used by the scan loop to drop stocks with no
     tradeable contract from the alert entirely (see filter_by_options)."""
     if not config.OPTIONS_ENABLED:
@@ -335,12 +333,12 @@ async def broadcast_photo(app: Application, photo: bytes, caption: str):
 # ------------------------------------------------------------------ scans
 
 async def filter_by_options(matches: list) -> list:
-    """يُبقي فقط الأسهم التي وُجد لها عقد CALL يحقق شروط الفلترة (صارمة أو
-    مخففة على الأقل) — أي سهم بدون عقد مناسب لا يُرسل تنبيهه إطلاقاً، بغض
-    النظر عن السبب (لا يوجد أوبشن أصلاً، فشل الجلب، لا عقود قريبة، أو لم
-    يحقق أي عقد شروط select_best_call). العقود تُجلب هنا مبكراً (قبل
-    تسجيل الذاكرة) حتى لا يُسجَّل السهم المستبعد في الذاكرة، فتبقى فرصة
-    لإعادة تقييمه في الدورة التالية إن تحسّنت سيولة عقوده لاحقاً."""
+    """يُبقي فقط الأسهم التي وُجد لها عقد CALL يحقق شروط الفلترة — أي سهم
+    بدون عقد مناسب لا يُرسل تنبيهه إطلاقاً، بغض النظر عن السبب (لا يوجد
+    أوبشن أصلاً، فشل الجلب، لا عقود قريبة، أو لم يحقق أي عقد شروط
+    select_best_call). العقود تُجلب هنا مبكراً (قبل تسجيل الذاكرة) حتى لا
+    يُسجَّل السهم المستبعد في الذاكرة، فتبقى فرصة لإعادة تقييمه في الدورة
+    التالية إن تحسّنت سيولة عقوده لاحقاً."""
     if not config.OPTIONS_ENABLED or not matches:
         return matches
     await attach_options(matches)
