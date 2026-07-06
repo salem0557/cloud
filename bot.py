@@ -556,6 +556,39 @@ async def require_subscription(update: Update) -> bool:
     return False
 
 
+async def _send_active_signals(update: Update):
+    """Private catch-up: re-fetch and resend every symbol currently in the
+    dedup memory that still qualifies. A subscriber who joins while the
+    background scan already holds scan_lock would otherwise see nothing
+    until a genuinely new/changed signal appears — the ordinary dedup path
+    only pushes brand-new or changed signals from the moment they join, it
+    never backfills whatever was already active before that."""
+    symbols = sorted(state.last_alerts)
+    if not symbols:
+        await update.message.reply_text("لا توجد إشارات نشطة حالياً في الذاكرة.")
+        return
+    sent = 0
+    for symbol in symbols:
+        try:
+            frames = await asyncio.to_thread(data_mod.fetch_batch, [symbol])
+        except Exception:
+            log.exception("Catch-up fetch failed for %s", symbol)
+            continue
+        df = frames.get(symbol)
+        if df is None:
+            continue
+        m = await asyncio.to_thread(engine.evaluate_symbol, symbol, df)
+        if m.score < config.FILTERS_REQUIRED:
+            continue
+        await attach_options([m])
+        await attach_charts([m])
+        await attach_sentiment([m])
+        await _reply_match(update, ALERT_HEADER, m)
+        sent += 1
+    if not sent:
+        await update.message.reply_text("لا توجد إشارات نشطة تحقق الشروط حالياً.")
+
+
 async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_subscription(update):
         return
@@ -571,9 +604,10 @@ async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state.save()
     if scan_lock.locked():
         await update.message.reply_text(
-            "⏳ يوجد مسح قيد التنفيذ حالياً — تم تسجيلك الآن وستصلك أي إشارة "
-            "يكتشفها هذا المسح الجاري مباشرة، لا داعي لإعادة الإرسال."
+            "⏳ يوجد مسح قيد التنفيذ حالياً — تم تسجيلك، وسأرسل لك الآن نسخة "
+            "خاصة من أي إشارة نشطة حالياً بدلاً من الانتظار حتى تكتمل هذه الدورة."
         )
+        await _send_active_signals(update)
         return
     await update.message.reply_text(
         "🔎 بدأ المسح اليدوي لكل الأسهم الأمريكية... "
