@@ -16,6 +16,7 @@ import json
 import logging
 import time
 
+import pandas as pd
 import yfinance as yf
 
 from . import config
@@ -71,13 +72,22 @@ def _fetch_last_prices(symbols: list[str]) -> dict[str, float]:
     out: dict[str, float] = {}
     if raw is None or raw.empty:
         return out
-    if len(symbols) == 1:
-        frames = {symbols[0]: raw}
-    else:
+    # yfinance returns MultiIndex columns (ticker, field) for a list input
+    # regardless of how many tickers are in it — including a list of one
+    # (this is the exact same bug already fixed in data.fetch_batch: a
+    # "single symbol -> flat columns" special case is wrong and silently
+    # crashed every call with exactly one symbol, e.g. _get_spy_price's
+    # _fetch_last_prices([SPY])).
+    if isinstance(raw.columns, pd.MultiIndex):
         top = raw.columns.get_level_values(0)
         frames = {s: raw[s] for s in symbols if s in top}
+    else:
+        frames = {symbols[0]: raw}
     for sym, df in frames.items():
-        close = df["Close"].dropna()
+        try:
+            close = df["Close"].dropna()
+        except KeyError:
+            continue
         if not close.empty:
             out[sym] = float(close.iloc[-1])
     return out

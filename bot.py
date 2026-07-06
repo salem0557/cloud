@@ -384,7 +384,16 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
             state.record(result.matches)
             if to_send:
                 sent_count += len(to_send)
-                await send_matches(app, to_send)
+                # A failure anywhere inside send_matches (options/chart/
+                # sentiment/performance lookups) must not abort the rest of
+                # the cycle — the remaining batches still need to run, and
+                # matches already recorded above would otherwise be silently
+                # lost for good (dedup blocks re-sending them once "changed"
+                # stops being true).
+                try:
+                    await send_matches(app, to_send)
+                except Exception:
+                    log.exception("send_matches failed for a batch; continuing to next batch")
                 state.save()  # crash-safe: never re-alert what was already sent
             throttle.report(result.data_ratio)
             # Always pace batches; unpaced cycles crashed the container
@@ -435,7 +444,10 @@ async def do_hot_scan(app: Application):
             if not to_send:
                 continue
             state.record(result.matches)
-            await send_matches(app, to_send, hot=True)
+            try:
+                await send_matches(app, to_send, hot=True)
+            except Exception:
+                log.exception("send_matches failed for a hot-lane batch; continuing")
             state.save()
 
 
