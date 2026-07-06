@@ -214,7 +214,10 @@ def format_cheap_picks(symbol: str, price: float, picks: dict) -> str:
 
 
 async def attach_options(matches):
-    """Fill options_text on each match."""
+    """Fill options_text (and has_option) on each match. has_option is only
+    True when a CALL contract actually cleared the strict/relaxed filter in
+    select_best_call() — used by the scan loop to drop stocks with no
+    tradeable contract from the alert entirely (see filter_by_options)."""
     if not config.OPTIONS_ENABLED:
         return
     for m in matches:
@@ -225,7 +228,9 @@ async def attach_options(matches):
                              "(قد تتوفر عقود بتواريخ أبعد)")
         try:
             picks = await asyncio.to_thread(options.best_options, m.symbol, m.price)
-            m.options_text = format_options(picks) or no_options_line
+            text = format_options(picks)
+            m.has_option = bool(text)
+            m.options_text = text or no_options_line
         except options.NoNearTermOptions:
             m.options_text = no_near_term_line
         except options.OptionsFetchError:
@@ -329,6 +334,19 @@ async def broadcast_photo(app: Application, photo: bytes, caption: str):
 
 # ------------------------------------------------------------------ scans
 
+async def filter_by_options(matches: list) -> list:
+    """يُبقي فقط الأسهم التي وُجد لها عقد CALL يحقق شروط الفلترة (صارمة أو
+    مخففة على الأقل) — أي سهم بدون عقد مناسب لا يُرسل تنبيهه إطلاقاً، بغض
+    النظر عن السبب (لا يوجد أوبشن أصلاً، فشل الجلب، لا عقود قريبة، أو لم
+    يحقق أي عقد شروط select_best_call). العقود تُجلب هنا مبكراً (قبل
+    تسجيل الذاكرة) حتى لا يُسجَّل السهم المستبعد في الذاكرة، فتبقى فرصة
+    لإعادة تقييمه في الدورة التالية إن تحسّنت سيولة عقوده لاحقاً."""
+    if not config.OPTIONS_ENABLED or not matches:
+        return matches
+    await attach_options(matches)
+    return [m for m in matches if m.has_option]
+
+
 async def send_matches(app, to_send, hot: bool = False):
     """Push each match as its own message: a chart photo (when available)
     carrying the full detail as its caption, or plain text otherwise —
@@ -386,8 +404,13 @@ async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
             matched += len(result.matches)
             new_hot.update(result.hot)
             qualified.extend(result.liquid)
-            to_send = state.fresh_matches(result.matches) if only_changes else result.matches
-            state.record(result.matches)
+            candidates = state.fresh_matches(result.matches) if only_changes else result.matches
+            # Options are fetched and filtered BEFORE recording: a symbol
+            # with no qualifying CALL contract must not be written into the
+            # dedup memory, or it would silently never be reconsidered again
+            # even if its option liquidity improves on a later cycle.
+            to_send = await filter_by_options(candidates)
+            state.record(to_send)
             if to_send:
                 sent_count += len(to_send)
                 # A failure anywhere inside send_matches (options/chart/
@@ -446,10 +469,13 @@ async def do_hot_scan(app: Application):
         for batch in engine.make_batches(symbols):
             result, _ = await scan_batch_async(batch)
             throttle.report(result.data_ratio)
-            to_send = state.fresh_matches(result.matches)
+            candidates = state.fresh_matches(result.matches)
+            if not candidates:
+                continue
+            to_send = await filter_by_options(candidates)
             if not to_send:
                 continue
-            state.record(result.matches)
+            state.record(to_send)
             try:
                 await send_matches(app, to_send, hot=True)
             except Exception:
@@ -595,7 +621,8 @@ async def _send_active_signals(update: Update):
         m = await asyncio.to_thread(engine.evaluate_symbol, symbol, df)
         if m.score < config.FILTERS_REQUIRED:
             continue
-        await attach_options([m])
+        if not (await filter_by_options([m])):
+            continue
         await attach_charts([m])
         await attach_sentiment([m])
         await _reply_match(update, ALERT_HEADER, m)

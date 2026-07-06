@@ -15,6 +15,7 @@ class Match:
     matched: list[str]                     # filter keys that passed
     details: dict[str, str] = field(default_factory=dict)
     options_text: str = ""                 # best-contracts block, filled at send time
+    has_option: bool = False               # a qualifying CALL contract was found
     sentiment_text: str = ""               # news+social summary, filled at send time
     # Transient (never persisted/compared): the OHLCV history used to evaluate
     # this symbol, kept only long enough to render the alert's chart image.
