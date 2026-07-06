@@ -69,6 +69,44 @@ Run `python3 main.py --help` for the full list of options, including
 `--sort-by`, `--max-workers`, and `--request-delay` (throttling to avoid
 getting rate-limited by Yahoo).
 
+## Live web dashboard (deploy to Railway)
+
+`app.py` wraps the same scanner in a small Flask app that rescans in a
+background loop and serves the latest results as a self-refreshing page -
+useful if you want a shareable link instead of running the CLI yourself
+each time.
+
+**Deploy:**
+1. Push this repo to your own GitHub account (or use this one directly).
+2. On [railway.app](https://railway.app): **New Project -> Deploy from GitHub repo** -> select this repo/branch.
+3. Railway auto-detects Python and uses `Procfile` / `railway.json` to run `gunicorn app:app`. No extra setup needed.
+4. Once deployed, open the public URL Railway gives you (Settings -> Networking -> Generate Domain). Share that link with anyone.
+
+**What it does:** the first load shows a "scanning..." page that
+auto-refreshes every 10s; once the first scan cycle completes, the page
+shows results and refreshes itself every 60s. The scan loop keeps running
+in the background continuously (as fast as each cycle allows - there's no
+artificial delay between cycles by default), so the page is always close
+to current.
+
+**Configuration** (Railway -> your service -> Variables): all the same
+knobs as the CLI, as environment variables - `UNIVERSE`, `OPTION_TYPE`,
+`MIN_DTE`, `MAX_DTE`, `MIN_VOLUME`, `MIN_OPEN_INTEREST`, `MAX_SPREAD_PCT`,
+`IV_MIN`, `IV_MAX`, `DELTA_MIN`, `DELTA_MAX`, `MAX_THETA_PCT`, `TOP_N`,
+`MAX_WORKERS`, `REQUEST_DELAY`, `MAX_TICKERS`, `MIN_CYCLE_SECONDS`.
+
+**Careful before you set-and-forget this:**
+- Scanning `sp500` (or `all`) back-to-back, 24/7, is a lot of load against
+  a free, unofficial API - Yahoo may rate-limit or temporarily block the
+  server's IP. If that happens, raise `REQUEST_DELAY` and/or set
+  `MIN_CYCLE_SECONDS` to a few hundred seconds, or shrink `UNIVERSE` to a
+  smaller ticker list.
+- Running continuously 24/7 consumes Railway compute hours the whole time,
+  including nights/weekends when US markets are closed - check Railway's
+  pricing/plan so you don't get surprised by usage.
+- To ship an update after the first deploy, just push to the branch
+  Railway is tracking - it redeploys automatically.
+
 ## Tests
 
 ```bash
