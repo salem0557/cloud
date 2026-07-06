@@ -1,6 +1,6 @@
-"""NYSE trading calendar helpers: holiday dates and the regular trading
-session window — used to pause scanning entirely outside market hours
-(saving compute/requests) since no US stock can move then.
+"""NYSE trading calendar helpers: holiday dates and the daily active-scan
+window — used to pause scanning entirely outside it (saving compute/
+requests) since no US stock can move then.
 """
 import datetime as dt
 from zoneinfo import ZoneInfo
@@ -10,6 +10,8 @@ from dateutil.easter import easter
 from . import config
 
 NY = ZoneInfo("America/New_York")
+RIYADH = ZoneInfo("Asia/Riyadh")  # fixed UTC+3, no DST
+CLOSE_HOUR_RIYADH = 3  # scanning stops at 3:00 AM Riyadh time
 
 
 def _nth_weekday(year: int, month: int, weekday: int, n: int) -> dt.date:
@@ -56,20 +58,29 @@ def is_market_holiday(d: dt.date) -> bool:
     return d in year_holidays(d.year)
 
 
-def is_regular_session(now: dt.datetime | None = None) -> bool:
-    """Inside the official trading session, 9:30-16:00 ET, on a weekday."""
+def is_active_session(now: dt.datetime | None = None) -> bool:
+    """Active from the 9:30 AM ET open through 3:00 AM Riyadh time (Asia/
+    Riyadh has no DST, so that boundary is a fixed wall-clock hour) — lands
+    around 19:00-20:00 ET depending on US daylight saving, well past the
+    4pm close but never crossing NY's own midnight, on a weekday."""
     now = (now or dt.datetime.now(NY)).astimezone(NY)
     if now.weekday() >= 5:
         return False
     open_t = now.replace(hour=9, minute=30, second=0, microsecond=0)
-    close_t = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    # The open, expressed in Riyadh's wall clock, always falls in the
+    # afternoon/evening (9:30 ET is already past 3 AM Riyadh that same
+    # Riyadh calendar day) — so the next CLOSE_HOUR_RIYADH:00 after the
+    # open is one Riyadh day later.
+    close_t = open_t.astimezone(RIYADH).replace(
+        hour=CLOSE_HOUR_RIYADH, minute=0, second=0, microsecond=0
+    ) + dt.timedelta(days=1)
     return open_t <= now <= close_t
 
 
 def scan_paused(now: dt.datetime | None = None) -> bool:
     """True whenever the bot should not be scanning: a full weekend, a
     market holiday, or (when MARKET_HOURS_ONLY_ENABLED) any time outside
-    the regular 9:30-16:00 ET session.
+    the daily active-scan window (see is_active_session).
     """
     if not config.WEEKEND_HOLIDAY_PAUSE_ENABLED:
         return False
@@ -78,6 +89,6 @@ def scan_paused(now: dt.datetime | None = None) -> bool:
         return True
     if is_market_holiday(now.date()):
         return True
-    if config.MARKET_HOURS_ONLY_ENABLED and not is_regular_session(now):
+    if config.MARKET_HOURS_ONLY_ENABLED and not is_active_session(now):
         return True
     return False

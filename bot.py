@@ -968,7 +968,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      else "دورة تأهيل كاملة (كل الأسهم)")
     throttle_line = (f"نشطة مؤقتاً ({throttle.delay:.0f} ثانية بين الدفعات)"
                      if throttle.active else "غير نشطة")
-    stock_scan_line = ("متوقف 🚫 (خارج ساعات الجلسة الرسمية 9:30-16:00 ET)"
+    stock_scan_line = ("متوقف 🚫 (خارج وقت المسح: 9:30 ص ET حتى 3:00 فجراً بتوقيت الرياض)"
                        if market_calendar.scan_paused() else "نشط ✅")
     await update.message.reply_text(
         f"اشتراكك: {sub_line}\n"

@@ -44,7 +44,8 @@ DOWNLOAD_THREADS = _int("DOWNLOAD_THREADS", 12)     # parallel requests per batc
 BATCH_INTERVAL_SECONDS = _float("BATCH_INTERVAL_SECONDS", 2.0)  # floor between batches
 
 # --- Off-peak savings: no scanning at all on weekends, market holidays, or
-# --- (by default) outside the regular 9:30-16:00 ET session ---
+# --- (by default) outside the daily active window: 9:30 AM ET open through
+# --- 3:00 AM Riyadh time (see scanner/market_calendar.is_active_session) ---
 WEEKEND_HOLIDAY_PAUSE_ENABLED = os.environ.get("WEEKEND_HOLIDAY_PAUSE_ENABLED", "1") == "1"
 MARKET_HOURS_ONLY_ENABLED = os.environ.get("MARKET_HOURS_ONLY_ENABLED", "1") == "1"
 
