@@ -79,31 +79,54 @@ each time.
 **Deploy:**
 1. Push this repo to your own GitHub account (or use this one directly).
 2. On [railway.app](https://railway.app): **New Project -> Deploy from GitHub repo** -> select this repo/branch.
-3. Railway auto-detects Python and uses `Procfile` / `railway.json` to run `gunicorn app:app`. No extra setup needed.
-4. Once deployed, open the public URL Railway gives you (Settings -> Networking -> Generate Domain). Share that link with anyone.
+3. Railway auto-detects Python and uses `Procfile` / `railway.json` to run `python3 app.py`. No extra setup needed.
+4. **In the service's Settings, set a Cron Schedule of `Hourly M-F`** (`0 * * * MON-FRI`). This is what makes the shut-down-outside-market-hours behavior below actually work - see the next section.
+5. Once deployed, open the public URL Railway gives you (Settings -> Networking -> Generate Domain). Share that link with anyone.
 
 **What it does:** the first load shows a "scanning..." page that
 auto-refreshes every 10s; once the first scan cycle completes, the page
 shows results and refreshes itself every 60s. The scan loop keeps running
-in the background continuously (as fast as each cycle allows - there's no
-artificial delay between cycles by default), so the page is always close
-to current.
+continuously in the background (no artificial delay between cycles by
+default), so the page stays close to current while the app is running.
+
+**Automatic shutdown outside market hours (cost saving):** the app checks
+whether it's currently within regular US market hours (9:30-16:00
+America/New_York, Mon-Fri) before every scan cycle. Outside that window it
+exits the whole process with code 0 instead of idling. Combined with
+Railway's `Hourly M-F` Cron Schedule and `restartPolicyType: ON_FAILURE`
+(already set in `railway.json`, so Railway won't auto-restart a clean
+exit), the net effect is:
+- Every hour, Mon-Fri, Railway tries to (re)start the service.
+- If the market is closed at that moment, the app exits again within a
+  second or two - negligible cost.
+- If the market is open, the app stays up, scanning and serving, until it
+  detects the close and shuts itself down.
+- **Trade-off you explicitly chose:** the link is unreachable outside
+  market hours (no fallback snapshot). It typically comes online within
+  an hour of the 9:30 ET open, aligned to whichever hourly tick lands
+  first after that - use `Customize` on the Cron Schedule (e.g. a 15-minute
+  cadence) if you want it to come online closer to 9:30 sharp; off-hour
+  triggers still cost almost nothing since the app exits immediately.
+- To go back to a normal always-on dashboard instead, set the
+  `SHUTDOWN_OUTSIDE_MARKET_HOURS=false` environment variable and remove
+  the Cron Schedule.
 
 **Configuration** (Railway -> your service -> Variables): all the same
 knobs as the CLI, as environment variables - `UNIVERSE`, `OPTION_TYPE`,
 `MIN_DTE`, `MAX_DTE`, `MIN_VOLUME`, `MIN_OPEN_INTEREST`, `MAX_SPREAD_PCT`,
 `IV_MIN`, `IV_MAX`, `DELTA_MIN`, `DELTA_MAX`, `MAX_THETA_PCT`, `TOP_N`,
-`MAX_WORKERS`, `REQUEST_DELAY`, `MAX_TICKERS`, `MIN_CYCLE_SECONDS`.
+`MAX_WORKERS`, `REQUEST_DELAY`, `MAX_TICKERS`, `MIN_CYCLE_SECONDS`,
+`SHUTDOWN_OUTSIDE_MARKET_HOURS`.
 
 **Careful before you set-and-forget this:**
-- Scanning `sp500` (or `all`) back-to-back, 24/7, is a lot of load against
-  a free, unofficial API - Yahoo may rate-limit or temporarily block the
+- Scanning `sp500` (or `all`) back-to-back is a lot of load against a
+  free, unofficial API - Yahoo may rate-limit or temporarily block the
   server's IP. If that happens, raise `REQUEST_DELAY` and/or set
   `MIN_CYCLE_SECONDS` to a few hundred seconds, or shrink `UNIVERSE` to a
   smaller ticker list.
-- Running continuously 24/7 consumes Railway compute hours the whole time,
-  including nights/weekends when US markets are closed - check Railway's
-  pricing/plan so you don't get surprised by usage.
+- The market-hours check ignores exchange holidays (Thanksgiving,
+  Christmas, etc.) - the app may briefly wake up and find nothing useful
+  to do on those days, then shut back down within one cycle.
 - To ship an update after the first deploy, just push to the branch
   Railway is tracking - it redeploys automatically.
 

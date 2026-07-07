@@ -4,6 +4,7 @@ latest results as a self-refreshing page. Entry point for deployment
 
 import logging
 import os
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -11,6 +12,7 @@ from datetime import datetime, timezone
 from flask import Flask
 
 from options_scanner.config import ScreenerConfig
+from options_scanner.market_hours import is_market_open
 from options_scanner.report import render_html
 from options_scanner.scanner import scan_universe
 from options_scanner.universe import resolve_universe
@@ -74,8 +76,14 @@ def _scan_loop() -> None:
     # Floor applied only after a failed cycle, so a persistently broken
     # network (or a resolve_universe failure) can't spin in a tight loop.
     error_retry_floor_seconds = 5.0
+    shutdown_outside_market_hours = os.environ.get("SHUTDOWN_OUTSIDE_MARKET_HOURS", "true").lower() != "false"
 
     while True:
+        if shutdown_outside_market_hours and not is_market_open():
+            logger.info("market is closed - shutting the process down (Railway's cron will restart it)")
+            sys.stdout.flush()
+            os._exit(0)
+
         cycle_start = time.monotonic()
         had_error = False
         try:
@@ -185,4 +193,10 @@ def health():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
-    app.run(host="0.0.0.0", port=port)
+    # A single-process server on purpose: the background scan loop calls
+    # os._exit() to shut the whole container down outside market hours, and
+    # that only works cleanly without a multi-worker manager (like gunicorn)
+    # that would otherwise just respawn a new worker.
+    from waitress import serve
+
+    serve(app, host="0.0.0.0", port=port)
