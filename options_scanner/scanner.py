@@ -8,6 +8,7 @@ from typing import List
 from .config import ScreenerConfig
 from .filters import OptionContract, passes_filters
 from .greeks import black_scholes_greeks
+from .indicators import compute_rsi
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,22 @@ def _scan_ticker(ticker: str, cfg: ScreenerConfig, request_delay: float) -> List
     if not spot or spot <= 0:
         logger.warning("skip %s: invalid spot price", ticker)
         return results
+
+    rsi = None
+    if cfg.rsi_oversold_max is not None:
+        try:
+            time.sleep(request_delay + random.uniform(0, request_delay))
+            history = tk.history(period="2mo", interval="1d")
+            closes = [float(c) for c in history["Close"].tolist()]
+            rsi = compute_rsi(closes, period=cfg.rsi_period)
+        except Exception as exc:
+            logger.warning("skip %s: RSI history fetch failed (%s)", ticker, exc)
+            return results
+        if rsi is None:
+            logger.warning("skip %s: not enough price history for RSI", ticker)
+            return results
+        if rsi > cfg.rsi_oversold_max:
+            return results  # not oversold - skip this ticker's option chain entirely
 
     try:
         expirations = tk.options
@@ -87,6 +104,7 @@ def _scan_ticker(ticker: str, cfg: ScreenerConfig, request_delay: float) -> List
                     iv=iv,
                     delta=greeks.delta,
                     theta=greeks.theta,
+                    rsi=rsi,
                 )
                 if passes_filters(contract, cfg):
                     results.append(contract)

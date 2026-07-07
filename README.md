@@ -64,6 +64,13 @@ contracts a few weeks to two months out:
 | IV range | 15%-100% | `--iv-min` / `--iv-max` |
 | \|Delta\| range | 0.30-0.70 | `--delta-min` / `--delta-max` |
 | Max theta burn | 5% of mid price/day | `--max-theta-pct` (pass `-1` to disable) |
+| Underlying RSI (oversold) | RSI(14) <= 30 | `--rsi-period` / `--rsi-oversold-max` (pass `-1` to disable) |
+
+The RSI filter runs on the *underlying stock* (daily closes, Wilder's
+smoothing - the standard RSI most platforms use), before its option chain
+is even fetched: tickers that aren't currently oversold are skipped
+entirely, and the underlying's RSI at scan time is shown as its own
+column on every contract that ticker produces.
 
 Run `python3 main.py --help` for the full list of options, including
 `--sort-by`, `--max-workers`, and `--request-delay` (throttling to avoid
@@ -114,8 +121,8 @@ exit), the net effect is:
 **Configuration** (Railway -> your service -> Variables): all the same
 knobs as the CLI, as environment variables - `UNIVERSE`, `OPTION_TYPE`,
 `MIN_DTE`, `MAX_DTE`, `MIN_VOLUME`, `MIN_OPEN_INTEREST`, `MAX_SPREAD_PCT`,
-`IV_MIN`, `IV_MAX`, `DELTA_MIN`, `DELTA_MAX`, `MAX_THETA_PCT`, `TOP_N`,
-`MAX_WORKERS`, `REQUEST_DELAY`, `MAX_TICKERS`, `MIN_CYCLE_SECONDS`,
+`IV_MIN`, `IV_MAX`, `DELTA_MIN`, `DELTA_MAX`, `MAX_THETA_PCT`, `RSI_PERIOD`,
+`RSI_OVERSOLD_MAX`, `TOP_N`, `MAX_WORKERS`, `REQUEST_DELAY`, `MAX_TICKERS`, `MIN_CYCLE_SECONDS`,
 `SHUTDOWN_OUTSIDE_MARKET_HOURS`.
 
 **Careful before you set-and-forget this:**

@@ -21,6 +21,7 @@ class OptionContract:
     iv: float
     delta: float
     theta: float
+    rsi: Optional[float] = None  # underlying's RSI at scan time, if computed
 
     @property
     def mid(self) -> float:

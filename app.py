@@ -44,6 +44,7 @@ def _build_config() -> ScreenerConfig:
     option_type = os.environ.get("OPTION_TYPE", "both")
     option_types = ("call", "put") if option_type == "both" else (option_type,)
     max_theta = _env_float("MAX_THETA_PCT", 0.05)
+    rsi_oversold_max = _env_float("RSI_OVERSOLD_MAX", 30)
     return ScreenerConfig(
         option_types=option_types,
         min_dte=_env_int("MIN_DTE", 7),
@@ -57,6 +58,8 @@ def _build_config() -> ScreenerConfig:
         delta_max=_env_float("DELTA_MAX", 0.70),
         max_theta_pct_of_price=None if max_theta < 0 else max_theta,
         risk_free_rate=_env_float("RISK_FREE_RATE", 0.045),
+        rsi_period=_env_int("RSI_PERIOD", 14),
+        rsi_oversold_max=None if rsi_oversold_max < 0 else rsi_oversold_max,
     )
 
 

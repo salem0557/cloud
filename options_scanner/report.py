@@ -21,6 +21,7 @@ _COLUMNS = [
     ("iv", "IV %", "num"),
     ("delta", "Delta", "num"),
     ("theta", "Theta", "num"),
+    ("rsi", "RSI", "num"),
 ]
 
 _PAGE_TEMPLATE = """<!doctype html>
@@ -149,6 +150,7 @@ def render_html(contracts: List[OptionContract]) -> str:
             "iv": f"{c.iv * 100:.1f}",
             "delta": f"{c.delta:.3f}",
             "theta": f"{c.theta:.3f}",
+            "rsi": f"{c.rsi:.1f}" if c.rsi is not None else "-",
         })
 
     rows_html = "".join(

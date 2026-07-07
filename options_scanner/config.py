@@ -33,3 +33,9 @@ class ScreenerConfig:
     dividend_yield: float = 0.0
 
     require_positive_bid: bool = True
+
+    # Underlying-stock RSI pre-filter: only scan tickers whose daily RSI is
+    # at or below rsi_oversold_max (i.e. currently oversold). Set
+    # rsi_oversold_max to None to disable this filter entirely.
+    rsi_period: int = 14
+    rsi_oversold_max: Optional[float] = 30.0

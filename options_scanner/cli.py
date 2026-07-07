@@ -19,6 +19,7 @@ SORT_KEYS = {
     "delta": lambda c: abs(c.delta),
     "theta": lambda c: abs(c.theta),
     "spread_pct": lambda c: c.spread_pct or 0,
+    "rsi": lambda c: c.rsi if c.rsi is not None else 0,
 }
 
 
@@ -44,6 +45,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="max |theta|/mid_price per day; pass -1 to disable this filter",
     )
     p.add_argument("--risk-free-rate", type=float, default=0.045)
+    p.add_argument("--rsi-period", type=int, default=14, help="RSI lookback period (daily bars)")
+    p.add_argument(
+        "--rsi-oversold-max", type=float, default=30,
+        help="only scan tickers whose RSI is <= this (oversold); pass -1 to disable the RSI filter",
+    )
     p.add_argument("--top", type=int, default=25, help="how many contracts to display")
     p.add_argument("--sort-by", choices=list(SORT_KEYS), default="volume")
     p.add_argument("--max-workers", type=int, default=8)
@@ -68,6 +74,7 @@ def main(argv: Sequence[str] = None) -> int:
 
     option_types = ("call", "put") if args.option_type == "both" else (args.option_type,)
     max_theta = None if args.max_theta_pct < 0 else args.max_theta_pct
+    rsi_oversold_max = None if args.rsi_oversold_max < 0 else args.rsi_oversold_max
 
     cfg = ScreenerConfig(
         option_types=option_types,
@@ -82,6 +89,8 @@ def main(argv: Sequence[str] = None) -> int:
         delta_max=args.delta_max,
         max_theta_pct_of_price=max_theta,
         risk_free_rate=args.risk_free_rate,
+        rsi_period=args.rsi_period,
+        rsi_oversold_max=rsi_oversold_max,
     )
 
     print(f"Resolving universe '{args.universe}'...", file=sys.stderr)
@@ -112,12 +121,13 @@ def main(argv: Sequence[str] = None) -> int:
 
 def print_table(contracts: List[OptionContract]) -> None:
     headers = ["Ticker", "Type", "Expiry", "DTE", "Strike", "Bid", "Ask",
-               "Volume", "OpenInt", "IV", "Delta", "Theta"]
+               "Volume", "OpenInt", "IV", "Delta", "Theta", "RSI"]
     rows = [
         [
             c.ticker, c.option_type, c.expiry.isoformat(), c.dte, f"{c.strike:g}",
             f"{c.bid:.2f}", f"{c.ask:.2f}", c.volume, c.open_interest,
             f"{c.iv:.2%}", f"{c.delta:.3f}", f"{c.theta:.3f}",
+            f"{c.rsi:.1f}" if c.rsi is not None else "-",
         ]
         for c in contracts
     ]
@@ -142,7 +152,7 @@ def write_csv(contracts: List[OptionContract], path: str) -> None:
     headers = [
         "ticker", "contract_symbol", "option_type", "expiry", "dte", "strike",
         "spot", "bid", "ask", "mid", "spread_pct", "volume", "open_interest",
-        "iv", "delta", "theta",
+        "iv", "delta", "theta", "rsi",
     ]
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
@@ -151,5 +161,5 @@ def write_csv(contracts: List[OptionContract], path: str) -> None:
             writer.writerow([
                 c.ticker, c.contract_symbol, c.option_type, c.expiry.isoformat(), c.dte,
                 c.strike, c.spot, c.bid, c.ask, c.mid, c.spread_pct, c.volume,
-                c.open_interest, c.iv, c.delta, c.theta,
+                c.open_interest, c.iv, c.delta, c.theta, c.rsi,
             ])
