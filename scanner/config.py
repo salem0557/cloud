@@ -114,7 +114,7 @@ CHEAP_OPTIONS_PACE_SECONDS = _float("CHEAP_OPTIONS_PACE_SECONDS", 0.3)  # betwee
 CHEAP_OPTIONS_PROGRESS_EVERY = _int("CHEAP_OPTIONS_PROGRESS_EVERY", 150)  # symbols per status edit
 
 # --- Alerting ---
-FILTERS_REQUIRED = _int("FILTERS_REQUIRED", 2)     # minimum matched filters (out of 3)
+FILTERS_REQUIRED = _int("FILTERS_REQUIRED", 4)     # minimum matched filters (out of 4)
 ALERT_MEMORY_HOURS = _int("ALERT_MEMORY_HOURS", 24)  # identical alert not resent unless
                                                      # its signal was gone this long
 
