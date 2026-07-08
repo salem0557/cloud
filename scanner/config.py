@@ -59,7 +59,7 @@ BB_STD = _float("BB_STD", 2.0)
 BB_TOUCH_TOLERANCE = _float("BB_TOUCH_TOLERANCE", 0.005)  # close within 0.5% of lower band
 
 RSI_PERIOD = _int("RSI_PERIOD", 14)
-RSI_OVERSOLD = _float("RSI_OVERSOLD", 30.0)
+RSI_OVERSOLD = _float("RSI_OVERSOLD", 35.0)
 
 SUPPORT_LOOKBACK = _int("SUPPORT_LOOKBACK", 250)          # bars scanned for pivot lows
 SUPPORT_CLUSTER_TOL = _float("SUPPORT_CLUSTER_TOL", 0.01) # pivots within 1% form one level

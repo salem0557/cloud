@@ -1,7 +1,7 @@
 """Telegram bot: continuous scanner for US stocks, reversal-up setups only
 (a stock is reported when >= FILTERS_REQUIRED match):
   1. Price at the lower Bollinger Band
-  2. RSI < 30 (oversold)
+  2. RSI < RSI_OVERSOLD (oversold, default 35)
   3. Price at a support zone
   4. Falling wedge pattern
 
@@ -530,7 +530,7 @@ WELCOME = (
     "تفحص الخدمة كل الأسهم الأمريكية بشكل متواصل (فريم الساعة) بحثاً عن "
     f"احتمالات الصعود — تحقق {config.FILTERS_REQUIRED} شروط من {len(FILTERS)}:\n"
     "1️⃣ السعر عند الحد السفلي لبولينجر باند\n"
-    "2️⃣ RSI أقل من 30 (تشبع بيعي)\n"
+    f"2️⃣ RSI أقل من {config.RSI_OVERSOLD:.0f} (تشبع بيعي)\n"
     "3️⃣ السعر عند منطقة دعم\n"
     "4️⃣ نموذج وتد هابط\n\n"
     "قبل تفعيل الخدمة يجب قراءة إخلاء المسؤولية التالي والموافقة عليه:"
