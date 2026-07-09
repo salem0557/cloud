@@ -11,15 +11,16 @@ log = logging.getLogger(__name__)
 REQUIRED_COLS = ["Open", "High", "Low", "Close", "Volume"]
 
 
-def fetch_batch(symbols: list[str]) -> dict[str, pd.DataFrame]:
-    """Download hourly history for a batch of symbols.
+def fetch_batch(symbols: list[str], interval: str, period: str) -> dict[str, pd.DataFrame]:
+    """Download history for a batch of symbols at the given candle interval
+    and lookback period.
 
     Returns {symbol: OHLCV DataFrame} for symbols that came back with data.
     """
     raw = yf.download(
         tickers=symbols,
-        interval=config.INTERVAL,
-        period=config.PERIOD,
+        interval=interval,
+        period=period,
         group_by="ticker",
         auto_adjust=True,
         threads=min(len(symbols), config.DOWNLOAD_THREADS),
@@ -32,8 +33,6 @@ def fetch_batch(symbols: list[str]) -> dict[str, pd.DataFrame]:
     # yfinance returns MultiIndex columns (ticker, field) for a list input
     # regardless of how many tickers are in it — including a list of one,
     # since multi_level_index defaults to True and we never override it.
-    # A prior "single symbol -> flat columns" special case was wrong and
-    # silently dropped every one-symbol request (KeyError caught below).
     frames = {}
     if isinstance(raw.columns, pd.MultiIndex):
         top = raw.columns.get_level_values(0)
@@ -59,3 +58,7 @@ def passes_liquidity(df: pd.DataFrame) -> bool:
     last_close = df["Close"].iloc[-1]
     avg_vol = df["Volume"].tail(20).mean()
     return last_close >= config.MIN_PRICE and avg_vol >= config.MIN_AVG_VOLUME
+
+
+def make_batches(symbols: list[str]) -> list[list[str]]:
+    return [symbols[i:i + config.BATCH_SIZE] for i in range(0, len(symbols), config.BATCH_SIZE)]

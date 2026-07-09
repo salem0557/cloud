@@ -1,4 +1,10 @@
-"""Central configuration, overridable via environment variables."""
+"""Central configuration, overridable via environment variables.
+
+The bot is three fully independent, on-demand modules (stocks/options/
+crypto — see stocks_module.py/options_module.py/crypto_module.py). Each has
+its own filter thresholds and its own watchlist below; nothing here is
+shared between modules except general Telegram/session/file settings.
+"""
 import logging
 import os
 
@@ -28,154 +34,179 @@ def _float(name: str, default: float) -> float:
 # --- Telegram ---
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
-# --- Paid subscription gate ---
+# --- Access: the bot is locked to whichever chat ids are already present in
+# --- state.approved (see scanner/state.py) at the time this restructure
+# --- shipped. There is no /approve command anymore, so no new member can
+# --- ever be added by the bot itself -- membership is now a fixed roster,
+# --- editable only by hand-editing the state file on disk. ---
 ADMIN_CHAT_ID = _int("ADMIN_CHAT_ID", 0)   # your own Telegram chat id (always eligible)
-SUBSCRIBE_CONTACT = os.environ.get("SUBSCRIBE_CONTACT", "مشغّل البوت")
-DEFAULT_SUB_DAYS = _int("DEFAULT_SUB_DAYS", 30)
 
-# --- Data fetching ---
-INTERVAL = os.environ.get("SCAN_INTERVAL", "1h")   # candle timeframe
-PERIOD = os.environ.get("SCAN_PERIOD", "3mo")      # history depth per symbol
-BATCH_SIZE = _int("BATCH_SIZE", 100)               # symbols per yfinance request
-SCAN_PAUSE_SECONDS = _int("SCAN_PAUSE_SECONDS", 60)  # breather between cycles
-# Pacing guards: unbounded parallel downloads ballooned memory and hammered
-# Yahoo (a 3265-stock cycle finished in 66s), crashing the container.
-DOWNLOAD_THREADS = _int("DOWNLOAD_THREADS", 12)     # parallel requests per batch
-BATCH_INTERVAL_SECONDS = _float("BATCH_INTERVAL_SECONDS", 2.0)  # floor between batches
+# --- Manual-command sessions: every /stocks, /options or /crypto run is
+# --- capped at this long, then auto-stops with a "انتهت الجلسة" notice.
+# --- /stop cancels a running session instantly. ---
+SESSION_TIMEOUT_SECONDS = _int("SESSION_TIMEOUT_SECONDS", 300)
 
-# --- Off-peak savings: no scanning at all on weekends, market holidays, or
-# --- (by default) outside the daily active window: 9:30 AM ET open through
-# --- 3:00 AM Riyadh time (see scanner/market_calendar.is_active_session) ---
-WEEKEND_HOLIDAY_PAUSE_ENABLED = os.environ.get("WEEKEND_HOLIDAY_PAUSE_ENABLED", "1") == "1"
-MARKET_HOURS_ONLY_ENABLED = os.environ.get("MARKET_HOURS_ONLY_ENABLED", "1") == "1"
+# --- Data fetching (stocks + options watchlists; yfinance) ---
+DOWNLOAD_THREADS = _int("DOWNLOAD_THREADS", 12)
+BATCH_SIZE = _int("BATCH_SIZE", 100)
 
-# --- Liquidity pre-filter (skip dead/penny stocks) ---
-MIN_PRICE = _float("MIN_PRICE", 2.0)               # USD
-MIN_AVG_VOLUME = _int("MIN_AVG_VOLUME", 30_000)    # avg volume per hourly bar
+# --- Liquidity pre-filter (skip dead/penny stocks; stocks module only) ---
+MIN_PRICE = _float("MIN_PRICE", 2.0)
+MIN_AVG_VOLUME = _int("MIN_AVG_VOLUME", 100_000)   # avg daily volume
 
-# --- Filter parameters ---
-BB_PERIOD = _int("BB_PERIOD", 20)
-BB_STD = _float("BB_STD", 2.0)
-BB_TOUCH_TOLERANCE = _float("BB_TOUCH_TOLERANCE", 0.005)  # close within 0.5% of lower band
+# =====================================================================
+# 1) STOCKS module -- reversal-up technical scan (Bollinger/RSI/support/
+#    falling wedge), 3 of 4 filters required.
+# =====================================================================
+STOCKS_INTERVAL = os.environ.get("STOCKS_INTERVAL", "1d")
+STOCKS_PERIOD = os.environ.get("STOCKS_PERIOD", "6mo")
+STOCKS_FILTERS_REQUIRED = _int("STOCKS_FILTERS_REQUIRED", 3)   # out of 4
+STOCKS_TOP_N = _int("STOCKS_TOP_N", 5)
 
-RSI_PERIOD = _int("RSI_PERIOD", 14)
-RSI_OVERSOLD = _float("RSI_OVERSOLD", 35.0)
+STOCKS_BB_PERIOD = _int("STOCKS_BB_PERIOD", 20)
+STOCKS_BB_STD = _float("STOCKS_BB_STD", 2.0)
+STOCKS_BB_TOLERANCE = _float("STOCKS_BB_TOLERANCE", 0.02)      # within 2% of lower band
 
-SUPPORT_LOOKBACK = _int("SUPPORT_LOOKBACK", 250)          # bars scanned for pivot lows
-SUPPORT_CLUSTER_TOL = _float("SUPPORT_CLUSTER_TOL", 0.01) # pivots within 1% form one level
-SUPPORT_MIN_TOUCHES = _int("SUPPORT_MIN_TOUCHES", 2)
-SUPPORT_PROXIMITY = _float("SUPPORT_PROXIMITY", 0.015)    # price within 1.5% of level
-SUPPORT_BREAK_TOL = _float("SUPPORT_BREAK_TOL", 0.005)    # allow 0.5% slip past the level
+STOCKS_RSI_PERIOD = _int("STOCKS_RSI_PERIOD", 14)
+STOCKS_RSI_OVERSOLD = _float("STOCKS_RSI_OVERSOLD", 35.0)
 
-WEDGE_LOOKBACK = _int("WEDGE_LOOKBACK", 120)
-WEDGE_PIVOT_ORDER = _int("WEDGE_PIVOT_ORDER", 3)
-WEDGE_MIN_BARS = _int("WEDGE_MIN_BARS", 20)
+STOCKS_SUPPORT_LOOKBACK = _int("STOCKS_SUPPORT_LOOKBACK", 60)   # daily bars (~60 days)
+STOCKS_SUPPORT_CLUSTER_TOL = _float("STOCKS_SUPPORT_CLUSTER_TOL", 0.01)
+STOCKS_SUPPORT_MIN_TOUCHES = _int("STOCKS_SUPPORT_MIN_TOUCHES", 2)
+STOCKS_SUPPORT_MARGIN = _float("STOCKS_SUPPORT_MARGIN", 0.03)   # within 3% of the level
+STOCKS_SUPPORT_BREAK_TOL = _float("STOCKS_SUPPORT_BREAK_TOL", 0.005)
 
-# --- Qualified list (full passes qualify liquid symbols; continuous cycles
-# --- then scan only those, cutting request volume drastically) ---
-# Rebuilt on a schedule (ET times, comma-separated), following the trading
-# day's natural order — the overnight session opens the day (20:00 ET, the
-# first session after a weekend), then pre-market, regular hours, and the
-# close. First rebuild 19:30 (just before overnight opens, including Sunday
-# night after the weekend), second 16:30 (right after the regular close).
-def _times(name: str, default: str) -> list[tuple[int, int]]:
-    out = []
-    for part in os.environ.get(name, default).split(","):
-        hh, mm = part.strip().split(":")
-        out.append((int(hh), int(mm)))
-    return out
+STOCKS_WEDGE_LOOKBACK = _int("STOCKS_WEDGE_LOOKBACK", 120)
+STOCKS_WEDGE_PIVOT_ORDER = _int("STOCKS_WEDGE_PIVOT_ORDER", 3)
+STOCKS_WEDGE_MIN_BARS = _int("STOCKS_WEDGE_MIN_BARS", 20)
 
+# Broad large/mid-cap watchlist (Nasdaq-100 + a curated sample of major S&P
+# 500 names across every sector) -- NOT a literally exhaustive, auto-synced
+# S&P 500 + Nasdaq-100 roster, since index constituents change over time and
+# hardcoding avoids a fragile scrape dependency. Edit freely; review every
+# few months for reconstitution changes (additions/removals/delistings).
+_NASDAQ_100 = [
+    "AAPL", "MSFT", "AMZN", "NVDA", "GOOGL", "GOOG", "META", "TSLA", "AVGO", "COST",
+    "NFLX", "AMD", "PEP", "ADBE", "LIN", "CSCO", "TMUS", "QCOM", "INTU", "TXN",
+    "AMGN", "CMCSA", "HON", "AMAT", "BKNG", "ISRG", "VRTX", "PANW", "ADP", "SBUX",
+    "GILD", "MDLZ", "LRCX", "REGN", "ADI", "PYPL", "MU", "KLAC", "SNPS", "CDNS",
+    "MELI", "CRWD", "PDD", "MAR", "CTAS", "ORLY", "ASML", "ABNB", "CSX", "WDAY",
+    "FTNT", "MNST", "PCAR", "ROP", "NXPI", "CHTR", "MRVL", "DASH", "AEP", "PAYX",
+    "ROST", "ODFL", "KDP", "EXC", "TTD", "IDXX", "FAST", "EA", "CPRT", "DXCM",
+    "BKR", "VRSK", "CTSH", "KHC", "XEL", "CCEP", "GEHC", "ANSS", "ON", "DDOG",
+    "ZS", "TEAM", "MDB", "FANG", "GFS", "WBD", "BIIB", "CDW", "EBAY", "TTWO",
+    "ARM", "APP", "LULU", "MCHP", "ILMN", "SIRI", "ENPH", "JD", "GLOB", "PLTR",
+]
+_SP500_EXTRA = [
+    # Financials
+    "JPM", "BAC", "WFC", "C", "GS", "MS", "SCHW", "BLK", "AXP", "SPGI",
+    "ICE", "CME", "MMC", "AON", "PGR", "TRV", "ALL", "MET", "PRU", "AFL",
+    "COF", "USB", "PNC", "TFC", "BK", "STT", "DFS", "SYF", "V", "MA", "FI", "GPN",
+    # Healthcare
+    "UNH", "JNJ", "LLY", "PFE", "MRK", "ABT", "TMO", "DHR", "BMY", "ABBV",
+    "CVS", "CI", "HUM", "ELV", "SYK", "BSX", "MDT", "ZTS", "HCA", "BDX",
+    "A", "IQV", "MTD", "WAT", "RMD", "EW",
+    # Energy
+    "XOM", "CVX", "COP", "EOG", "SLB", "PSX", "MPC", "OXY", "WMB", "KMI", "HES", "DVN", "HAL",
+    # Industrials
+    "BA", "CAT", "DE", "LMT", "RTX", "GE", "UNP", "UPS", "NOC", "GD",
+    "EMR", "ETN", "ITW", "PH", "CSX", "NSC", "FDX", "WM", "RSG", "CMI",
+    "DOV", "XYL", "IR", "TT", "JCI",
+    # Consumer discretionary / staples
+    "WMT", "HD", "LOW", "TGT", "MCD", "NKE", "DIS", "CMG", "TJX", "YUM",
+    "DG", "DLTR", "PG", "KO", "PM", "MO", "CL", "EL", "KMB", "GIS",
+    "HSY", "STZ", "CLX", "K", "SYY", "ADM",
+    # Utilities
+    "NEE", "DUK", "SO", "D", "SRE", "PEG", "ED", "EIX", "WEC", "ES", "PPL", "FE", "AEE",
+    # Communication / other tech
+    "T", "VZ", "CRM", "ORCL", "IBM", "ACN", "NOW", "INTC", "ANET", "HPQ", "HPE", "DELL", "WDC", "STX",
+    # Autos / travel
+    "F", "GM", "DAL", "UAL", "LUV", "RCL", "CCL", "NCLH", "HLT",
+    # Materials
+    "NUE", "FCX", "APD", "ECL", "NEM", "DD", "DOW", "PPG", "VMC", "MLM", "LYB",
+    # Real estate
+    "AMT", "PLD", "CCI", "EQIX", "PSA", "O", "SPG", "WELL", "DLR", "AVB", "EQR",
+    # Newer large caps
+    "SHOP", "UBER", "LYFT", "SNOW", "NET", "DKNG", "COIN", "RBLX", "SOFI", "RIVN", "LCID",
+    "BRK-B",
+]
+STOCKS_WATCHLIST = sorted(set(_NASDAQ_100 + _SP500_EXTRA))
 
-QUALIFY_REBUILD_TIMES = _times("QUALIFY_REBUILD_TIMES", "19:30,16:30")
+# =====================================================================
+# 2) OPTIONS module -- CALL-contract-only scan across a separate, more
+#    liquid watchlist. Independent of the stocks module's technical
+#    signals: an option can qualify here even if its underlying doesn't
+#    match any of the 4 stock filters, and vice versa.
+# =====================================================================
+OPTIONS_MAX_WEEKS = _int("OPTIONS_MAX_WEEKS", 18)        # nearest expiry .. ~ DTE_MAX
+OPTIONS_MAX_EXPIRIES = _int("OPTIONS_MAX_EXPIRIES", 6)    # chain requests per stock
+OPTIONS_MIN_ACTIVITY = _int("OPTIONS_MIN_ACTIVITY", 20)   # min OI+volume per contract
+OPTIONS_TOP_N = _int("OPTIONS_TOP_N", 5)
 
-# --- Hot list: near-signal symbols get re-checked on a fast lane ---
-HOTLIST_MIN_SCORE = _int("HOTLIST_MIN_SCORE", 2)       # filters needed to be "hot"
-HOTLIST_INTERVAL_SECONDS = _int("HOTLIST_INTERVAL_SECONDS", 120)
-HOTLIST_MAX = _int("HOTLIST_MAX", 300)                 # safety cap per fast pass
+OPTIONS_DELTA_MIN = _float("OPTIONS_DELTA_MIN", 0.55)
+OPTIONS_DELTA_MAX = _float("OPTIONS_DELTA_MAX", 0.80)
+OPTIONS_DTE_MIN = _int("OPTIONS_DTE_MIN", 45)
+OPTIONS_DTE_MAX = _int("OPTIONS_DTE_MAX", 120)
+OPTIONS_VOLUME_MIN = _int("OPTIONS_VOLUME_MIN", 30)
+OPTIONS_OI_MIN = _int("OPTIONS_OI_MIN", 200)
+OPTIONS_IV_MAX = _float("OPTIONS_IV_MAX", 0.60)
+OPTIONS_SPREAD_MAX = _float("OPTIONS_SPREAD_MAX", 0.10)
+# Per-share ask price bound (contract cost = ask * 100), e.g. 0.30$-1.50$
+# means a 30$-150$ contract.
+OPTIONS_ASK_MIN = _float("OPTIONS_ASK_MIN", 0.30)
+OPTIONS_ASK_MAX = _float("OPTIONS_ASK_MAX", 1.50)
 
-# --- Adaptive throttle (temporary: backs off on Yahoo rejections, recovers) ---
-THROTTLE_MAX_DELAY = _float("THROTTLE_MAX_DELAY", 600)  # seconds between batches
+# ~100 of the most liquid, most actively-optioned US stocks (mega-cap tech,
+# popular high-options-volume names) -- a separate list from STOCKS_WATCHLIST
+# on purpose, since "actively traded options" and "matches a reversal-up
+# technical setup" are unrelated properties. Edit freely.
+OPTIONS_WATCHLIST = sorted(set([
+    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD", "NFLX", "AVGO",
+    "CRM", "ORCL", "ADBE", "INTC", "QCOM", "MU", "PYPL", "SHOP", "UBER", "PLTR",
+    "SNOW", "NET", "CRWD", "ZS", "DDOG", "MDB", "PANW", "NOW", "TEAM", "ABNB",
+    "DASH", "COIN", "RBLX", "SOFI", "RIVN", "LCID", "F", "GM", "BA", "DIS",
+    "NKE", "SBUX", "MCD", "WMT", "TGT", "HD", "LOW", "XOM", "CVX", "JPM",
+    "BAC", "WFC", "GS", "MS", "C", "V", "MA", "PINS", "SNAP", "TWLO",
+    "ROKU", "DKNG", "MSTR", "RIOT", "MARA", "GME", "AMC", "BABA", "JD", "PDD",
+    "NIO", "XPEV", "LI", "TSM", "ASML", "MRNA", "PFE", "JNJ", "UNH", "CVS",
+    "LLY", "KO", "PEP", "COST", "T", "VZ", "CMCSA", "PARA", "WBD", "CAT",
+    "DE", "BKNG", "ISRG", "REGN", "VRTX", "GILD", "APP", "ARM", "SMCI",
+]))
 
-# --- Chart image (candles + Bollinger + support + RSI, one per alert) ---
-CHART_ENABLED = os.environ.get("CHART_ENABLED", "1") == "1"
-CHART_BARS = _int("CHART_BARS", 80)     # most recent hourly bars plotted
+# =====================================================================
+# 3) CRYPTO module -- top-30-by-market-cap coins via Binance public data
+#    (ccxt, no API keys), 4h candles, 2 of 3 filters required
+#    (bollinger/rsi/support -- no wedge pattern for crypto).
+# =====================================================================
+CRYPTO_TIMEFRAME = os.environ.get("CRYPTO_TIMEFRAME", "4h")
+CRYPTO_CANDLE_LIMIT = _int("CRYPTO_CANDLE_LIMIT", 300)   # 4h bars fetched per symbol
+CRYPTO_FILTERS_REQUIRED = _int("CRYPTO_FILTERS_REQUIRED", 2)   # out of 3
+CRYPTO_TOP_N = _int("CRYPTO_TOP_N", 5)
 
-# --- Options picks (attached to each alerted stock) ---
-OPTIONS_ENABLED = os.environ.get("OPTIONS_ENABLED", "1") == "1"
-OPTIONS_MAX_WEEKS = _int("OPTIONS_MAX_WEEKS", 13)     # nearest expiry .. ~3 months
-OPTIONS_MAX_EXPIRIES = _int("OPTIONS_MAX_EXPIRIES", 6)  # chain requests per stock
-OPTIONS_TOP_N = _int("OPTIONS_TOP_N", 3)              # picks per side (call/put)
-OPTIONS_MIN_ACTIVITY = _int("OPTIONS_MIN_ACTIVITY", 20)  # min OI+volume per contract
-# A contract priced above this (per share; contract cost = premium * 100)
-# never qualifies as a pick. If every contract for a stock is over this
-# cap, best_options() returns no pick at all, which suppresses that
-# stock's alert entirely (see bot.py's filter_by_options).
-OPTIONS_MAX_PREMIUM = _float("OPTIONS_MAX_PREMIUM", 2.0)
+CRYPTO_BB_PERIOD = _int("CRYPTO_BB_PERIOD", 20)
+CRYPTO_BB_STD = _float("CRYPTO_BB_STD", 2.0)
+CRYPTO_BB_TOLERANCE = _float("CRYPTO_BB_TOLERANCE", 0.02)      # within 2% of lower band
 
-# --- IV Rank/Percentile: how a picked contract's IV compares to the
-# --- underlying's own realized volatility over the past year (a free proxy
-# --- for "usual IV range" -- true historical option IV needs a paid feed) ---
-IV_RANK_ENABLED = os.environ.get("IV_RANK_ENABLED", "1") == "1"
-IV_RANK_VOL_WINDOW = _int("IV_RANK_VOL_WINDOW", 20)    # rolling window, trading days
-IV_RANK_CACHE_HOURS = _int("IV_RANK_CACHE_HOURS", 24)  # per-symbol cache (barely moves intraday)
+CRYPTO_RSI_PERIOD = _int("CRYPTO_RSI_PERIOD", 14)
+CRYPTO_RSI_OVERSOLD = _float("CRYPTO_RSI_OVERSOLD", 35.0)
 
-# --- Optimizer: OptionStrat-style deeper analysis (theoretical Black-Scholes
-# --- pricing + probability of profit + a P/L heat table) attached to each
-# --- alert's picks. A stricter filter than the simple DELTA_MIN/
-# --- OPTIONS_MAX_PREMIUM picker in scanner/options.py -- if OPTIMIZER_ENABLED
-# --- is off, attach_options() falls back to that simpler picker instead. ---
-OPTIMIZER_ENABLED = os.environ.get("OPTIMIZER_ENABLED", "1") == "1"
-OPTIMIZER_DELTA_MIN = _float("OPTIMIZER_DELTA_MIN", 0.55)
-OPTIMIZER_DELTA_MAX = _float("OPTIMIZER_DELTA_MAX", 0.80)
-OPTIMIZER_DTE_MIN = _int("OPTIMIZER_DTE_MIN", 45)
-OPTIMIZER_DTE_MAX = _int("OPTIMIZER_DTE_MAX", 120)
-OPTIMIZER_VOLUME_MIN = _int("OPTIMIZER_VOLUME_MIN", 30)
-OPTIMIZER_OI_MIN = _int("OPTIMIZER_OI_MIN", 200)
-OPTIMIZER_IV_MAX = _float("OPTIMIZER_IV_MAX", 0.60)
-OPTIMIZER_SPREAD_MAX = _float("OPTIMIZER_SPREAD_MAX", 0.10)
-OPTIMIZER_TOP_N = _int("OPTIMIZER_TOP_N", 3)
-# Heat table shape: price-level rows (% from current price) x day-offset
-# columns (today, +N days...; "at expiry" is appended per-contract using
-# that contract's own DTE, so it's not listed here).
-HEAT_TABLE_PRICE_LEVELS_PCT = [-5, 0, 2.5, 5, 10]
-HEAT_TABLE_DAY_OFFSETS = [0, 15, 30]
+# 30 days of 4h candles = 180 bars
+CRYPTO_SUPPORT_LOOKBACK = _int("CRYPTO_SUPPORT_LOOKBACK", 180)
+CRYPTO_SUPPORT_CLUSTER_TOL = _float("CRYPTO_SUPPORT_CLUSTER_TOL", 0.01)
+CRYPTO_SUPPORT_MIN_TOUCHES = _int("CRYPTO_SUPPORT_MIN_TOUCHES", 2)
+CRYPTO_SUPPORT_MARGIN = _float("CRYPTO_SUPPORT_MARGIN", 0.03)   # within 3% of the level
+CRYPTO_SUPPORT_BREAK_TOL = _float("CRYPTO_SUPPORT_BREAK_TOL", 0.005)
 
-# --- On-demand /cheapoptions search: scans the current qualified list for
-# --- contracts priced at or under a cap (contract cost = premium * 100) ---
-CHEAP_OPTION_DEFAULT_MAX = _float("CHEAP_OPTION_DEFAULT_MAX", 50.0)  # $ per contract
-CHEAP_OPTIONS_PACE_SECONDS = _float("CHEAP_OPTIONS_PACE_SECONDS", 0.3)  # between symbols
-CHEAP_OPTIONS_PROGRESS_EVERY = _int("CHEAP_OPTIONS_PROGRESS_EVERY", 150)  # symbols per status edit
-
-# --- Alerting ---
-FILTERS_REQUIRED = _int("FILTERS_REQUIRED", 3)     # minimum matched filters (out of 4)
-ALERT_MEMORY_HOURS = _int("ALERT_MEMORY_HOURS", 24)  # identical alert not resent unless
-                                                     # its signal was gone this long
-
-# --- Performance tracking: each alert's return vs SPY over fixed horizons,
-# --- building a real track record (pure price math, no LLM/extra cost) ---
-PERFORMANCE_ENABLED = os.environ.get("PERFORMANCE_ENABLED", "1") == "1"
-
-
-def _int_list(name: str, default: str) -> list[int]:
-    return [int(x.strip()) for x in os.environ.get(name, default).split(",") if x.strip()]
-
-
-PERFORMANCE_HORIZONS_HOURS = _int_list("PERFORMANCE_HORIZONS_HOURS", "24,72")
-PERFORMANCE_CHECK_INTERVAL_SECONDS = _int("PERFORMANCE_CHECK_INTERVAL_SECONDS", 1800)
-# Below this many resolved signals for a horizon, the one-line summary is
-# withheld from alerts (a "100% win rate" off 1 signal is misleading).
-PERFORMANCE_MIN_SAMPLE = _int("PERFORMANCE_MIN_SAMPLE", 5)
-
-# --- "وجهة نظر البوت": news headlines + StockTwits chatter merged into one
-# --- short paragraph by a single cheap Gemini call per alert. Pure
-# --- consolidation of external sources, not the bot's own analysis. Both
-# --- data sources are free/keyless; only the summarization call needs a key.
-SENTIMENT_ENABLED = os.environ.get("SENTIMENT_ENABLED", "1") == "1"
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
-SENTIMENT_NEWS_LIMIT = _int("SENTIMENT_NEWS_LIMIT", 5)
-SENTIMENT_SOCIAL_LIMIT = _int("SENTIMENT_SOCIAL_LIMIT", 20)
-SENTIMENT_MAX_CHARS = _int("SENTIMENT_MAX_CHARS", 500)
+# Top ~30 coins by market cap with a Binance USDT spot pair. Binance
+# relisted its old MATIC pair as POL in 2024; edit freely as rankings shift.
+CRYPTO_WATCHLIST = [
+    "BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT",
+    "DOGE/USDT", "ADA/USDT", "TRX/USDT", "AVAX/USDT", "LINK/USDT",
+    "DOT/USDT", "TON/USDT", "POL/USDT", "SHIB/USDT", "LTC/USDT",
+    "BCH/USDT", "NEAR/USDT", "UNI/USDT", "ICP/USDT", "ETC/USDT",
+    "XLM/USDT", "ATOM/USDT", "FIL/USDT", "APT/USDT", "ARB/USDT",
+    "OP/USDT", "INJ/USDT", "SUI/USDT", "TIA/USDT", "HBAR/USDT",
+]
 
 # --- Files ---
 # On Railway, attaching a volume sets RAILWAY_VOLUME_MOUNT_PATH automatically,
@@ -185,7 +216,3 @@ DATA_DIR = (os.environ.get("DATA_DIR")
             or ".")
 os.makedirs(DATA_DIR, exist_ok=True)
 STATE_FILE = os.environ.get("STATE_FILE", os.path.join(DATA_DIR, "state.json"))
-UNIVERSE_CACHE = os.environ.get("UNIVERSE_CACHE", os.path.join(DATA_DIR, "universe.json"))
-QUALIFIED_FILE = os.environ.get("QUALIFIED_FILE", os.path.join(DATA_DIR, "qualified.json"))
-UNIVERSE_MAX_AGE_HOURS = _int("UNIVERSE_MAX_AGE_HOURS", 24)
-PERFORMANCE_FILE = os.environ.get("PERFORMANCE_FILE", os.path.join(DATA_DIR, "performance.json"))

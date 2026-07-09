@@ -1,13 +1,12 @@
-"""NYSE trading calendar helpers: holiday dates and the daily active-scan
-window — used to pause scanning entirely outside it (saving compute/
-requests) since no US stock can move then.
+"""NYSE trading calendar helpers: holiday dates and whether the market is in
+its regular session right now -- purely informational (shown in /status),
+since the bot's scans are manual/on-demand and no longer gated by market
+hours.
 """
 import datetime as dt
 from zoneinfo import ZoneInfo
 
 from dateutil.easter import easter
-
-from . import config
 
 NY = ZoneInfo("America/New_York")
 RIYADH = ZoneInfo("Asia/Riyadh")  # fixed UTC+3, no DST
@@ -77,18 +76,12 @@ def is_active_session(now: dt.datetime | None = None) -> bool:
     return open_t <= now <= close_t
 
 
-def scan_paused(now: dt.datetime | None = None) -> bool:
-    """True whenever the bot should not be scanning: a full weekend, a
-    market holiday, or (when MARKET_HOURS_ONLY_ENABLED) any time outside
-    the daily active-scan window (see is_active_session).
-    """
-    if not config.WEEKEND_HOLIDAY_PAUSE_ENABLED:
-        return False
+def market_is_open(now: dt.datetime | None = None) -> bool:
+    """True during the regular 9:30-16:00 ET session on a trading day --
+    just for the informational line in /status."""
     now = (now or dt.datetime.now(NY)).astimezone(NY)
-    if now.weekday() >= 5:
-        return True
-    if is_market_holiday(now.date()):
-        return True
-    if config.MARKET_HOURS_ONLY_ENABLED and not is_active_session(now):
-        return True
-    return False
+    if now.weekday() >= 5 or is_market_holiday(now.date()):
+        return False
+    open_t = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    close_t = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    return open_t <= now <= close_t

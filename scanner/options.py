@@ -1,22 +1,12 @@
-"""Pick the best CALL option contracts for an alerted stock (the strategy
-only trades reversal-up setups, so only bullish/long-call contracts apply).
+"""Shared low-level layer for fetching CALL option chains (this bot only
+ever trades bullish/long-call contracts) from two independent free
+providers, plus Black-Scholes delta/theta since neither provider reliably
+publishes real Greeks.
 
-For each signal the bot fetches the Yahoo option chain (nearest expiry up to
-OPTIONS_MAX_WEEKS out, ~3 months by default), keeps only contracts whose
-delta clears DELTA_MIN, and returns the top ones sorted by delta (highest
-first) — not by cheapest premium.
-
-Neither Yahoo nor CBOE's free feeds reliably publish delta, so it's derived
-from Black-Scholes (spot, strike, days-to-expiry, implied volatility) — a
-standard, well-understood approximation (European exercise, no dividend
-yield) that's good enough to compare contracts against each other.
-
-Each final pick also carries an IV Rank/Percentile: where its IV sits
-against the underlying's own rolling realized volatility over the past
-year. True historical IV for a specific contract needs a paid data feed we
-don't have, so realized volatility of the underlying (freely available) is
-used as the standard proxy for "the usual IV range" — a well-known
-approximation, not literal historical option IV.
+This module does NOT filter/rank contracts by itself anymore -- that is
+options_module.py's job, using its own OPTIONS_* thresholds. This module
+only gathers raw candidates so any caller (currently just options_module.py)
+can apply its own criteria on top.
 """
 import datetime as dt
 import logging
@@ -24,7 +14,6 @@ import math
 import re
 import time
 
-import numpy as np
 import requests
 import yfinance as yf
 
@@ -33,7 +22,6 @@ from . import config
 log = logging.getLogger(__name__)
 
 RISK_FREE_RATE = 0.045  # ~ current T-bill yield; only used to estimate delta/theta
-DELTA_MIN = 0.40  # only filter: a contract must clear this delta to qualify
 
 # Fallback provider: CBOE publishes full delayed option chains (all expiries
 # in ONE request) with no API key. Independent of Yahoo, so it keeps working
@@ -59,8 +47,8 @@ NO_OPTIONS_TTL = 6 * 3600
 
 def _expiries_with_retry(ticker, symbol: str) -> list[str]:
     """Yahoo rate-limiting right after a scan burst often returns errors or
-    an empty expiry list for stocks that do have options (e.g. DDD); retry
-    before concluding anything, and raise on persistent failure."""
+    an empty expiry list for stocks that do have options; retry before
+    concluding anything, and raise on persistent failure."""
     last_exc = None
     for attempt in range(2):
         try:
@@ -86,10 +74,12 @@ def _norm_pdf(x: float) -> float:
 
 
 def _bs_delta_theta(spot: float, strike: float, days: int, iv: float | None,
-                    is_call: bool) -> tuple[float | None, float | None]:
+                    is_call: bool = True) -> tuple[float | None, float | None]:
     """Black-Scholes delta and per-day theta, or (None, None) if IV/days
-    aren't usable. See module docstring for why these are computed rather
-    than read from the feed."""
+    aren't usable. Computed manually (no py_vollib/mibian dependency) --
+    a prior deployment broke for weeks because a stray merge conflict
+    corrupted requirements.txt, so this bot avoids adding new pip
+    dependencies for math that a few lines of pure Python already covers."""
     if not days or not iv or iv <= 0 or spot <= 0 or strike <= 0:
         return None, None
     t = days / 365.0
@@ -106,64 +96,6 @@ def _bs_delta_theta(spot: float, strike: float, days: int, iv: float | None,
         theta_year = (-(spot * pdf_d1 * iv) / (2 * sqrt_t)
                      + RISK_FREE_RATE * strike * math.exp(-RISK_FREE_RATE * t) * _norm_cdf(-d2))
     return delta, theta_year / 365.0
-
-
-# Per-symbol cache of the underlying's rolling realized-volatility series
-# (see module docstring on IV Rank) -- {symbol: (fetched_at, vol_series)}.
-# A full year of daily history is a whole extra network call, and the
-# result barely changes within a day, so it's cached.
-_realized_vol_cache: dict[str, tuple[float, np.ndarray]] = {}
-
-
-def _realized_vol_series(symbol: str) -> np.ndarray | None:
-    """Rolling annualized realized volatility (close-to-close log returns,
-    IV_RANK_VOL_WINDOW-day window) over the past year, or None if the price
-    history couldn't be fetched or is too short to compute even one window."""
-    cached = _realized_vol_cache.get(symbol)
-    if cached and cached[0] > time.time() - config.IV_RANK_CACHE_HOURS * 3600:
-        return cached[1]
-    try:
-        hist = yf.Ticker(symbol).history(period="1y", interval="1d")
-    except Exception:
-        log.warning("Realized-vol history fetch failed for %s", symbol)
-        return None
-    if hist is None or hist.empty or "Close" not in hist:
-        return None
-    close = hist["Close"].dropna()
-    if len(close) < config.IV_RANK_VOL_WINDOW + 1:
-        return None
-    log_ret = np.log(close / close.shift(1)).dropna()
-    vol_series = (log_ret.rolling(config.IV_RANK_VOL_WINDOW).std()
-                 * math.sqrt(252)).dropna().to_numpy()
-    if vol_series.size == 0:
-        return None
-    _realized_vol_cache[symbol] = (time.time(), vol_series)
-    return vol_series
-
-
-def _iv_rank(symbol: str, iv: float | None) -> tuple[float, float] | None:
-    """(iv_rank_pct, iv_percentile_pct): how one contract's IV compares to
-    the underlying's own realized-volatility range over the past year (see
-    module docstring). None if IV_RANK_ENABLED is off, IV is missing, or the
-    underlying's history couldn't be fetched/is too short."""
-    if not config.IV_RANK_ENABLED or iv is None:
-        return None
-    vol_series = _realized_vol_series(symbol)
-    if vol_series is None:
-        return None
-    vol_min, vol_max = float(vol_series.min()), float(vol_series.max())
-    if vol_max <= vol_min:
-        return None
-    rank = max(0.0, min(100.0, (iv - vol_min) / (vol_max - vol_min) * 100))
-    percentile = float((vol_series < iv).sum()) / vol_series.size * 100
-    return rank, percentile
-
-
-def _attach_iv_rank(symbol: str, picks: list[dict]) -> list[dict]:
-    for c in picks:
-        result = _iv_rank(symbol, c.get("iv"))
-        c["iv_rank"], c["iv_percentile"] = result if result else (None, None)
-    return picks
 
 
 def _raw_candidate(row, spot: float, expiry: str, days: int, is_call: bool) -> dict | None:
@@ -211,20 +143,6 @@ def _add_candidate(candidates, row, spot, expiry, days):
     raw = _raw_candidate(row, spot, expiry, days, is_call=True)
     if raw is not None:
         candidates["call"].append(raw)
-
-
-def _rank_candidates(rows: list[dict], max_premium: float | None = None) -> list[dict]:
-    """Keep only contracts whose delta clears DELTA_MIN (and, if given, a
-    premium cap), sorted by delta descending (highest first).
-
-    max_premium is separate from OPTIONS_MAX_PREMIUM on purpose: callers
-    that already apply their own cap (find_cheap_contracts, with its own
-    user-supplied price) don't pass one here, so the two caps never fight.
-    """
-    qualified = [r for r in rows if r["delta"] is not None and abs(r["delta"]) > DELTA_MIN]
-    if max_premium is not None:
-        qualified = [r for r in qualified if r["premium"] <= max_premium]
-    return sorted(qualified, key=lambda r: -abs(r["delta"]))
 
 
 def _yahoo_candidates(symbol, spot, today, cutoff):
@@ -324,7 +242,7 @@ def _cboe_candidates(symbol, spot, today, cutoff):
     return candidates, True
 
 
-def _gather_candidates(symbol: str, spot: float, today, cutoff) -> dict | None:
+def gather_candidates(symbol: str, spot: float, today, cutoff) -> dict | None:
     """Try both providers in turn; returns the first successful near-term
     candidates dict, or None if both cleanly confirm the symbol has no
     listed options at all.
@@ -361,61 +279,3 @@ def _gather_candidates(symbol: str, spot: float, today, cutoff) -> dict | None:
     if near_term_misses:
         raise NoNearTermOptions(symbol)
     return None  # both providers cleanly confirm: genuinely no listed options
-
-
-def find_cheap_contracts(symbol: str, spot: float, max_premium: float) -> dict[str, list[dict]]:
-    """CALL contracts on `symbol` priced at or under `max_premium` per share
-    (contract cost = premium * 100).
-
-    Reuses the same reliability screen and delta filter/ranking as
-    best_options — just pre-filtered to the price cap first; among the ones
-    under the cap, the highest delta (not just the cheapest) comes first.
-    """
-    out = {"call": []}
-    if _no_options.get(symbol, 0) > time.time() - NO_OPTIONS_TTL:
-        return out
-
-    today = dt.date.today()
-    cutoff = today + dt.timedelta(weeks=config.OPTIONS_MAX_WEEKS)
-    candidates = _gather_candidates(symbol, spot, today, cutoff)
-    if candidates is None:
-        _no_options[symbol] = time.time()
-        return out
-    cheap = [c for c in candidates["call"] if c["premium"] <= max_premium]
-    out["call"] = _rank_candidates(cheap)[:config.OPTIONS_TOP_N]
-    return out
-
-
-def best_options(symbol: str, spot: float) -> dict[str, list[dict]]:
-    """{'call': [top picks, highest delta first]}, each also carrying
-    iv_rank/iv_percentile (see module docstring; None if unavailable).
-
-    Filters: delta must clear DELTA_MIN, and premium must not exceed
-    OPTIONS_MAX_PREMIUM per share (contract cost = premium * 100) — not by
-    cheapest premium otherwise. Tries Yahoo first, then CBOE's free delayed
-    chain as an independent fallback. Empty list means no contract cleared
-    both filters (or the stock genuinely has no suitable contracts) —
-    which suppresses that stock's alert entirely (see bot.py's
-    filter_by_options); OptionsFetchError means both providers failed;
-    NoNearTermOptions means the stock has options, just none within
-    OPTIONS_MAX_WEEKS.
-    """
-    out = {"call": []}
-    if _no_options.get(symbol, 0) > time.time() - NO_OPTIONS_TTL:
-        return out
-
-    today = dt.date.today()
-    cutoff = today + dt.timedelta(weeks=config.OPTIONS_MAX_WEEKS)
-    candidates = _gather_candidates(symbol, spot, today, cutoff)
-    if candidates is None:
-        _no_options[symbol] = time.time()
-        log.info("%s has no listed options", symbol)
-        return out
-    picks = _rank_candidates(candidates["call"],
-                             max_premium=config.OPTIONS_MAX_PREMIUM)[:config.OPTIONS_TOP_N]
-    # IV Rank only for the final picks that actually get shown, and only
-    # here (not find_cheap_contracts) -- that command already loops over
-    # hundreds/thousands of symbols, and a full extra year of daily history
-    # per symbol would multiply its already-long runtime.
-    out["call"] = _attach_iv_rank(symbol, picks)
-    return out

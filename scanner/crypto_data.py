@@ -1,0 +1,38 @@
+"""Public Binance market data via ccxt (no API keys — spot OHLCV only).
+
+Independent of scanner/data.py (which is yfinance/stocks-only) on purpose:
+the crypto module must keep working even if the stocks/options modules'
+data source has an outage, and vice versa.
+"""
+import logging
+
+import ccxt
+import pandas as pd
+
+log = logging.getLogger(__name__)
+
+REQUIRED_COLS = ["Open", "High", "Low", "Close", "Volume"]
+
+_exchange = None
+
+
+def _get_exchange():
+    global _exchange
+    if _exchange is None:
+        _exchange = ccxt.binance({"enableRateLimit": True})
+    return _exchange
+
+
+def fetch_ohlcv(symbol: str, timeframe: str, limit: int) -> pd.DataFrame | None:
+    """One symbol's OHLCV candles (e.g. "BTC/USDT", "4h"), or None on any
+    failure (delisted pair, network error, etc.) — the caller treats a
+    missing symbol as "skip it", never as a crash."""
+    try:
+        candles = _get_exchange().fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+    except Exception:
+        log.warning("ccxt fetch_ohlcv failed for %s", symbol)
+        return None
+    if not candles:
+        return None
+    df = pd.DataFrame(candles, columns=["ts", "Open", "High", "Low", "Close", "Volume"])
+    return df[REQUIRED_COLS]

@@ -1,41 +1,30 @@
-"""Telegram bot: continuous scanner for US stocks, reversal-up setups only
-(a stock is reported when >= FILTERS_REQUIRED match):
-  1. Price at the lower Bollinger Band
-  2. RSI < RSI_OVERSOLD (oversold, default 35)
-  3. Price at a support zone
-  4. Falling wedge pattern
+"""Telegram bot: three fully independent, on-demand scanning modules --
+stocks (reversal-up technical setups), options (CALL-contract screener),
+and crypto (top-30 coins via Binance public data). No automatic background
+scanning: every scan runs only when a member sends a command, and stops on
+its own after SESSION_TIMEOUT_SECONDS (or instantly via /stop).
+
+The bot is locked to whichever chat ids were already approved before this
+restructure (scanner/state.py's `approved`) -- there is no /approve command
+anymore, so no new member can be added from within the bot.
 
 Run:  TELEGRAM_BOT_TOKEN=xxx python bot.py
 """
 import asyncio
-import concurrent.futures
-import datetime as dt
-import gc
-import io
 import logging
-import multiprocessing
-import os
-import resource
-from zoneinfo import ZoneInfo
+import time
 
 from dotenv import load_dotenv
 
 load_dotenv()  # must run before scanner.config reads the environment
 
-import time
-
-from telegram import (BotCommand, BotCommandScopeChat, BotCommandScopeDefault,
-                      InlineKeyboardButton, InlineKeyboardMarkup, Update)
+from telegram import Update
 from telegram.constants import ParseMode
-from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
-                          ContextTypes, MessageHandler, filters)
+from telegram.ext import Application, CommandHandler, ContextTypes
 
-from scanner import (chart, config, engine, market_calendar, optimizer, options,
-                    performance, pricing, sentiment, universe)
-from scanner import data as data_mod
-from scanner.indicators import FILTERS, find_nearest_resistance, fmt_price
+from scanner import config, crypto_module, market_calendar, options_module, stocks_module
+from scanner.indicators import fmt_price
 from scanner.state import State
-from scanner.throttle import Throttle
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO
@@ -43,1092 +32,252 @@ logging.basicConfig(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("bot")
 
-NY = ZoneInfo("America/New_York")
 MSG_LIMIT = 3800  # keep below Telegram's 4096-char cap
 
 state = State()
-scan_lock = asyncio.Lock()
-hot_lock = asyncio.Lock()
-cheap_options_lock = asyncio.Lock()
-throttle = Throttle()
-hotlist: set[str] = set()  # near-signal symbols, rebuilt every full cycle
-pending_check: dict[int, float] = {}  # chat id -> time /check asked for a symbol
+# One session (asyncio Task) + cancel Event per chat, at most -- a chat can
+# only have one module running at a time.
+sessions: dict[int, asyncio.Task] = {}
+cancel_events: dict[int, asyncio.Event] = {}
 
-# Batches run in a single recycled worker process ("spawn" to stay safe with
-# the bot's own threads): pandas/yfinance memory otherwise accumulates in the
-# main process until the container is OOM-killed.
-_scan_pool = None
+FOOTER = "⚠️ تحليل فني آلي — ليس توصية بشراء أو بيع، ولا يشكل استشارة استثمارية."
 
 
-def _get_scan_pool():
-    global _scan_pool
-    if _scan_pool is None:
-        _scan_pool = concurrent.futures.ProcessPoolExecutor(
-            max_workers=1, max_tasks_per_child=40,
-            mp_context=multiprocessing.get_context("spawn"))
-    return _scan_pool
-
-
-async def scan_batch_async(batch):
-    """Run one batch in the worker process; returns (BatchResult, stats)."""
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(_get_scan_pool(),
-                                      engine.scan_batch_task, batch)
-
-
-def merge_stats(target: dict, delta: dict):
-    for key in ("with_data", "liquid", "errors"):
-        target[key] += delta[key]
-
-
-def market_is_open(now: dt.datetime | None = None) -> bool:
-    now = (now or dt.datetime.now(NY)).astimezone(NY)
-    if now.weekday() >= 5:
-        return False
-    open_t = now.replace(hour=9, minute=30, second=0, microsecond=0)
-    close_t = now.replace(hour=16, minute=10, second=0, microsecond=0)
-    return open_t <= now <= close_t
-
-
-# ------------------------------------------------------------- formatting
-
-ALERT_HEADER = "⚡ إشارة فورية — 📈 احتمال صعود"
-
-# /check <symbol>: an on-demand personal lookup, replied privately to whoever
-# asked — distinct wording from ALERT_HEADER so it's never mistaken for a
-# real streamed alert.
-CHECK_HEADER = "🔍 نتيجة الفحص اليدوي — 📈 احتمال صعود"
-
-ALERT_FOOTER = "⚠️ تحليل فني آلي — ليس توصية بشراء أو بيع"
-
-DISCLAIMER = (
-    "⚠️ *إخلاء مسؤولية — يُرجى القراءة بعناية*\n\n"
-    "هذه الخدمة *أداة تحليل فني آلية* تعتمد على مؤشرات رياضية "
-    "(بولينجر باند، مؤشر القوة النسبية RSI، مستويات الدعم، "
-    "الأنماط السعرية) لرصد حالات التشبع البيعي واحتمال الصعود في سوق "
-    "الأسهم الأمريكية، "
-    "وعرض بيانات عقود الخيارات (Call) الأنشط سيولةً وفق معايير آلية بحتة.\n\n"
-    "1️⃣ ما تقدمه هذه الخدمة *ليس توصية ولا مشورة استثمارية* ولا دعوة أو تحريضاً "
-    "على شراء أو بيع أي ورقة مالية أو أصل رقمي أو عقد مشتقات، ولا يجوز تفسيره "
-    "أو الاعتماد عليه بهذه الصفة.\n\n"
-    "2️⃣ الخدمة ومشغّلها *غير مرخصين من هيئة السوق المالية في المملكة العربية "
-    "السعودية* ولا من أي جهة تنظيمية أخرى لمزاولة أعمال الأوراق المالية أو تقديم "
-    "المشورة الاستثمارية، ولا تقدم الخدمة أي عمل من الأعمال الخاضعة للترخيص.\n\n"
-    "3️⃣ المؤشرات الفنية أدوات إحصائية *قد تخطئ*، والنتائج السابقة لا تضمن "
-    "الأداء المستقبلي، والبيانات المعروضة قد يشوبها تأخير أو خطأ من مصادرها.\n\n"
-    "4️⃣ التداول في الأسهم وعقود الخيارات *ينطوي على مخاطر "
-    "عالية* قد تصل إلى خسارة رأس المال كاملاً. عقود الخيارات المعروضة هي نتاج "
-    "فرز آلي لأنشط العقود سيولةً وليست اقتراحاً بالتداول عليها.\n\n"
-    "5️⃣ أي قرار استثماري تتخذه هو *مسؤوليتك وحدك*، ولا يتحمل مشغّل الخدمة أي "
-    "مسؤولية عن أي خسارة أو ضرر ينشأ عن استخدامها. استشر مستشاراً مالياً مرخصاً "
-    "قبل اتخاذ أي قرار.\n\n"
-    "باشتراكك واستخدامك هذه الخدمة فأنت تقر بأنك قرأت هذا الإخلاء وفهمته "
-    "ووافقت عليه."
-)
-
-
-# ------------------------------------------------------ subscription gate
+# ------------------------------------------------------------ eligibility
 
 def is_admin(chat_id: int) -> bool:
     return config.ADMIN_CHAT_ID and chat_id == config.ADMIN_CHAT_ID
 
 
 def sub_expiry(chat_id: int):
-    """None = not approved; 0 = lifetime; else unix expiry timestamp."""
+    """None = not a member; 0 = lifetime; else unix expiry timestamp."""
     return state.approved.get(str(chat_id))
 
 
 def eligible(chat_id: int) -> bool:
-    """May receive alerts: accepted the disclaimer + active paid subscription."""
+    """The bot is locked to the fixed roster already in state.approved --
+    there is no command left that can grow this roster."""
     if is_admin(chat_id):
         return True
-    if str(chat_id) not in state.accepted:
-        return False
     expiry = sub_expiry(chat_id)
     if expiry is None:
         return False
     return expiry == 0 or expiry > time.time()
 
 
-def format_match(m) -> str:
-    lines = [f"*{m.symbol}* — {m.score}/{m.total_filters} — {fmt_price(m.price)}"]
-    for key, (name, _) in FILTERS.items():
-        mark = "✅" if key in m.matched else "❌"
-        lines.append(f"  {mark} {name}: {m.details.get(key, '-')}")
-    if m.options_text:
-        lines.append(m.options_text)
-    if m.sentiment_text:
-        lines.append(f"  💬 وجهة نظر البوت (ملخص لما يُتداول من أخبار وآراء):\n  {m.sentiment_text}")
-    return "\n".join(lines)
+async def require_membership(update: Update) -> bool:
+    chat_id = update.effective_chat.id
+    if eligible(chat_id):
+        return True
+    await update.message.reply_text(
+        "🚫 هذه الخدمة مقفلة على الأعضاء الحاليين فقط ولا يمكن إضافة أعضاء جدد.\n"
+        f"إن كنت عضواً سابقاً وتواجه مشكلة تواصل مع {config.SUBSCRIBE_CONTACT}."
+    )
+    return False
 
 
-def _greek_suffix(c: dict) -> str:
-    """IV/IV Rank/delta/theta tail for one contract line, when known — these
-    (plus liquidity) are what the picks are actually ranked by now, not price."""
-    bits = []
-    if c.get("iv") is not None:
-        bits.append(f"IV={c['iv'] * 100:.0f}%")
-    if c.get("iv_rank") is not None:
-        bits.append(f"IV Rank={c['iv_rank']:.0f}%")
-    if c.get("delta") is not None:
-        bits.append(f"دلتا={c['delta']:.2f}")
-    if c.get("theta") is not None:
-        bits.append(f"ثيتا={c['theta']:.3f}$/يوم")
-    return f" • {' • '.join(bits)}" if bits else ""
+# --------------------------------------------------------------- helpers
 
-
-def format_options(picks: dict) -> str:
-    """Best CALL-contracts block, ranked by delta (highest first) among
-    contracts clearing DELTA_MIN — not by cheapest premium."""
-    contracts = picks.get("call") if picks else None
-    if not contracts:
-        return ""
-    lines = ["  📊 أفضل عقود CALL 🟢📈 (الأعلى جودة أولاً):"]
-    for i, c in enumerate(contracts, 1):
-        approx = "≈" if c.get("estimated") else ""
-        lines.append(
-            f"    {i}) تنفيذ {c['strike']:.2f}$ • ينتهي {c['expiry']}"
-            f" ({c['days']} يوم) • بريميوم {approx}{c['premium']:.2f}$"
-            f" = {approx}{c['premium'] * 100:.0f}$/عقد{_greek_suffix(c)}"
-        )
-    if any(c.get("estimated") for c in contracts):
-        lines.append("  (≈ آخر سعر تداول — سوق الأوبشنز مغلق الآن)")
-    return "\n".join(lines)
-
-
-def format_cheap_picks(symbol: str, price: float, picks: dict) -> str:
-    """One /cheapoptions result block: symbol + its qualifying CALL
-    contracts, best-scored first among those under the price cap."""
-    lines = [f"*{symbol}* — {fmt_price(price)}"]
-    for c in picks.get("call") or []:
-        approx = "≈" if c.get("estimated") else ""
-        lines.append(
-            f"    تنفيذ {c['strike']:.2f}$ • ينتهي {c['expiry']}"
-            f" ({c['days']} يوم) • بريميوم {approx}{c['premium']:.2f}$"
-            f" = {approx}{c['premium'] * 100:.0f}$/عقد{_greek_suffix(c)}"
-        )
-    return "\n".join(lines)
-
-
-def _format_heat_table(spot: float, pick: dict) -> str:
-    """جدول حرارة نصي (monospace) للربح/الخسارة المتوقعة لأفضل عقد، عبر
-    مستويات HEAT_TABLE_PRICE_LEVELS_PCT السعرية ونقاط HEAT_TABLE_DAY_OFFSETS
-    الزمنية بالإضافة لعمود الانتهاء. ✅ للربح و🔻 للخسارة."""
-    strike, premium, iv, dte = pick["strike"], pick["premium"], pick["iv"], pick["days"]
-    day_offsets = [*config.HEAT_TABLE_DAY_OFFSETS, dte]  # آخر عمود = عند الانتهاء
-    headers = ["السعر"] + [("اليوم" if d == 0 else f"+{d}ي") for d in config.HEAT_TABLE_DAY_OFFSETS] \
-        + ["الانتهاء"]
-
-    rows = []
-    for pct in config.HEAT_TABLE_PRICE_LEVELS_PCT:
-        target = spot * (1 + pct / 100)
-        cells = [f"{target:,.1f}$"]
-        for offset in day_offsets:
-            days_remaining = max(dte - offset, 0)
-            profit = pricing.expected_profit(target, strike, premium, days_remaining, iv)
-            cells.append("-" if profit is None else
-                        f"{'✅' if profit >= 0 else '🔻'}{profit:+.0f}$")
-        rows.append(cells)
-
-    widths = [max(len(r[i]) for r in [headers, *rows]) for i in range(len(headers))]
-    def fmt_row(cells):
-        return " | ".join(c.ljust(w) for c, w in zip(cells, widths))
-    sep = "-+-".join("-" * w for w in widths)
-    return "```\n" + "\n".join([fmt_row(headers), sep, *[fmt_row(r) for r in rows]]) + "\n```"
-
-
-def format_optimizer_block(picks: list[dict], spot: float) -> str:
-    """أفضل عقود Call مرشّحة عبر فلاتر الـOptimizer الأشد (دلتا/DTE/سيولة/
-    IV/سبريد، انظر scanner/optimizer.py)، مرتبة بأعلى احتمالية ربح -- مع
-    تحليل كامل (تكلفة، نقطة تعادل، احتمالية ربح) لكل عقد، وجدول حرارة نصي
-    لأفضلها فقط."""
-    if not picks:
-        return ""
-    lines = ["  📊 أفضل عقود CALL (محلل الأوبشن) — بأعلى احتمالية ربح:"]
-    for i, c in enumerate(picks, 1):
-        approx = "≈" if c.get("estimated") else ""
-        pop_txt = f"{c['probability_of_profit']:.0f}%" if c.get("probability_of_profit") is not None else "-"
-        lines.append(
-            f"    {i}) تنفيذ {c['strike']:.2f}$ • ينتهي {c['expiry']} ({c['days']} يوم)"
-            f" • بريميوم {approx}{c['premium']:.2f}$ = {approx}{c['cost']:.0f}$/عقد"
-            f" • تعادل {c['breakeven']:.2f}$ • احتمالية ربح {pop_txt}{_greek_suffix(c)}"
-        )
-    best = picks[0]
-    target_note = "أقرب مقاومة" if best.get("target_is_resistance") else "افتراضي +10%"
-    if best.get("target_profit") is not None:
-        lines.append(
-            f"    🎯 هدف الربح ({target_note} {best['target_price']:.2f}$):"
-            f" {best['target_profit']:+.0f}$/عقد"
-        )
-    lines.append("  🔥 جدول الربح/الخسارة المتوقع لأفضل عقد (السعر مقابل الوقت):")
-    lines.append(_format_heat_table(spot, best))
-    if any(c.get("estimated") for c in picks):
-        lines.append("  (≈ آخر سعر تداول — سوق الأوبشنز مغلق الآن)")
-    return "\n".join(lines)
-
-
-async def attach_options(matches):
-    """Fill options_text (and has_option) on each match, via the Optimizer
-    (delta/DTE/volume/OI/IV/spread filter + theoretical pricing +
-    probability of profit + heat table, see scanner/optimizer.py) by
-    default, or the simpler delta/premium-only picker in scanner/options.py
-    when OPTIMIZER_ENABLED=0. has_option is only True when a pick was found
-    — used by the scan loop to drop stocks with no tradeable contract from
-    the alert entirely (see filter_by_options)."""
-    if not config.OPTIONS_ENABLED:
-        return
-    for m in matches:
-        if m.options_text:
-            continue
-        no_options_line = "  📊 لا يوجد أوبشن لهذا السهم"
-        no_near_term_line = (f"  📊 لا توجد عقود ضمن {config.OPTIONS_MAX_WEEKS} أسابيع القادمة "
-                             "(قد تتوفر عقود بتواريخ أبعد)")
-        try:
-            if config.OPTIMIZER_ENABLED:
-                resistance = (await asyncio.to_thread(find_nearest_resistance, m.chart_df)
-                             if m.chart_df is not None else None)
-                picks = await asyncio.to_thread(
-                    optimizer.best_contracts, m.symbol, m.price, resistance)
-                text = format_optimizer_block(picks, m.price)
-            else:
-                picks = await asyncio.to_thread(options.best_options, m.symbol, m.price)
-                text = format_options(picks)
-            m.has_option = bool(text)
-            m.options_text = text or no_options_line
-        except options.NoNearTermOptions:
-            m.options_text = no_near_term_line
-        except options.OptionsFetchError:
-            log.warning("Options fetch failed for %s (both providers)", m.symbol)
-            m.options_text = no_options_line
-        except Exception:
-            log.exception("Options lookup failed for %s", m.symbol)
-            m.options_text = no_options_line
-
-
-async def attach_sentiment(matches):
-    """Fill sentiment_text on each match: news + StockTwits merged into one
-    short paragraph by Gemini. Silently skipped (no key, no data, or the
-    call failing) — never blocks the rest of the alert."""
-    if not config.SENTIMENT_ENABLED or not config.GEMINI_API_KEY:
-        return
-    for m in matches:
-        if m.sentiment_text:
-            continue
-        try:
-            summary = await asyncio.to_thread(sentiment.get_sentiment_summary, m.symbol)
-        except Exception:
-            log.exception("Sentiment summary failed for %s", m.symbol)
-            summary = None
-        if summary:
-            m.sentiment_text = summary
-
-
-CHART_CAPTION_LIMIT = 1024  # Telegram's hard cap on photo captions
-
-
-async def attach_charts(matches):
-    """Fill chart_png on each match, then drop the OHLCV frame — it only
-    exists to render the chart and must not linger in memory afterward."""
-    if not config.CHART_ENABLED:
-        return
-    for m in matches:
-        if m.chart_df is None:
-            continue
-        try:
-            m.chart_png = await asyncio.to_thread(
-                chart.render_chart, m.symbol, m.chart_df, m.details)
-        except Exception:
-            log.exception("Chart render failed for %s", m.symbol)
-        m.chart_df = None
-
-
-def build_messages(header: str, matches) -> list[str]:
-    """Assemble alert text, split into Telegram-sized chunks."""
-    chunks, current = [], header
-    for m in matches:
-        block = "\n\n" + format_match(m)
-        if len(current) + len(block) > MSG_LIMIT:
+def _split_message(text: str) -> list[str]:
+    """Split a long results block into Telegram-sized chunks on paragraph
+    boundaries (each result is one blank-line-separated block)."""
+    parts = text.split("\n\n")
+    chunks, current = [], parts[0]
+    for part in parts[1:]:
+        if len(current) + len(part) + 2 > MSG_LIMIT:
             chunks.append(current)
-            current = format_match(m)
+            current = part
         else:
-            current += block
+            current += "\n\n" + part
     chunks.append(current)
-    return [c + f"\n\n{ALERT_FOOTER}" for c in chunks]
+    return chunks
 
 
-async def handle_expired_subscribers(app: Application):
-    """Remove and notify subscribers whose paid term has lapsed. Called once
-    per scan cycle, independent of whether alerts use text or photos."""
-    now = time.time()
-    for chat_id in list(state.subscribers):
-        expiry = sub_expiry(chat_id)
-        if expiry and expiry != 0 and expiry <= now:
-            state.subscribers.discard(chat_id)
-            state.approved.pop(str(chat_id), None)
-            state.save()
-            try:
-                await app.bot.send_message(
-                    chat_id,
-                    "⏰ انتهت مدة اشتراكك وتوقفت التنبيهات. "
-                    f"للتجديد تواصل مع {config.SUBSCRIBE_CONTACT}.")
-            except Exception:
-                log.warning("Expiry notice to %s failed", chat_id)
-
-
-async def broadcast(app: Application, text: str):
-    for chat_id in list(state.subscribers):
-        if not eligible(chat_id):
-            continue
+async def _send(app, chat_id: int, text: str):
+    for chunk in _split_message(text):
         try:
-            await app.bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN)
+            await app.bot.send_message(chat_id, chunk, parse_mode=ParseMode.MARKDOWN)
         except Exception:
             log.exception("Send to %s failed", chat_id)
 
 
-async def broadcast_photo(app: Application, photo: bytes, caption: str):
-    for chat_id in list(state.subscribers):
-        if not eligible(chat_id):
-            continue
+# ------------------------------------------------------- session machinery
+
+async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, app):
+    """Runs a module's scan() under the shared SESSION_TIMEOUT_SECONDS cap
+    and instant-/stop cancellation; sends the results (or a timeout/stop/
+    error notice) as its own private message. A failure here is this
+    module's problem alone -- it never touches another module's session."""
+    cancel_event = asyncio.Event()
+    cancel_events[chat_id] = cancel_event
+    try:
         try:
-            await app.bot.send_photo(chat_id, photo=io.BytesIO(photo), caption=caption,
-                                     parse_mode=ParseMode.MARKDOWN)
-        except Exception:
-            log.exception("Send photo to %s failed", chat_id)
-
-
-# ------------------------------------------------------------------ scans
-
-async def filter_by_options(matches: list) -> list:
-    """يُبقي فقط الأسهم التي وُجد لها عقد CALL واحد على الأقل — أي سهم
-    بدون أي عقد مناسب لا يُرسل تنبيهه إطلاقاً، بغض النظر عن السبب (لا يوجد
-    أوبشن أصلاً، فشل الجلب، لا عقود قريبة، أو لا عقود ناجية بعد فلترة
-    best_options). العقود تُجلب هنا مبكراً (قبل تسجيل الذاكرة) حتى لا
-    يُسجَّل السهم المستبعد في الذاكرة، فتبقى فرصة لإعادة تقييمه في الدورة
-    التالية إن تحسّنت سيولة عقوده لاحقاً."""
-    if not config.OPTIONS_ENABLED or not matches:
-        return matches
-    await attach_options(matches)
-    return [m for m in matches if m.has_option]
-
-
-async def send_matches(app, to_send, hot: bool = False):
-    """Push each match as its own message: a chart photo (when available)
-    carrying the full detail as its caption, or plain text otherwise —
-    Telegram caps photo captions at 1024 chars, so an overlong detail block
-    (rare, e.g. many option picks) falls back to a short caption + full text.
-    """
-    await attach_options(to_send)
-    await attach_charts(to_send)
-    await attach_sentiment(to_send)
-    await asyncio.to_thread(performance.track_alerts, to_send)
-    flame = "🔥 " if hot else ""
-    perf_line = await asyncio.to_thread(performance.compact_summary)
-    for m in to_send:
-        header = f"{flame}{ALERT_HEADER} — {dt.datetime.now(NY):%H:%M} ET"
-        text = f"{header}\n\n{format_match(m)}\n\n{ALERT_FOOTER}"
-        if perf_line:
-            text += f"\n{perf_line}"
-        if not m.chart_png:
-            await broadcast(app, text)
-        elif len(text) <= CHART_CAPTION_LIMIT:
-            await broadcast_photo(app, m.chart_png, text)
-        else:
-            await broadcast_photo(app, m.chart_png,
-                                  f"{header}\n\n*{m.symbol}* — {m.score}/{m.total_filters}")
-            await broadcast(app, text)
-
-
-async def do_scan(app: Application, only_changes: bool, notify_empty: bool):
-    """Scan batch by batch, pushing each matching stock the moment it's found."""
-    global hotlist
-    if scan_lock.locked():
-        log.info("Scan already running; skipping")
-        return
-    async with scan_lock:
-        await handle_expired_subscribers(app)
-        started = dt.datetime.now(NY)
-        # No US stock can move over the weekend/a market holiday, so skip
-        # the whole scan and save the requests.
-        paused = market_calendar.scan_paused()
-        if paused:
-            full_pass, stock_symbols = False, []
-        else:
-            full_pass, stock_symbols = await asyncio.to_thread(universe.stock_scan_list)
-        log.info("Scan started (paused=%s, full_pass=%s, %d stocks)",
-                 paused, full_pass, len(stock_symbols))
-        stats = engine.new_stats(len(stock_symbols))
-        matched = 0
-        sent_count = 0
-        new_hot: set[str] = set()
-        qualified: list[str] = []
-
-        for batch in engine.make_batches(stock_symbols):
-            result, delta = await scan_batch_async(batch)
-            merge_stats(stats, delta)
-            matched += len(result.matches)
-            new_hot.update(result.hot)
-            qualified.extend(result.liquid)
-            candidates = state.fresh_matches(result.matches) if only_changes else result.matches
-            # Options are fetched and filtered BEFORE recording: a symbol
-            # with no qualifying CALL contract must not be written into the
-            # dedup memory, or it would silently never be reconsidered again
-            # even if its option liquidity improves on a later cycle.
-            to_send = await filter_by_options(candidates)
-            state.record(to_send)
-            if to_send:
-                sent_count += len(to_send)
-                # A failure anywhere inside send_matches (options/chart/
-                # sentiment/performance lookups) must not abort the rest of
-                # the cycle — the remaining batches still need to run, and
-                # matches already recorded above would otherwise be silently
-                # lost for good (dedup blocks re-sending them once "changed"
-                # stops being true).
-                try:
-                    await send_matches(app, to_send)
-                except Exception:
-                    log.exception("send_matches failed for a batch; continuing to next batch")
-                state.save()  # crash-safe: never re-alert what was already sent
-            throttle.report(result.data_ratio)
-            # Always pace batches; unpaced cycles crashed the container
-            await asyncio.sleep(max(throttle.delay, config.BATCH_INTERVAL_SECONDS))
-
-        if full_pass and qualified:
-            await asyncio.to_thread(universe.save_qualified, qualified)
-        if paused:
-            # Keep the prior hot list so the fast lane resumes instantly when
-            # trading reopens instead of waiting for a fresh full pass.
-            new_hot |= hotlist
-        hotlist = new_hot
-        state.prune()
-        state.save()
-        gc.collect()  # drop per-cycle DataFrames before the next cycle starts
-        rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
-        log.info("Scan done: matched=%d sent=%d hot=%d peak_rss=%.0fMB stats=%s",
-                 matched, sent_count, len(hotlist), rss_mb, stats)
-
-        if paused:
-            breakdown = "📈 الأسهم: متوقف مؤقتاً (نهاية أسبوع/عطلة رسمية)"
-        else:
-            breakdown = f"📈 الأسهم: {matched} مطابق من {stats['liquid']} مفحوص"
-
-        if sent_count == 0 and notify_empty:
-            await broadcast(
-                app,
-                f"🔎 اكتمل المسح ({started:%H:%M} ET) — لا إشارات تحقق "
-                f"{config.FILTERS_REQUIRED}/{len(FILTERS)} من الفلاتر.\n{breakdown}",
-            )
-        elif not only_changes:
-            await broadcast(app, f"✅ اكتمل المسح:\n{breakdown}")
-
-
-async def do_hot_scan(app: Application):
-    """Fast lane: re-check near-signal symbols (>=2 filters) every couple of
-    minutes so a setup completing between full cycles is caught immediately."""
-    if not hotlist or hot_lock.locked() or market_calendar.scan_paused():
-        return
-    if throttle.delay >= 60:
-        return  # Yahoo is pushing back; don't add fast-lane pressure
-    async with hot_lock:
-        symbols = sorted(hotlist)[:config.HOTLIST_MAX]
-        for batch in engine.make_batches(symbols):
-            result, _ = await scan_batch_async(batch)
-            throttle.report(result.data_ratio)
-            candidates = state.fresh_matches(result.matches)
-            if not candidates:
-                continue
-            to_send = await filter_by_options(candidates)
-            if not to_send:
-                continue
-            state.record(to_send)
-            try:
-                await send_matches(app, to_send, hot=True)
-            except Exception:
-                log.exception("send_matches failed for a hot-lane batch; continuing")
-            state.save()
-
-
-async def hot_job(context: ContextTypes.DEFAULT_TYPE):
-    # Runs on its own schedule regardless of subscriber count, so scanning
-    # starts automatically the moment the bot boots rather than waiting for
-    # a first /start — do_hot_scan itself already no-ops cleanly if hotlist
-    # is empty or the market is paused.
-    #
-    # The reschedule call below MUST always run: this is a self-rescheduling
-    # chain (each run queues the next), so one uncaught exception here would
-    # silently kill all future scanning forever, not just this one cycle.
-    try:
-        await do_hot_scan(context.application)
+            results = await asyncio.wait_for(scan_fn(cancel_event),
+                                             timeout=config.SESSION_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            await _send(app, chat_id, f"⏰ {title} — انتهت الجلسة (تجاوزت 5 دقائق).")
+            return
+        if cancel_event.is_set():
+            await _send(app, chat_id, f"⏹️ {title} — تم إيقاف الجلسة.")
+            return
+        if not results:
+            await _send(app, chat_id, f"{title}\n\nلا نتائج تحقق الشروط حالياً.\n\n{FOOTER}")
+            return
+        blocks = "\n\n".join(format_fn(r) for r in results)
+        await _send(app, chat_id, f"{title}\n\n{blocks}\n\n{FOOTER}")
+    except asyncio.CancelledError:
+        await _send(app, chat_id, f"⏹️ {title} — تم إيقاف الجلسة.")
     except Exception:
-        log.exception("Hot-lane cycle failed; will retry next cycle")
-    context.application.job_queue.run_once(hot_job, when=config.HOTLIST_INTERVAL_SECONDS)
+        log.exception("Session failed for chat %s (%s)", chat_id, title)
+        await _send(app, chat_id, f"⚠️ {title} — حدث خطأ غير متوقع أثناء الفحص.")
+    finally:
+        sessions.pop(chat_id, None)
+        cancel_events.pop(chat_id, None)
 
 
-async def scan_loop_job(context: ContextTypes.DEFAULT_TYPE):
-    # Self-rescheduling: each run queues the next one after it finishes, so a
-    # new cycle starts SCAN_PAUSE_SECONDS after the previous one ends (not a
-    # fixed wall-clock interval). do_scan itself no-ops entirely outside the
-    # regular session (market_calendar.scan_paused()), so the bot goes fully
-    # idle after the close and resumes at the next open. The dedup layer
-    # ensures only new or changed signals are ever sent regardless of pace.
-    #
-    # Runs regardless of subscriber count: scanning starts automatically as
-    # soon as the bot boots (building the qualified/hot lists right away),
-    # instead of sitting idle until someone sends /start.
-    #
-    # The reschedule call below MUST always run, no matter what happens in
-    # do_scan (e.g. universe.get_universe() raises on a fresh deploy with no
-    # cached symbol list yet and a transient network failure) — this is a
-    # self-rescheduling chain, so one uncaught exception here would silently
-    # end all future scanning forever, not just skip this one cycle.
+async def _run_ticker_session(chat_id: int, symbol: str, app):
+    """/options TICKER: a single-symbol lookup, independent of the full
+    watchlist scan -- same timeout/cancel machinery, its own message."""
     try:
-        await do_scan(context.application, only_changes=True, notify_empty=False)
+        spot, contracts, error = await asyncio.wait_for(
+            options_module.scan_symbol(symbol), timeout=config.SESSION_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        await _send(app, chat_id, "⏰ انتهت الجلسة (تجاوزت 5 دقائق).")
+        return
+    except asyncio.CancelledError:
+        await _send(app, chat_id, "⏹️ تم إيقاف الجلسة.")
+        return
     except Exception:
-        log.exception("Scan cycle failed; will retry next cycle")
-    context.application.job_queue.run_once(scan_loop_job, when=config.SCAN_PAUSE_SECONDS)
+        log.exception("Ticker session failed for chat %s (%s)", chat_id, symbol)
+        await _send(app, chat_id, "⚠️ حدث خطأ غير متوقع أثناء الفحص.")
+        return
+    finally:
+        sessions.pop(chat_id, None)
+
+    if error:
+        await _send(app, chat_id, f"📊 *{symbol}* — {error}")
+    elif not contracts:
+        price_txt = fmt_price(spot) if spot else "-"
+        await _send(app, chat_id,
+                    f"📊 *{symbol}* ({price_txt}) — لا يوجد عقد يحقق الشروط حالياً.\n\n{FOOTER}")
+    else:
+        blocks = "\n\n".join(options_module.format_result(r) for r in contracts)
+        await _send(app, chat_id, f"📊 عقود *{symbol}* المؤهلة:\n\n{blocks}\n\n{FOOTER}")
 
 
-async def performance_job(context: ContextTypes.DEFAULT_TYPE):
-    """Settle any due performance checks (pure price lookups, cheap and
-    independent of subscriber count or market hours)."""
-    await asyncio.to_thread(performance.resolve_due)
+def _start_session(chat_id: int, coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    sessions[chat_id] = task
+    return task
 
 
 # --------------------------------------------------------------- commands
 
-WELCOME = (
-    "أهلاً بك في بوت المسح الفني للسوق الأمريكي 📊\n\n"
-    "تفحص الخدمة كل الأسهم الأمريكية بشكل متواصل (فريم الساعة) بحثاً عن "
-    f"احتمالات الصعود — تحقق {config.FILTERS_REQUIRED} شروط من {len(FILTERS)}:\n"
-    "1️⃣ السعر عند الحد السفلي لبولينجر باند\n"
-    f"2️⃣ RSI أقل من {config.RSI_OVERSOLD:.0f} (تشبع بيعي)\n"
-    "3️⃣ السعر عند منطقة دعم\n"
-    "4️⃣ نموذج وتد هابط\n\n"
-    "قبل تفعيل الخدمة يجب قراءة إخلاء المسؤولية التالي والموافقة عليه:"
-)
-
-
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_stocks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_membership(update):
+        return
     chat_id = update.effective_chat.id
-    await update.message.reply_text(WELCOME, parse_mode=ParseMode.MARKDOWN)
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ قرأت إخلاء المسؤولية وأوافق عليه",
-                             callback_data="accept_disclaimer")
-    ]])
-    await update.message.reply_text(DISCLAIMER, parse_mode=ParseMode.MARKDOWN,
-                                    reply_markup=keyboard)
-    log.info("Start from chat %s", chat_id)
+    if chat_id in sessions:
+        await update.message.reply_text("⏳ توجد جلسة قيد التنفيذ بالفعل — أرسل /stop لإيقافها أولاً.")
+        return
+    await update.message.reply_text(
+        f"📈 بدأ فحص وحدة الأسهم ({len(config.STOCKS_WATCHLIST)} سهم)... "
+        f"حتى {config.SESSION_TIMEOUT_SECONDS // 60} دقائق أو /stop للإيقاف الفوري.")
+    _start_session(chat_id, _run_watchlist_session(
+        chat_id, "📈 نتائج فحص الأسهم", stocks_module.scan, stocks_module.format_result,
+        context.application))
 
 
-async def on_accept(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    chat_id = query.message.chat.id
-    state.accepted[str(chat_id)] = time.time()
-    await query.answer("تم تسجيل موافقتك")
-    if eligible(chat_id):
-        state.subscribers.add(chat_id)
-        state.save()
-        await query.message.reply_text(
-            "✅ تم تسجيل موافقتك وتفعيل اشتراكك — ستصلك الإشارات الجديدة تلقائياً.\n"
-            "الأوامر: /scan مسح فوري • /status الحالة • /stop إيقاف التنبيهات")
+async def cmd_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_membership(update):
+        return
+    chat_id = update.effective_chat.id
+    if chat_id in sessions:
+        await update.message.reply_text("⏳ توجد جلسة قيد التنفيذ بالفعل — أرسل /stop لإيقافها أولاً.")
+        return
+    if context.args:
+        symbol = context.args[0].upper()
+        await update.message.reply_text(f"⏳ يفحص عقود {symbol}...")
+        _start_session(chat_id, _run_ticker_session(chat_id, symbol, context.application))
     else:
-        state.save()
-        await query.message.reply_text(
-            "✅ تم تسجيل موافقتك على إخلاء المسؤولية.\n\n"
-            "الخدمة بـ*اشتراك مدفوع*. للاشتراك تواصل مع "
-            f"{config.SUBSCRIBE_CONTACT} وأرسل له رقم معرّفك التالي:\n"
-            f"`{chat_id}`\n\n"
-            "سيصلك إشعار فور تفعيل اشتراكك.",
-            parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(
+            f"📊 بدأ فحص وحدة الأوبشن ({len(config.OPTIONS_WATCHLIST)} سهم)... "
+            f"حتى {config.SESSION_TIMEOUT_SECONDS // 60} دقائق أو /stop للإيقاف الفوري.")
+        _start_session(chat_id, _run_watchlist_session(
+            chat_id, "📊 نتائج فحص الأوبشن", options_module.scan, options_module.format_result,
+            context.application))
+
+
+async def cmd_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_membership(update):
+        return
+    chat_id = update.effective_chat.id
+    if chat_id in sessions:
+        await update.message.reply_text("⏳ توجد جلسة قيد التنفيذ بالفعل — أرسل /stop لإيقافها أولاً.")
+        return
+    await update.message.reply_text(
+        f"🪙 بدأ فحص وحدة الكريبتو ({len(config.CRYPTO_WATCHLIST)} عملة)... "
+        f"حتى {config.SESSION_TIMEOUT_SECONDS // 60} دقائق أو /stop للإيقاف الفوري.")
+    _start_session(chat_id, _run_watchlist_session(
+        chat_id, "🪙 نتائج فحص الكريبتو", crypto_module.scan, crypto_module.format_result,
+        context.application))
 
 
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    state.subscribers.discard(update.effective_chat.id)
-    state.save()
-    await update.message.reply_text("تم إيقاف التنبيهات. أرسل /start لإعادة التفعيل.")
-
-
-async def require_subscription(update: Update) -> bool:
     chat_id = update.effective_chat.id
-    if eligible(chat_id):
-        return True
-    if str(chat_id) not in state.accepted:
-        await update.message.reply_text(
-            "أرسل /start أولاً للاطلاع على إخلاء المسؤولية والموافقة عليه.")
-    else:
-        await update.message.reply_text(
-            f"هذه الخدمة باشتراك مدفوع. للاشتراك تواصل مع {config.SUBSCRIBE_CONTACT} "
-            f"وأرسل له معرّفك: {chat_id}")
-    return False
-
-
-async def _send_active_signals(update: Update):
-    """Private catch-up: re-fetch and resend every symbol currently in the
-    dedup memory that still qualifies. A subscriber who joins while the
-    background scan already holds scan_lock would otherwise see nothing
-    until a genuinely new/changed signal appears — the ordinary dedup path
-    only pushes brand-new or changed signals from the moment they join, it
-    never backfills whatever was already active before that."""
-    symbols = sorted(state.last_alerts)
-    if not symbols:
-        await update.message.reply_text("لا توجد إشارات نشطة حالياً في الذاكرة.")
+    task = sessions.get(chat_id)
+    if task is None:
+        await update.message.reply_text("لا توجد جلسة قيد التنفيذ حالياً.")
         return
-    sent = 0
-    for symbol in symbols:
-        try:
-            frames = await asyncio.to_thread(data_mod.fetch_batch, [symbol])
-        except Exception:
-            log.exception("Catch-up fetch failed for %s", symbol)
-            continue
-        df = frames.get(symbol)
-        if df is None:
-            continue
-        m = await asyncio.to_thread(engine.evaluate_symbol, symbol, df)
-        if m.score < config.FILTERS_REQUIRED:
-            continue
-        if not (await filter_by_options([m])):
-            continue
-        await attach_charts([m])
-        await attach_sentiment([m])
-        await _reply_match(update, ALERT_HEADER, m)
-        sent += 1
-    if not sent:
-        await update.message.reply_text("لا توجد إشارات نشطة تحقق الشروط حالياً.")
-
-
-async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await require_subscription(update):
-        return
-    # Register the caller as a subscriber FIRST, before checking scan_lock:
-    # the background scan now runs continuously (see scan_loop_job), so a
-    # full pass holds scan_lock for most of every cycle (15-40+ minutes).
-    # Registering only after the lock check meant /scan almost always hit
-    # the "already running" branch and returned before ever subscribing the
-    # caller — they'd press /scan repeatedly and never receive anything,
-    # even though the background scan was actively finding and broadcasting
-    # matches to everyone already subscribed.
-    state.subscribers.add(update.effective_chat.id)
-    state.save()
-    if scan_lock.locked():
-        await update.message.reply_text(
-            "⏳ يوجد مسح قيد التنفيذ حالياً — تم تسجيلك، وسأرسل لك الآن نسخة "
-            "خاصة من أي إشارة نشطة حالياً بدلاً من الانتظار حتى تكتمل هذه الدورة."
-        )
-        await _send_active_signals(update)
-        return
-    await update.message.reply_text(
-        "🔎 بدأ المسح اليدوي لكل الأسهم الأمريكية... "
-        "سأرسل كل إشارة فور اكتشافها، ثم رسالة عند اكتمال المسح "
-        "(المسح الكامل يستغرق 15-40 دقيقة)."
-    )
-    await do_scan(context.application, only_changes=False, notify_empty=True)
-
-
-async def _reply_match(update: Update, header: str, m):
-    """Send one Match's chart+detail as a private reply (never broadcast)."""
-    text = f"{header}\n\n{format_match(m)}\n\n{ALERT_FOOTER}"
-    if not m.chart_png:
-        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
-    elif len(text) <= CHART_CAPTION_LIMIT:
-        await update.message.reply_photo(photo=io.BytesIO(m.chart_png), caption=text,
-                                         parse_mode=ParseMode.MARKDOWN)
-    else:
-        await update.message.reply_photo(
-            photo=io.BytesIO(m.chart_png),
-            caption=f"{header}\n\n*{m.symbol}* — {m.score}/{m.total_filters}",
-            parse_mode=ParseMode.MARKDOWN)
-        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
-
-
-async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/check <symbol> — fetch a stock on demand with the same additions as a
-    real alert (chart, options, وجهة نظر البوت), replied privately to
-    whoever asked. Not a real alert: no performance tracking.
-
-    Tapping the command from Telegram's own "/" suggestion list sends it
-    immediately with no way to type a symbol alongside it — a Telegram
-    client behavior, not something a bot can override. So when /check
-    arrives with no argument, we ask for the symbol as a follow-up message
-    instead of forcing the user to retype the whole command by hand.
-    """
-    if not await require_subscription(update):
-        return
-    if not context.args:
-        pending_check[update.effective_chat.id] = time.time()
-        await update.message.reply_text(
-            "أرسل الآن رمز السهم فقط في رسالة منفصلة (مثال: AAPL)\n"
-            "أو اكتب الأمر كاملاً دفعة واحدة: /check AAPL")
-        return
-    await _do_check(update, context, context.args[0].upper())
-
-
-async def _do_check(update: Update, context: ContextTypes.DEFAULT_TYPE, symbol: str):
-    await update.message.reply_text(f"⏳ يجلب بيانات {symbol}...")
-    try:
-        frames = await asyncio.to_thread(data_mod.fetch_batch, [symbol])
-    except Exception:
-        log.exception("Check fetch failed for %s", symbol)
-        frames = {}
-    df = frames.get(symbol)
-    if df is None:
-        await update.message.reply_text(
-            f"⚠️ تعذر جلب بيانات لسهم {symbol}. تأكد من صحة الرمز.")
-        return
-
-    m = await asyncio.to_thread(engine.evaluate_symbol, symbol, df)
-    await attach_options([m])
-    await attach_charts([m])
-    await attach_sentiment([m])
-    await _reply_match(update, CHECK_HEADER, m)
-
-
-CHECK_PENDING_TTL = 180  # seconds a "waiting for a symbol" prompt stays active
-
-
-async def handle_pending_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Follow-up to a bare /check: the next plain-text message from that chat
-    (within CHECK_PENDING_TTL) is treated as the symbol. Any other free text,
-    or one that arrives too late, is silently ignored — the bot has no
-    general chat feature."""
-    chat_id = update.effective_chat.id
-    asked_at = pending_check.pop(chat_id, None)
-    if asked_at is None or time.time() - asked_at > CHECK_PENDING_TTL:
-        return
-    text = (update.message.text or "").strip()
-    if not text:
-        return
-    await _do_check(update, context, text.split()[0].upper())
-
-
-async def cmd_cheap_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/cheapoptions [max_contract_price] — scan the current qualified list
-    (the same liquid symbols the regular cycle scans) for stocks with at
-    least one reliable CALL contract at or under the price cap (default 50$,
-    meaning premium <= 0.50$/share since a contract is 100 shares). Replies
-    privately; can take several minutes (one options-chain fetch per liquid
-    symbol — there is no batched cross-symbol options API)."""
-    if not await require_subscription(update):
-        return
-    if cheap_options_lock.locked():
-        await update.message.reply_text("⏳ يوجد بحث آخر عن عقود رخيصة قيد التنفيذ، انتظر انتهاءه.")
-        return
-    try:
-        max_contract = float(context.args[0]) if context.args else config.CHEAP_OPTION_DEFAULT_MAX
-        if max_contract <= 0:
-            raise ValueError
-    except ValueError:
-        await update.message.reply_text(
-            "الصيغة: /cheapoptions [الحد الأقصى لسعر العقد بالدولار]\n"
-            "مثال: /cheapoptions 50")
-        return
-    max_premium = max_contract / 100.0
-
-    symbols = await asyncio.to_thread(universe.load_qualified)
-    if not symbols:
-        await update.message.reply_text(
-            "⚠️ القائمة المؤهلة غير جاهزة بعد (تُبنى مع أول دورة مسح كاملة). "
-            "جرّب /scan أولاً ثم أعد المحاولة بعد قليل.")
-        return
-
-    async with cheap_options_lock:
-        status = await update.message.reply_text(
-            f"🔎 يبحث عن عقود لا يتجاوز سعرها {max_contract:.0f}$ ضمن {len(symbols)} سهم "
-            "من القائمة المؤهلة... قد يستغرق هذا عدة دقائق."
-        )
-        found = []
-        processed = 0
-        for batch in engine.make_batches(symbols):
-            try:
-                frames = await asyncio.to_thread(data_mod.fetch_batch, batch)
-            except Exception:
-                log.exception("cheapoptions batch download failed (%s..)", batch[0])
-                continue
-            for sym, df in frames.items():
-                if not data_mod.passes_liquidity(df):
-                    continue
-                price = float(df["Close"].iloc[-1])
-                try:
-                    picks = await asyncio.to_thread(
-                        options.find_cheap_contracts, sym, price, max_premium)
-                except (options.OptionsFetchError, options.NoNearTermOptions):
-                    picks = {"call": []}
-                if picks["call"]:
-                    found.append((sym, price, picks))
-                processed += 1
-                if processed % config.CHEAP_OPTIONS_PROGRESS_EVERY == 0:
-                    try:
-                        await status.edit_text(
-                            f"🔎 جارٍ البحث... {processed}/{len(symbols)} سهم "
-                            f"({len(found)} نتيجة حتى الآن)")
-                    except Exception:
-                        pass
-                await asyncio.sleep(config.CHEAP_OPTIONS_PACE_SECONDS)
-
-        if not found:
-            await update.message.reply_text(
-                f"لم يُعثر على أسهم بعقود لا يتجاوز سعرها {max_contract:.0f}$ "
-                "ضمن القائمة الحالية.")
-            return
-
-        header = f"📊 أسهم بعقود لا يتجاوز سعرها {max_contract:.0f}$ للعقد ({len(found)} سهم):"
-        chunks, current = [], header
-        for sym, price, picks in found:
-            block = "\n\n" + format_cheap_picks(sym, price, picks)
-            if len(current) + len(block) > MSG_LIMIT:
-                chunks.append(current)
-                current = format_cheap_picks(sym, price, picks)
-            else:
-                current += block
-        chunks.append(current)
-        for chunk in chunks:
-            await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
-
-
-async def cmd_disclaimer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(DISCLAIMER, parse_mode=ParseMode.MARKDOWN)
-
-
-# --------------------------------------------------------- admin commands
-
-def _fmt_expiry(expiry: float) -> str:
-    if expiry == 0:
-        return "مدى الحياة"
-    return dt.datetime.fromtimestamp(expiry, NY).strftime("%Y-%m-%d")
-
-
-async def cmd_approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/approve <chat_id> [days] — activate a paying subscriber (0 = lifetime)."""
-    if not is_admin(update.effective_chat.id):
-        return
-    try:
-        target = int(context.args[0])
-        days = int(context.args[1]) if len(context.args) > 1 else config.DEFAULT_SUB_DAYS
-    except (IndexError, ValueError):
-        await update.message.reply_text(
-            "الصيغة: /approve <chat_id> [عدد الأيام]\n"
-            "مثال: /approve 123456789 30 — أو 0 أيام لاشتراك دائم")
-        return
-    expiry = 0 if days == 0 else time.time() + days * 86400
-    state.approved[str(target)] = expiry
-    if str(target) in state.accepted:
-        state.subscribers.add(target)
-    state.save()
-    await update.message.reply_text(
-        f"✅ تم تفعيل {target} حتى: {_fmt_expiry(expiry)}")
-    try:
-        await context.bot.send_message(
-            target,
-            f"🎉 تم تفعيل اشتراكك حتى: {_fmt_expiry(expiry)}\n"
-            + ("ستصلك الإشارات تلقائياً." if str(target) in state.accepted
-               else "أرسل /start للموافقة على إخلاء المسؤولية وبدء الاستقبال."))
-    except Exception:
-        await update.message.reply_text(
-            "⚠️ لم أستطع مراسلته (ربما لم يبدأ محادثة مع البوت بعد).")
-
-
-async def cmd_revoke(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/revoke <chat_id> — cancel a subscription."""
-    if not is_admin(update.effective_chat.id):
-        return
-    try:
-        target = int(context.args[0])
-    except (IndexError, ValueError):
-        await update.message.reply_text("الصيغة: /revoke <chat_id>")
-        return
-    state.approved.pop(str(target), None)
-    state.subscribers.discard(target)
-    state.save()
-    await update.message.reply_text(f"🚫 أُلغي اشتراك {target}")
-
-
-async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/reset — wipe scan memory (dedup + hot list + qualified list) so the
-    next cycle is a fresh full pass and everything alerts again (admin)."""
-    global hotlist
-    if not is_admin(update.effective_chat.id):
-        return
-    state.last_alerts = {}
-    state.save()
-    hotlist = set()
-    try:
-        os.remove(config.QUALIFIED_FILE)
-    except FileNotFoundError:
-        pass
-    await update.message.reply_text(
-        "🧹 مُسحت ذاكرة المسح بالكامل (التنبيهات السابقة + القائمة الساخنة + "
-        "القائمة المؤهلة).\nالدورة القادمة ستكون دورة كاملة على كل الأسهم "
-        "وستصلك كل الإشارات الحالية من جديد خلال دقائق. "
-        "المشتركون وموافقاتهم لم يتأثروا.")
-    log.info("Scan memory reset by admin")
-
-
-async def cmd_subs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/subs — list active subscriptions (admin)."""
-    if not is_admin(update.effective_chat.id):
-        return
-    if not state.approved:
-        await update.message.reply_text("لا يوجد مشتركون مفعّلون.")
-        return
-    lines = ["المشتركون المفعّلون:"]
-    for cid, expiry in sorted(state.approved.items()):
-        active = "🟢" if eligible(int(cid)) else "🔴"
-        accepted = "✅" if cid in state.accepted else "⬜"
-        lines.append(f"{active} {cid} — حتى {_fmt_expiry(expiry)} — الإخلاء: {accepted}")
-    await update.message.reply_text("\n".join(lines))
-
-
-PREVIEW_BANNER = (
-    "🧪 *مثال توضيحي فقط — ليس تنبيهاً حقيقياً ولا توصية*\n"
-    "هذا نموذج لشكل الرسالة القادمة، مبني على بيانات حقيقية لسهم مذكور هنا "
-    "لغرض العرض فقط — بصرف النظر عن نتيجة فلاتره الفعلية حالياً.\n"
-)
-
-
-async def cmd_preview_alert(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/previewalert [ticker] — admin only: broadcast a clearly-labeled
-    example alert (real market data, real chart/options/sentiment) to every
-    current subscriber, so they see the new format without it being mistaken
-    for a real signal. Never touches performance tracking (not a real alert)."""
-    if not is_admin(update.effective_chat.id):
-        return
-    symbol = context.args[0].upper() if context.args else "AAPL"
-    await update.message.reply_text(f"⏳ يجهّز مثالاً توضيحياً لسهم {symbol}...")
-    try:
-        frames = await asyncio.to_thread(data_mod.fetch_batch, [symbol])
-    except Exception:
-        log.exception("Preview fetch failed for %s", symbol)
-        frames = {}
-    df = frames.get(symbol)
-    if df is None:
-        await update.message.reply_text(
-            f"⚠️ تعذر جلب بيانات لسهم {symbol}. جرّب رمزاً آخر، مثل: /previewalert MSFT")
-        return
-
-    m = await asyncio.to_thread(engine.evaluate_symbol, symbol, df)
-    await attach_options([m])
-    await attach_charts([m])
-    await attach_sentiment([m])
-
-    perf_line = await asyncio.to_thread(performance.compact_summary)
-    body = f"{PREVIEW_BANNER}\n{ALERT_HEADER}\n\n{format_match(m)}\n\n{ALERT_FOOTER}"
-    if perf_line:
-        body += f"\n{perf_line}"
-
-    if not m.chart_png:
-        await broadcast(context.application, body)
-    elif len(body) <= CHART_CAPTION_LIMIT:
-        await broadcast_photo(context.application, m.chart_png, body)
-    else:
-        await broadcast_photo(context.application, m.chart_png,
-                              f"{PREVIEW_BANNER}\n{ALERT_HEADER}")
-        await broadcast(context.application, body)
-
-    await update.message.reply_text(
-        f"✅ تم إرسال المثال التوضيحي لكل المشتركين ({len(state.subscribers)}).")
+    cancel_event = cancel_events.get(chat_id)
+    if cancel_event is not None:
+        cancel_event.set()
+    task.cancel()
+    await update.message.reply_text("⏹️ جارٍ إيقاف الجلسة...")
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    open_now = "مفتوح ✅" if market_is_open() else "مغلق ❌"
-    scanning = "نعم ⏳" if scan_lock.locked() else "لا"
     chat_id = update.effective_chat.id
     if is_admin(chat_id):
-        sub_line = "أنت المشرف 👑"
+        member_line = "أنت المشرف 👑"
     elif eligible(chat_id):
-        sub_line = f"مفعّل حتى {_fmt_expiry(sub_expiry(chat_id))} ✅"
+        expiry = sub_expiry(chat_id)
+        member_line = "عضو مفعّل ✅" if expiry == 0 else f"عضو مفعّل حتى {time.strftime('%Y-%m-%d', time.localtime(expiry))} ✅"
     else:
-        sub_line = "غير مفعّل ❌"
-    qualified = universe.load_qualified()
-    universe_line = (f"قائمة مؤهلة ({len(qualified)} سهم)" if qualified
-                     else "دورة تأهيل كاملة (كل الأسهم)")
-    throttle_line = (f"نشطة مؤقتاً ({throttle.delay:.0f} ثانية بين الدفعات)"
-                     if throttle.active else "غير نشطة")
-    stock_scan_line = ("متوقف 🚫 (خارج وقت المسح: 9:30 ص ET حتى 3:00 فجراً بتوقيت الرياض)"
-                       if market_calendar.scan_paused() else "نشط ✅")
+        member_line = "غير مصرح لك ❌ (الخدمة مقفلة على الأعضاء الحاليين فقط)"
+    session_line = "قيد التنفيذ ⏳ (أرسل /stop لإيقافها)" if chat_id in sessions else "لا توجد"
+    market_line = "مفتوح ✅" if market_calendar.market_is_open() else "مغلق ❌"
     await update.message.reply_text(
-        f"اشتراكك: {sub_line}\n"
-        f"السوق الأمريكي الآن: {open_now}\n"
-        f"مسح الأسهم: {stock_scan_line}\n"
-        f"نطاق الأسهم: {universe_line}\n"
-        f"القائمة الساخنة 🔥: {len(hotlist)} رمز (فحص كل {config.HOTLIST_INTERVAL_SECONDS // 60} دقيقة)\n"
-        f"التهدئة التلقائية: {throttle_line}\n"
-        f"مسح قيد التنفيذ: {scanning}\n"
-        f"عدد المشتركين: {len(state.subscribers)}\n"
-        f"إشارات في الذاكرة: {len(state.last_alerts)}\n"
-        f"الشرط: {config.FILTERS_REQUIRED}/{len(FILTERS)} فلاتر • الفريم: {config.INTERVAL}"
+        f"عضويتك: {member_line}\n"
+        f"جلستك الحالية: {session_line}\n"
+        f"السوق الأمريكي الآن: {market_line}\n\n"
+        "الأوامر المتاحة:\n"
+        "/stocks — فحص وحدة الأسهم\n"
+        "/options — فحص وحدة الأوبشن\n"
+        "/options <رمز> — فحص عقود سهم محدد\n"
+        "/crypto — فحص وحدة الكريبتو\n"
+        "/stop — إيقاف الجلسة الحالية فوراً\n"
+        "/status — هذه الرسالة\n\n"
+        f"كل جلسة تتوقف تلقائياً بعد {config.SESSION_TIMEOUT_SECONDS // 60} دقائق كحد أقصى.\n"
+        f"{FOOTER}"
     )
-
-
-async def cmd_performance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Public track record: each alert's return vs SPY (pure price math)."""
-    text = await asyncio.to_thread(performance.summary_text)
-    await update.message.reply_text(text)
 
 
 async def on_error(update, context: ContextTypes.DEFAULT_TYPE):
     log.error("Unhandled error", exc_info=context.error)
 
 
-PUBLIC_COMMANDS = [
-    BotCommand("start", "التسجيل والموافقة على إخلاء المسؤولية"),
-    BotCommand("scan", "مسح فوري لكل السوق"),
-    BotCommand("check", "فحص سهم محدد: /check <رمز>"),
-    BotCommand("cheapoptions", "بحث عن أسهم بعقود رخيصة: /cheapoptions [سعر]"),
-    BotCommand("status", "حالة البوت واشتراكك"),
-    BotCommand("disclaimer", "عرض إخلاء المسؤولية"),
-    BotCommand("performance", "سجل أداء الإشارات مقابل السوق"),
-    BotCommand("stop", "إيقاف التنبيهات"),
-]
-ADMIN_COMMANDS = PUBLIC_COMMANDS + [
-    BotCommand("approve", "تفعيل مشترك: /approve <id> <أيام>"),
-    BotCommand("revoke", "إلغاء اشتراك: /revoke <id>"),
-    BotCommand("subs", "قائمة المشتركين"),
-    BotCommand("reset", "مسح ذاكرة المسح والبدء من جديد"),
-    BotCommand("previewalert", "إرسال مثال توضيحي لشكل التنبيه لكل المشتركين"),
-]
-
-
-async def post_init(app: Application):
-    """Telegram command menus by scope: everyone sees the public commands;
-    the admin commands appear only in the admin's own chat menu."""
-    try:
-        await app.bot.set_my_commands(PUBLIC_COMMANDS,
-                                      scope=BotCommandScopeDefault())
-        if config.ADMIN_CHAT_ID:
-            await app.bot.set_my_commands(
-                ADMIN_COMMANDS,
-                scope=BotCommandScopeChat(chat_id=config.ADMIN_CHAT_ID))
-        log.info("Command menus set (admin scope: %s)", bool(config.ADMIN_CHAT_ID))
-    except Exception:
-        log.exception("Failed to set command menus")
-
-
 def main():
     if not config.BOT_TOKEN:
         raise SystemExit("Set TELEGRAM_BOT_TOKEN environment variable")
-    app = (Application.builder().token(config.BOT_TOKEN)
-           .post_init(post_init).build())
+    app = Application.builder().token(config.BOT_TOKEN).build()
     app.add_error_handler(on_error)
-    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("stocks", cmd_stocks))
+    app.add_handler(CommandHandler("options", cmd_options))
+    app.add_handler(CommandHandler("crypto", cmd_crypto))
     app.add_handler(CommandHandler("stop", cmd_stop))
-    app.add_handler(CommandHandler("scan", cmd_scan))
-    app.add_handler(CommandHandler("check", cmd_check))
-    app.add_handler(CommandHandler("cheapoptions", cmd_cheap_options))
     app.add_handler(CommandHandler("status", cmd_status))
-    app.add_handler(CommandHandler("disclaimer", cmd_disclaimer))
-    app.add_handler(CommandHandler("approve", cmd_approve))
-    app.add_handler(CommandHandler("revoke", cmd_revoke))
-    app.add_handler(CommandHandler("subs", cmd_subs))
-    app.add_handler(CommandHandler("reset", cmd_reset))
-    app.add_handler(CommandHandler("performance", cmd_performance))
-    app.add_handler(CommandHandler("previewalert", cmd_preview_alert))
-    app.add_handler(CallbackQueryHandler(on_accept, pattern="^accept_disclaimer$"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_pending_check))
-    # Self-rescheduling jobs (see scan_loop_job/hot_job) so the pace can
-    # widen at night; just kick off the first run of each here.
-    app.job_queue.run_once(scan_loop_job, when=10)
-    app.job_queue.run_once(hot_job, when=90)
-    app.job_queue.run_repeating(performance_job,
-                                interval=config.PERFORMANCE_CHECK_INTERVAL_SECONDS, first=120)
-    log.info("Bot starting (polling)")
+    log.info("Bot starting (polling, manual commands only)")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
