@@ -276,27 +276,42 @@ BOT_COMMANDS = [
 ]
 
 
-async def post_init(app: Application):
-    """Overwrites Telegram's cached "/" command menu -- without this call
-    the client keeps showing whatever command list an older version of the
-    bot last registered, even after those handlers are removed from the
-    code.
+# Telegram resolves a client's "/" menu by the MOST SPECIFIC (scope,
+# language_code) pair that has commands set for it; a per-chat scope beats
+# the default scope, and a language-specific list beats the "all languages"
+# (language_code unset) list within the same scope. Different Telegram
+# clients have shown at least two different stale menus for this bot that
+# don't match anything in this repo's history (i.e. they were set manually,
+# probably via @BotFather, at unknown scope/language combinations) -- so
+# rather than guess, every plausible combination is cleared here on every
+# startup, then only the intended default-scope/no-language list is set.
+_CANDIDATE_LANGS = [None, "ar", "en"]
 
-    The previous version of this bot also set a *chat-specific* admin menu
-    (BotCommandScopeChat for ADMIN_CHAT_ID) with its own extra commands
-    (/approve, /revoke, /previewalert...). A per-chat scope always takes
-    priority over the default scope, so overwriting only the default list
-    left the admin's own client still showing that old chat-specific menu.
-    Deleting it here makes the admin's client fall back to the same
-    default-scope list everyone else gets.
-    """
+
+async def post_init(app: Application):
+    """Wipes every plausible leftover command-menu scope/language, logs
+    what was actually found server-side (so a stale menu can be diagnosed
+    from the Railway logs instead of guessed at), then sets the single
+    default-scope menu everyone -- including the admin -- should see."""
+    scopes = [("default", BotCommandScopeDefault())]
+    if config.ADMIN_CHAT_ID:
+        scopes.append(("admin_chat", BotCommandScopeChat(chat_id=config.ADMIN_CHAT_ID)))
+
     try:
+        for scope_name, scope in scopes:
+            for lang in _CANDIDATE_LANGS:
+                try:
+                    existing = await app.bot.get_my_commands(scope=scope, language_code=lang)
+                    if existing:
+                        log.info("Found stale menu at scope=%s lang=%s: %s",
+                                 scope_name, lang, [c.command for c in existing])
+                    await app.bot.delete_my_commands(scope=scope, language_code=lang)
+                except Exception:
+                    log.exception("Could not inspect/clear scope=%s lang=%s", scope_name, lang)
+
         await app.bot.set_my_commands(BOT_COMMANDS, scope=BotCommandScopeDefault())
-        if config.ADMIN_CHAT_ID:
-            await app.bot.delete_my_commands(
-                scope=BotCommandScopeChat(chat_id=config.ADMIN_CHAT_ID))
-        log.info("Command menu set (%d commands); admin chat-scope override cleared: %s",
-                 len(BOT_COMMANDS), bool(config.ADMIN_CHAT_ID))
+        log.info("Command menu set (%d commands) at default scope, all stale overrides cleared",
+                 len(BOT_COMMANDS))
     except Exception:
         log.exception("Failed to set command menu")
 
