@@ -124,20 +124,23 @@ async def _send_row(app, chat_id: int, row: dict, format_fn):
 
 # ------------------------------------------------------- session machinery
 
-async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, app):
-    """Runs a module's scan() under the shared SESSION_TIMEOUT_SECONDS cap
-    and instant-/stop cancellation; sends each result as its OWN message
-    (never batched) and a timeout/stop/error notice as its own message too.
-    A failure here is this module's problem alone -- it never touches
-    another module's session."""
+async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, app,
+                                 timeout_seconds: int | None = None):
+    """Runs a module's scan() under its own session-timeout cap (defaults to
+    SESSION_TIMEOUT_SECONDS; /options passes a longer one -- see
+    OPTIONS_SESSION_TIMEOUT_SECONDS) and instant-/stop cancellation; sends
+    each result as its OWN message (never batched) and a timeout/stop/error
+    notice as its own message too. A failure here is this module's problem
+    alone -- it never touches another module's session."""
+    timeout_seconds = timeout_seconds or config.SESSION_TIMEOUT_SECONDS
     cancel_event = asyncio.Event()
     cancel_events[chat_id] = cancel_event
     try:
         try:
-            results = await asyncio.wait_for(scan_fn(cancel_event),
-                                             timeout=config.SESSION_TIMEOUT_SECONDS)
+            results = await asyncio.wait_for(scan_fn(cancel_event), timeout=timeout_seconds)
         except asyncio.TimeoutError:
-            await _send(app, chat_id, f"⏰ {title} — انتهت الجلسة (تجاوزت 5 دقائق).")
+            await _send(app, chat_id,
+                       f"⏰ {title} — انتهت الجلسة (تجاوزت {timeout_seconds // 60} دقيقة).")
             return
         if cancel_event.is_set():
             await _send(app, chat_id, f"⏹️ {title} — تم إيقاف الجلسة.")
@@ -231,10 +234,11 @@ async def cmd_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(
             f"📊 بدأ فحص وحدة الأوبشن ({len(config.OPTIONS_WATCHLIST)} سهم)... "
-            f"حتى {config.SESSION_TIMEOUT_SECONDS // 60} دقائق أو /stop للإيقاف الفوري.")
+            f"قد يستغرق حتى {config.OPTIONS_SESSION_TIMEOUT_SECONDS // 60} دقيقة "
+            f"(قائمة أكبر تحتاج وقتاً أطول) أو /stop للإيقاف الفوري.")
         _start_session(chat_id, _run_watchlist_session(
             chat_id, "📊 نتائج فحص الأوبشن", options_module.scan, options_module.format_result,
-            context.application))
+            context.application, timeout_seconds=config.OPTIONS_SESSION_TIMEOUT_SECONDS))
 
 
 async def cmd_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -287,7 +291,8 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/crypto — فحص وحدة الكريبتو\n"
         "/stop — إيقاف الجلسة الحالية فوراً\n"
         "/status — هذه الرسالة\n\n"
-        f"كل جلسة تتوقف تلقائياً بعد {config.SESSION_TIMEOUT_SECONDS // 60} دقائق كحد أقصى.\n"
+        f"كل جلسة تتوقف تلقائياً بعد {config.SESSION_TIMEOUT_SECONDS // 60} دقائق كحد أقصى "
+        f"(الأوبشن حتى {config.OPTIONS_SESSION_TIMEOUT_SECONDS // 60} دقيقة، لقائمته الأكبر).\n"
         f"{FOOTER}"
     )
 

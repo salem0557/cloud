@@ -41,10 +41,14 @@ BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 # --- editable only by hand-editing the state file on disk. ---
 ADMIN_CHAT_ID = _int("ADMIN_CHAT_ID", 0)   # your own Telegram chat id (always eligible)
 
-# --- Manual-command sessions: every /stocks, /options or /crypto run is
-# --- capped at this long, then auto-stops with a "انتهت الجلسة" notice.
-# --- /stop cancels a running session instantly. ---
+# --- Manual-command sessions: every /stocks or /crypto run is capped at
+# --- this long, then auto-stops with a "انتهت الجلسة" notice. /stop
+# --- cancels a running session instantly. /options gets its own, longer
+# --- cap (see OPTIONS_SESSION_TIMEOUT_SECONDS) since its watchlist is much
+# --- bigger and each symbol needs a full options-chain fetch, not just a
+# --- quote. ---
 SESSION_TIMEOUT_SECONDS = _int("SESSION_TIMEOUT_SECONDS", 300)
+OPTIONS_SESSION_TIMEOUT_SECONDS = _int("OPTIONS_SESSION_TIMEOUT_SECONDS", 1200)
 
 # --- Data fetching (stocks + options watchlists; yfinance) ---
 DOWNLOAD_THREADS = _int("DOWNLOAD_THREADS", 12)
@@ -115,11 +119,14 @@ OPTIONS_ASK_MAX = _float("OPTIONS_ASK_MAX", 2.00)
 # filters above.
 OPTIONS_MIN_POP = _float("OPTIONS_MIN_POP", 50.0)
 
-# ~100 of the most liquid, most actively-optioned US stocks (mega-cap tech,
-# popular high-options-volume names) -- a separate list from STOCKS_WATCHLIST
-# on purpose, since "actively traded options" and "matches a reversal-up
-# technical setup" are unrelated properties. Edit freely.
-OPTIONS_WATCHLIST = sorted(set([
+# A much broader liquid-options watchlist (300-500 names) -- still a
+# separate list from STOCKS_WATCHLIST on purpose, since "actively traded
+# options" and "matches a reversal-up technical setup" are unrelated
+# properties. Bigger than the stocks module's implicit price band, so a
+# single /options run takes noticeably longer (see
+# OPTIONS_SESSION_TIMEOUT_SECONDS below) -- edit freely, but every name
+# added trades directly against how long a full scan takes.
+_OPTIONS_CORE = [
     "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD", "NFLX", "AVGO",
     "CRM", "ORCL", "ADBE", "INTC", "QCOM", "MU", "PYPL", "SHOP", "UBER", "PLTR",
     "SNOW", "NET", "CRWD", "ZS", "DDOG", "MDB", "PANW", "NOW", "TEAM", "ABNB",
@@ -130,7 +137,50 @@ OPTIONS_WATCHLIST = sorted(set([
     "NIO", "XPEV", "LI", "TSM", "ASML", "MRNA", "PFE", "JNJ", "UNH", "CVS",
     "LLY", "KO", "PEP", "COST", "T", "VZ", "CMCSA", "PARA", "WBD", "CAT",
     "DE", "BKNG", "ISRG", "REGN", "VRTX", "GILD", "APP", "ARM", "SMCI",
-]))
+]
+# Large/mid-cap names across every sector (same base list the stocks module
+# used before it switched to a full-market scan) -- virtually all of these
+# have liquid, actively-traded options.
+_OPTIONS_LARGE_MID_CAP = [
+    "GOOG", "PEP", "LIN", "CSCO", "TMUS", "TXN", "AMGN", "HON", "AMAT", "ISRG",
+    "ADP", "MDLZ", "LRCX", "ADI", "KLAC", "SNPS", "CDNS", "MELI", "MAR", "ORLY",
+    "CTAS", "CSX", "WDAY", "FTNT", "PCAR", "ROP", "NXPI", "CHTR", "MRVL", "AEP",
+    "PAYX", "ROST", "ODFL", "EXC", "TTD", "FAST", "EA", "CPRT", "DXCM", "BKR",
+    "VRSK", "KHC", "XEL", "ANSS", "ON", "TEAM", "FANG", "WBD", "BIIB", "EBAY",
+    "TTWO", "LULU", "MCHP", "ENPH", "GLOB", "JPM", "BAC", "WFC", "SCHW", "BLK",
+    "AXP", "SPGI", "ICE", "CME", "MMC", "AON", "PGR", "TRV", "ALL", "MET",
+    "PRU", "AFL", "COF", "USB", "PNC", "TFC", "BK", "STT", "DFS", "SYF",
+    "FI", "GPN", "ABT", "TMO", "DHR", "BMY", "ABBV", "CI", "HUM", "ELV",
+    "SYK", "BSX", "MDT", "ZTS", "HCA", "BDX", "IQV", "WAT", "RMD", "EW",
+    "COP", "EOG", "SLB", "PSX", "MPC", "OXY", "WMB", "KMI", "HES", "DVN",
+    "HAL", "LMT", "RTX", "GE", "UNP", "UPS", "NOC", "GD", "EMR", "ETN",
+    "ITW", "PH", "NSC", "FDX", "WM", "RSG", "CMI", "DOV", "IR", "TT",
+    "JCI", "CMG", "TJX", "YUM", "DG", "DLTR", "PG", "PM", "MO", "CL",
+    "EL", "KMB", "GIS", "HSY", "STZ", "CLX", "K", "SYY", "ADM", "NEE",
+    "DUK", "SO", "D", "SRE", "PEG", "ED", "EIX", "WEC", "ES", "PPL",
+    "IBM", "ACN", "HPQ", "HPE", "DELL", "WDC", "STX", "DAL", "UAL", "LUV",
+    "RCL", "CCL", "NCLH", "HLT", "NUE", "FCX", "APD", "ECL", "NEM", "DD",
+    "DOW", "PPG", "VMC", "MLM", "LYB", "AMT", "PLD", "CCI", "EQIX", "PSA",
+    "O", "SPG", "WELL", "DLR", "AVB", "EQR", "SNOW", "COIN", "BRK-B",
+]
+# Popular but somewhat smaller-cap names with real, liquid options volume
+# (airlines/casinos/energy/biotech/miners/EV) -- kept to well-established,
+# still-listed tickers rather than speculative micro-caps.
+_OPTIONS_EXTRA = [
+    "AAL", "ALK", "JBLU", "SAVE", "WYNN", "MGM", "LVS", "CZR", "PENN", "FUBO",
+    "GPRO", "PLUG", "FCEL", "BE", "CHPT", "BLNK", "QS", "SPCE", "TLRY", "CGC",
+    "ACB", "ET", "EPD", "MPLX", "OKE", "TRGP", "AR", "RRC", "SWN", "CTRA",
+    "EQT", "OVV", "MRO", "APA", "PXD", "CLR", "CNX", "SU", "CNQ", "NOV",
+    "RIG", "NE", "AFRM", "UPST", "BILL", "GDDY", "HIMS", "OSCR", "CLOV", "NVAX",
+    "BNTX", "SRPT", "BMRN", "ALNY", "CRSP", "EXAS", "VEEV", "TDOC", "PODD", "TNDM",
+    "INSP", "SWAV", "NVCR", "XRAY", "MASI", "ZBH", "STE", "CRL", "LH", "THC",
+    "UHS", "CNC", "MOH", "X", "AA", "CLF", "MT", "STLD", "RS", "CMC",
+    "ATI", "CENX", "ALB", "SQM", "LAC", "MP", "UUUU", "CCJ", "DNN", "UEC",
+    "VALE", "RIO", "BHP", "GOLD", "NEM", "AEM", "KGC", "AU", "HL", "CDE",
+    "PAAS", "FSM", "EXK", "MUX", "SIRI", "TWLO", "ETSY", "W", "CHWY", "CVNA",
+    "CARG", "VRM", "OPEN", "COMP", "Z", "ZG", "RDFN", "EXPI", "DASH", "SQ",
+]
+OPTIONS_WATCHLIST = sorted(set(_OPTIONS_CORE + _OPTIONS_LARGE_MID_CAP + _OPTIONS_EXTRA))
 
 # =====================================================================
 # 3) CRYPTO module -- top ~60-by-market-cap coins via Binance public data
