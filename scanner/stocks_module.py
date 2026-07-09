@@ -3,15 +3,17 @@
 تفحص **كل** سوق الأسهم الأمريكي (NYSE + Nasdaq + AMEX عبر scanner/universe.py)
 مقيّداً بنطاق سعري STOCKS_MIN_PRICE..STOCKS_MAX_PRICE، بحثاً عن إشارات ارتداد
 صعودي: بولينجر السفلي، RSI تشبع بيعي، منطقة دعم، ووتد هابط -- يتطلب تحقق
-STOCKS_FILTERS_REQUIRED من أصل 4. تُرجع أفضل STOCKS_TOP_N نتيجة، مرتبة بعدد
-الفلاتر المتحققة ثم بأعلى "نسبة ربح محتملة".
+STOCKS_FILTERS_REQUIRED من أصل 4، وأن تحقق احتمالية ربح (Probability of
+Profit، بنفس نموذج وحدة الأوبشن اللوغاريتمي، لكن بتقلب تاريخي محسوب بدل
+تقلب ضمني) لا تقل عن STOCKS_MIN_POP. تُرجع أفضل STOCKS_TOP_N نتيجة، مرتبة
+بعدد الفلاتر المتحققة ثم بأعلى احتمالية ربح.
 
 أي خطأ في جلب أو تقييم سهم واحد لا يوقف بقية الفحص -- يُسجَّل ويُتجاوز.
 """
 import asyncio
 import logging
 
-from . import chart, config, data, universe
+from . import chart, config, data, probability, universe
 from .indicators import (check_bollinger_lower, check_falling_wedge,
                          check_rsi_oversold, check_support, fmt_price,
                          find_nearest_resistance, find_nearest_support)
@@ -75,6 +77,16 @@ def _evaluate(symbol: str, df) -> dict | None:
     else:
         profit_pct = 10.0
         target_note = "افتراضي +10%"
+    target_price = resistance if resistance is not None else price * 1.10
+
+    # Probability of profit: same lognormal model as the options module,
+    # with the underlying's own realized volatility standing in for implied
+    # volatility (there's no options market on the stock itself here).
+    vol = probability.realized_volatility(df["Close"].to_numpy(), bars_per_year=252)
+    pop = probability.probability_of_profit(
+        price, target_price, config.STOCKS_PROFIT_HORIZON_DAYS, vol)
+    if pop is None or pop < config.STOCKS_MIN_POP:
+        return None
 
     return {
         "symbol": symbol,
@@ -86,6 +98,7 @@ def _evaluate(symbol: str, df) -> dict | None:
         "profit_pct": profit_pct,
         "target_note": target_note,
         "resistance": resistance,
+        "probability_of_profit": round(pop, 1),
         "chart_png": None,
     }
 
@@ -119,7 +132,7 @@ async def scan(cancel_event: asyncio.Event | None = None) -> list[dict]:
             if row is not None:
                 found.append(row)
 
-    found.sort(key=lambda r: (len(r["matched"]), r["profit_pct"]), reverse=True)
+    found.sort(key=lambda r: (len(r["matched"]), r["probability_of_profit"]), reverse=True)
     top = found[:config.STOCKS_TOP_N]
     await _attach_charts(top, cancel_event)
     return top
@@ -155,7 +168,8 @@ def format_result(row: dict) -> str:
     matched_names = "، ".join(FILTER_NAMES[k] for k in row["matched"])
     line1 = (f"*{row['symbol']}* — {fmt_price(row['price'])} — "
              f"{len(row['matched'])}/{row['total']} ({matched_names})")
-    line2 = f"{row['target_note']} • 🎯 نسبة الربح المحتملة: {row['profit_pct']:+.1f}%"
+    line2 = (f"الهدف: {row['target_note']} ({row['profit_pct']:+.1f}%) • "
+             f"🎯 احتمالية الربح: {row['probability_of_profit']:.0f}%")
     text = f"{line1}\n{line2}"
     if row.get("explanation"):
         text += f"\n{row['explanation']}"

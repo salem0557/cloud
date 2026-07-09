@@ -8,6 +8,8 @@
 """
 import math
 
+import numpy as np
+
 RISK_FREE_RATE = 0.045
 
 
@@ -27,3 +29,19 @@ def probability_of_profit(spot: float, breakeven_price: float, days: float,
     d2 = (math.log(spot / breakeven_price) + (RISK_FREE_RATE - 0.5 * iv * iv) * t) \
         / (iv * math.sqrt(t))
     return _norm_cdf(d2) * 100
+
+
+def realized_volatility(closes, bars_per_year: float) -> float | None:
+    """تقلب سنوي مقدَّر من عوائد الإغلاق التاريخية -- بديل مجاني عن التقلب
+    الضمني (لا يوجد سوق خيارات للأسهم أو الكريبتو هنا كما في وحدة الأوبشن)،
+    يُستخدم مباشرة كمدخل لـ probability_of_profit أعلاه. None إذا كانت
+    البيانات غير كافية لتقدير موثوق."""
+    closes = np.asarray(closes, dtype=float)
+    if len(closes) < 10:
+        return None
+    log_ret = np.diff(np.log(closes))
+    log_ret = log_ret[np.isfinite(log_ret)]
+    if len(log_ret) < 10:
+        return None
+    vol = float(np.std(log_ret, ddof=0)) * math.sqrt(bars_per_year)
+    return vol if vol > 0 else None

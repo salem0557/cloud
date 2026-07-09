@@ -66,6 +66,13 @@ STOCKS_INTERVAL = os.environ.get("STOCKS_INTERVAL", "1d")
 STOCKS_PERIOD = os.environ.get("STOCKS_PERIOD", "6mo")
 STOCKS_FILTERS_REQUIRED = _int("STOCKS_FILTERS_REQUIRED", 3)   # out of 4
 STOCKS_TOP_N = _int("STOCKS_TOP_N", 5)
+# Probability of profit (lognormal, same model as the options module, but
+# with realized historical volatility standing in for implied volatility --
+# there's no options market on the stock itself here) of reaching the
+# resistance/target price within this many days. A second, independent cut
+# on top of the technical filters above.
+STOCKS_MIN_POP = _float("STOCKS_MIN_POP", 45.0)
+STOCKS_PROFIT_HORIZON_DAYS = _int("STOCKS_PROFIT_HORIZON_DAYS", 30)
 
 STOCKS_BB_PERIOD = _int("STOCKS_BB_PERIOD", 20)
 STOCKS_BB_STD = _float("STOCKS_BB_STD", 2.0)
@@ -191,6 +198,11 @@ CRYPTO_TIMEFRAME = os.environ.get("CRYPTO_TIMEFRAME", "4h")
 CRYPTO_CANDLE_LIMIT = _int("CRYPTO_CANDLE_LIMIT", 300)   # 4h bars fetched per symbol
 CRYPTO_FILTERS_REQUIRED = _int("CRYPTO_FILTERS_REQUIRED", 2)   # out of 3
 CRYPTO_TOP_N = _int("CRYPTO_TOP_N", 5)
+# Same lognormal probability-of-profit model as the stocks module (realized
+# volatility standing in for implied volatility), over a shorter horizon --
+# crypto moves faster than stocks.
+CRYPTO_MIN_POP = _float("CRYPTO_MIN_POP", 45.0)
+CRYPTO_PROFIT_HORIZON_DAYS = _int("CRYPTO_PROFIT_HORIZON_DAYS", 14)
 
 CRYPTO_BB_PERIOD = _int("CRYPTO_BB_PERIOD", 20)
 CRYPTO_BB_STD = _float("CRYPTO_BB_STD", 2.0)
