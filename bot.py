@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 
 load_dotenv()  # must run before scanner.config reads the environment
 
-from telegram import Update
+from telegram import BotCommand, Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -267,10 +267,31 @@ async def on_error(update, context: ContextTypes.DEFAULT_TYPE):
     log.error("Unhandled error", exc_info=context.error)
 
 
+BOT_COMMANDS = [
+    BotCommand("stocks", "فحص وحدة الأسهم"),
+    BotCommand("options", "فحص وحدة الأوبشن، أو /options <رمز> لسهم واحد"),
+    BotCommand("crypto", "فحص وحدة الكريبتو"),
+    BotCommand("stop", "إيقاف الجلسة الحالية فوراً"),
+    BotCommand("status", "حالة عضويتك وجلستك"),
+]
+
+
+async def post_init(app: Application):
+    """Overwrites Telegram's cached "/" command menu -- without this call
+    the client keeps showing whatever command list an older version of the
+    bot last registered, even after those handlers are removed from the
+    code."""
+    try:
+        await app.bot.set_my_commands(BOT_COMMANDS)
+        log.info("Command menu set (%d commands)", len(BOT_COMMANDS))
+    except Exception:
+        log.exception("Failed to set command menu")
+
+
 def main():
     if not config.BOT_TOKEN:
         raise SystemExit("Set TELEGRAM_BOT_TOKEN environment variable")
-    app = Application.builder().token(config.BOT_TOKEN).build()
+    app = Application.builder().token(config.BOT_TOKEN).post_init(post_init).build()
     app.add_error_handler(on_error)
     app.add_handler(CommandHandler("stocks", cmd_stocks))
     app.add_handler(CommandHandler("options", cmd_options))
