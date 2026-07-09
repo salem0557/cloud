@@ -213,10 +213,17 @@ def _add_candidate(candidates, row, spot, expiry, days):
         candidates["call"].append(raw)
 
 
-def _rank_candidates(rows: list[dict]) -> list[dict]:
-    """Keep only contracts whose delta clears DELTA_MIN, sorted by delta
-    descending (highest first) — the only selection criterion now."""
+def _rank_candidates(rows: list[dict], max_premium: float | None = None) -> list[dict]:
+    """Keep only contracts whose delta clears DELTA_MIN (and, if given, a
+    premium cap), sorted by delta descending (highest first).
+
+    max_premium is separate from OPTIONS_MAX_PREMIUM on purpose: callers
+    that already apply their own cap (find_cheap_contracts, with its own
+    user-supplied price) don't pass one here, so the two caps never fight.
+    """
     qualified = [r for r in rows if r["delta"] is not None and abs(r["delta"]) > DELTA_MIN]
+    if max_premium is not None:
+        qualified = [r for r in qualified if r["premium"] <= max_premium]
     return sorted(qualified, key=lambda r: -abs(r["delta"]))
 
 
@@ -383,12 +390,15 @@ def best_options(symbol: str, spot: float) -> dict[str, list[dict]]:
     """{'call': [top picks, highest delta first]}, each also carrying
     iv_rank/iv_percentile (see module docstring; None if unavailable).
 
-    Only filter: delta must clear DELTA_MIN (see module docstring) — not by
-    cheapest premium. Tries Yahoo first, then CBOE's free delayed chain as
-    an independent fallback. Empty list means no contract cleared the delta
-    filter (or the stock genuinely has no suitable contracts);
-    OptionsFetchError means both providers failed; NoNearTermOptions means
-    the stock has options, just none within OPTIONS_MAX_WEEKS.
+    Filters: delta must clear DELTA_MIN, and premium must not exceed
+    OPTIONS_MAX_PREMIUM per share (contract cost = premium * 100) — not by
+    cheapest premium otherwise. Tries Yahoo first, then CBOE's free delayed
+    chain as an independent fallback. Empty list means no contract cleared
+    both filters (or the stock genuinely has no suitable contracts) —
+    which suppresses that stock's alert entirely (see bot.py's
+    filter_by_options); OptionsFetchError means both providers failed;
+    NoNearTermOptions means the stock has options, just none within
+    OPTIONS_MAX_WEEKS.
     """
     out = {"call": []}
     if _no_options.get(symbol, 0) > time.time() - NO_OPTIONS_TTL:
@@ -401,7 +411,8 @@ def best_options(symbol: str, spot: float) -> dict[str, list[dict]]:
         _no_options[symbol] = time.time()
         log.info("%s has no listed options", symbol)
         return out
-    picks = _rank_candidates(candidates["call"])[:config.OPTIONS_TOP_N]
+    picks = _rank_candidates(candidates["call"],
+                             max_premium=config.OPTIONS_MAX_PREMIUM)[:config.OPTIONS_TOP_N]
     # IV Rank only for the final picks that actually get shown, and only
     # here (not find_cheap_contracts) -- that command already loops over
     # hundreds/thousands of symbols, and a full extra year of daily history

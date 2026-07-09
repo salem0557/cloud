@@ -106,6 +106,11 @@ OPTIONS_MAX_WEEKS = _int("OPTIONS_MAX_WEEKS", 13)     # nearest expiry .. ~3 mon
 OPTIONS_MAX_EXPIRIES = _int("OPTIONS_MAX_EXPIRIES", 6)  # chain requests per stock
 OPTIONS_TOP_N = _int("OPTIONS_TOP_N", 3)              # picks per side (call/put)
 OPTIONS_MIN_ACTIVITY = _int("OPTIONS_MIN_ACTIVITY", 20)  # min OI+volume per contract
+# A contract priced above this (per share; contract cost = premium * 100)
+# never qualifies as a pick. If every contract for a stock is over this
+# cap, best_options() returns no pick at all, which suppresses that
+# stock's alert entirely (see bot.py's filter_by_options).
+OPTIONS_MAX_PREMIUM = _float("OPTIONS_MAX_PREMIUM", 2.0)
 
 # --- IV Rank/Percentile: how a picked contract's IV compares to the
 # --- underlying's own realized volatility over the past year (a free proxy
