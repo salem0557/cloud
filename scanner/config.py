@@ -106,10 +106,14 @@ OPTIONS_VOLUME_MIN = _int("OPTIONS_VOLUME_MIN", 30)
 OPTIONS_OI_MIN = _int("OPTIONS_OI_MIN", 200)
 OPTIONS_IV_MAX = _float("OPTIONS_IV_MAX", 0.60)
 OPTIONS_SPREAD_MAX = _float("OPTIONS_SPREAD_MAX", 0.10)
-# Per-share ask price bound (contract cost = ask * 100), e.g. 0.30$-1.50$
-# means a 30$-150$ contract.
+# Per-share ask price bound (contract cost = ask * 100), e.g. 0.30$-2.00$
+# means a 30$-200$ contract.
 OPTIONS_ASK_MIN = _float("OPTIONS_ASK_MIN", 0.30)
-OPTIONS_ASK_MAX = _float("OPTIONS_ASK_MAX", 1.50)
+OPTIONS_ASK_MAX = _float("OPTIONS_ASK_MAX", 2.00)
+# Minimum probability of profit (%) -- a second, independent cut applied
+# after PoP is computed, on top of the delta/DTE/liquidity/IV/spread/ask
+# filters above.
+OPTIONS_MIN_POP = _float("OPTIONS_MIN_POP", 50.0)
 
 # ~100 of the most liquid, most actively-optioned US stocks (mega-cap tech,
 # popular high-options-volume names) -- a separate list from STOCKS_WATCHLIST

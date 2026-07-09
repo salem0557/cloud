@@ -74,6 +74,7 @@ def _contracts_for_symbol(symbol: str, spot: float) -> list[dict]:
         return []
     qualified = [c for c in candidates["call"] if _passes_filters(c)]
     enriched = [r for c in qualified if (r := _enrich(symbol, spot, c)) is not None]
+    enriched = [r for r in enriched if r["probability_of_profit"] >= config.OPTIONS_MIN_POP]
     enriched.sort(key=lambda c: -c["probability_of_profit"])
     return enriched
 
