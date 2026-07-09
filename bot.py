@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 
 load_dotenv()  # must run before scanner.config reads the environment
 
-from telegram import BotCommand, Update
+from telegram import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -280,10 +280,23 @@ async def post_init(app: Application):
     """Overwrites Telegram's cached "/" command menu -- without this call
     the client keeps showing whatever command list an older version of the
     bot last registered, even after those handlers are removed from the
-    code."""
+    code.
+
+    The previous version of this bot also set a *chat-specific* admin menu
+    (BotCommandScopeChat for ADMIN_CHAT_ID) with its own extra commands
+    (/approve, /revoke, /previewalert...). A per-chat scope always takes
+    priority over the default scope, so overwriting only the default list
+    left the admin's own client still showing that old chat-specific menu.
+    Deleting it here makes the admin's client fall back to the same
+    default-scope list everyone else gets.
+    """
     try:
-        await app.bot.set_my_commands(BOT_COMMANDS)
-        log.info("Command menu set (%d commands)", len(BOT_COMMANDS))
+        await app.bot.set_my_commands(BOT_COMMANDS, scope=BotCommandScopeDefault())
+        if config.ADMIN_CHAT_ID:
+            await app.bot.delete_my_commands(
+                scope=BotCommandScopeChat(chat_id=config.ADMIN_CHAT_ID))
+        log.info("Command menu set (%d commands); admin chat-scope override cleared: %s",
+                 len(BOT_COMMANDS), bool(config.ADMIN_CHAT_ID))
     except Exception:
         log.exception("Failed to set command menu")
 
