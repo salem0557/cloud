@@ -53,6 +53,7 @@ def _enrich(symbol: str, spot: float, c: dict) -> dict | None:
         "symbol": symbol, "spot": spot,
         "strike": strike, "expiry": c["expiry"], "days": days,
         "premium": premium, "estimated": c["estimated"],
+        "delta": c["delta"], "iv": iv,
         "cost": round(premium * 100, 2),
         "breakeven": round(be, 2),
         "probability_of_profit": round(pop, 1),
@@ -131,12 +132,29 @@ async def scan(cancel_event: asyncio.Event | None = None) -> list[dict]:
     return found[:config.OPTIONS_TOP_N]
 
 
+def _explain(row: dict) -> str:
+    return (f"الشرح: عقد CALL يمنحك حق شراء سهم {row['symbol']} بسعر تنفيذ "
+            f"{row['strike']:.2f}$ حتى {row['expiry']}. بناءً على التقلب الضمني الحالي "
+            f"({row['iv'] * 100:.0f}%) والأيام المتبقية ({row['days']} يوم)، احتمالية أن "
+            f"يكون السهم فوق نقطة التعادل ({fmt_price(row['breakeven'])}) عند الانتهاء "
+            f"هي {row['probability_of_profit']:.0f}%.")
+
+
 def format_result(row: dict) -> str:
-    """كل نتيجة بسطرين، مع احتمالية الربح (نسبة الربح المحتملة) بارزة في
-    نهاية السطر الثاني."""
+    """جدول نصي (monospace) لكل عقد، مع احتمالية الربح (نسبة الربح
+    المحتملة) بارزة، يليه شرح مختصر."""
     approx = "≈" if row.get("estimated") else ""
-    line1 = (f"*{row['symbol']}* — تنفيذ {row['strike']:.2f}$ • ينتهي {row['expiry']} "
-             f"({row['days']} يوم) • بريميوم {approx}{row['premium']:.2f}$")
-    line2 = (f"تكلفة {approx}{row['cost']:.0f}$/عقد • تعادل {fmt_price(row['breakeven'])} • "
-             f"🎯 نسبة الربح المحتملة: {row['probability_of_profit']:.0f}%")
-    return f"{line1}\n{line2}"
+    rows = [
+        ("السهم", f"{row['symbol']} ({fmt_price(row['spot'])})"),
+        ("تنفيذ (Strike)", f"{row['strike']:.2f}$"),
+        ("الانتهاء", f"{row['expiry']} ({row['days']} يوم)"),
+        ("بريميوم", f"{approx}{row['premium']:.2f}$"),
+        ("تكلفة العقد", f"{approx}{row['cost']:.0f}$"),
+        ("نقطة التعادل", fmt_price(row['breakeven'])),
+        ("دلتا", f"{row['delta']:.2f}" if row['delta'] is not None else "-"),
+        ("تقلب ضمني (IV)", f"{row['iv'] * 100:.0f}%" if row['iv'] is not None else "-"),
+        ("🎯 احتمالية الربح", f"{row['probability_of_profit']:.0f}%"),
+    ]
+    label_w = max(len(label) for label, _ in rows)
+    table = "\n".join(f"{label.ljust(label_w)} : {value}" for label, value in rows)
+    return f"```\n{table}\n```\n{_explain(row)}"

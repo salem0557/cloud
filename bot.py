@@ -11,6 +11,7 @@ anymore, so no new member can be added from within the bot.
 Run:  TELEGRAM_BOT_TOKEN=xxx python bot.py
 """
 import asyncio
+import io
 import logging
 import time
 
@@ -101,13 +102,34 @@ async def _send(app, chat_id: int, text: str):
             log.exception("Send to %s failed", chat_id)
 
 
+async def _send_row(app, chat_id: int, row: dict, format_fn):
+    """One result = one Telegram message: a chart photo (stocks/crypto) with
+    the summary as its caption, or a plain text message (options' table has
+    no chart) if there's no chart_png -- never batched together."""
+    text = format_fn(row)
+    png = row.get("chart_png")
+    if not png:
+        await _send(app, chat_id, text)
+        return
+    caption = text if len(text) <= 1024 else text[:1000] + "…"
+    try:
+        await app.bot.send_photo(chat_id, photo=io.BytesIO(png), caption=caption,
+                                 parse_mode=ParseMode.MARKDOWN)
+        if len(text) > 1024:
+            await _send(app, chat_id, text)  # full text (was truncated in the caption)
+    except Exception:
+        log.exception("send_photo to %s failed, falling back to text", chat_id)
+        await _send(app, chat_id, text)
+
+
 # ------------------------------------------------------- session machinery
 
 async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, app):
     """Runs a module's scan() under the shared SESSION_TIMEOUT_SECONDS cap
-    and instant-/stop cancellation; sends the results (or a timeout/stop/
-    error notice) as its own private message. A failure here is this
-    module's problem alone -- it never touches another module's session."""
+    and instant-/stop cancellation; sends each result as its OWN message
+    (never batched) and a timeout/stop/error notice as its own message too.
+    A failure here is this module's problem alone -- it never touches
+    another module's session."""
     cancel_event = asyncio.Event()
     cancel_events[chat_id] = cancel_event
     try:
@@ -123,8 +145,12 @@ async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, a
         if not results:
             await _send(app, chat_id, f"{title}\n\nلا نتائج تحقق الشروط حالياً.\n\n{FOOTER}")
             return
-        blocks = "\n\n".join(format_fn(r) for r in results)
-        await _send(app, chat_id, f"{title}\n\n{blocks}\n\n{FOOTER}")
+        await _send(app, chat_id, f"{title} — {len(results)} نتيجة:")
+        for row in results:
+            if cancel_event.is_set():
+                break
+            await _send_row(app, chat_id, row, format_fn)
+        await _send(app, chat_id, FOOTER)
     except asyncio.CancelledError:
         await _send(app, chat_id, f"⏹️ {title} — تم إيقاف الجلسة.")
     except Exception:
@@ -161,8 +187,10 @@ async def _run_ticker_session(chat_id: int, symbol: str, app):
         await _send(app, chat_id,
                     f"📊 *{symbol}* ({price_txt}) — لا يوجد عقد يحقق الشروط حالياً.\n\n{FOOTER}")
     else:
-        blocks = "\n\n".join(options_module.format_result(r) for r in contracts)
-        await _send(app, chat_id, f"📊 عقود *{symbol}* المؤهلة:\n\n{blocks}\n\n{FOOTER}")
+        await _send(app, chat_id, f"📊 عقود *{symbol}* المؤهلة — {len(contracts)}:")
+        for row in contracts:
+            await _send_row(app, chat_id, row, options_module.format_result)
+        await _send(app, chat_id, FOOTER)
 
 
 def _start_session(chat_id: int, coro) -> asyncio.Task:
@@ -181,7 +209,8 @@ async def cmd_stocks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⏳ توجد جلسة قيد التنفيذ بالفعل — أرسل /stop لإيقافها أولاً.")
         return
     await update.message.reply_text(
-        f"📈 بدأ فحص وحدة الأسهم ({len(config.STOCKS_WATCHLIST)} سهم)... "
+        f"📈 بدأ فحص وحدة الأسهم (كل السوق الأمريكي، من {config.STOCKS_MIN_PRICE:.0f}$ "
+        f"إلى {config.STOCKS_MAX_PRICE:.0f}$)... "
         f"حتى {config.SESSION_TIMEOUT_SECONDS // 60} دقائق أو /stop للإيقاف الفوري.")
     _start_session(chat_id, _run_watchlist_session(
         chat_id, "📈 نتائج فحص الأسهم", stocks_module.scan, stocks_module.format_result,

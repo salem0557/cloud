@@ -80,57 +80,12 @@ STOCKS_WEDGE_LOOKBACK = _int("STOCKS_WEDGE_LOOKBACK", 120)
 STOCKS_WEDGE_PIVOT_ORDER = _int("STOCKS_WEDGE_PIVOT_ORDER", 3)
 STOCKS_WEDGE_MIN_BARS = _int("STOCKS_WEDGE_MIN_BARS", 20)
 
-# Broad large/mid-cap watchlist (Nasdaq-100 + a curated sample of major S&P
-# 500 names across every sector) -- NOT a literally exhaustive, auto-synced
-# S&P 500 + Nasdaq-100 roster, since index constituents change over time and
-# hardcoding avoids a fragile scrape dependency. Edit freely; review every
-# few months for reconstitution changes (additions/removals/delistings).
-_NASDAQ_100 = [
-    "AAPL", "MSFT", "AMZN", "NVDA", "GOOGL", "GOOG", "META", "TSLA", "AVGO", "COST",
-    "NFLX", "AMD", "PEP", "ADBE", "LIN", "CSCO", "TMUS", "QCOM", "INTU", "TXN",
-    "AMGN", "CMCSA", "HON", "AMAT", "BKNG", "ISRG", "VRTX", "PANW", "ADP", "SBUX",
-    "GILD", "MDLZ", "LRCX", "REGN", "ADI", "PYPL", "MU", "KLAC", "SNPS", "CDNS",
-    "MELI", "CRWD", "PDD", "MAR", "CTAS", "ORLY", "ASML", "ABNB", "CSX", "WDAY",
-    "FTNT", "MNST", "PCAR", "ROP", "NXPI", "CHTR", "MRVL", "DASH", "AEP", "PAYX",
-    "ROST", "ODFL", "KDP", "EXC", "TTD", "IDXX", "FAST", "EA", "CPRT", "DXCM",
-    "BKR", "VRSK", "CTSH", "KHC", "XEL", "CCEP", "GEHC", "ANSS", "ON", "DDOG",
-    "ZS", "TEAM", "MDB", "FANG", "GFS", "WBD", "BIIB", "CDW", "EBAY", "TTWO",
-    "ARM", "APP", "LULU", "MCHP", "ILMN", "SIRI", "ENPH", "JD", "GLOB", "PLTR",
-]
-_SP500_EXTRA = [
-    # Financials
-    "JPM", "BAC", "WFC", "C", "GS", "MS", "SCHW", "BLK", "AXP", "SPGI",
-    "ICE", "CME", "MMC", "AON", "PGR", "TRV", "ALL", "MET", "PRU", "AFL",
-    "COF", "USB", "PNC", "TFC", "BK", "STT", "DFS", "SYF", "V", "MA", "FI", "GPN",
-    # Healthcare
-    "UNH", "JNJ", "LLY", "PFE", "MRK", "ABT", "TMO", "DHR", "BMY", "ABBV",
-    "CVS", "CI", "HUM", "ELV", "SYK", "BSX", "MDT", "ZTS", "HCA", "BDX",
-    "A", "IQV", "MTD", "WAT", "RMD", "EW",
-    # Energy
-    "XOM", "CVX", "COP", "EOG", "SLB", "PSX", "MPC", "OXY", "WMB", "KMI", "HES", "DVN", "HAL",
-    # Industrials
-    "BA", "CAT", "DE", "LMT", "RTX", "GE", "UNP", "UPS", "NOC", "GD",
-    "EMR", "ETN", "ITW", "PH", "CSX", "NSC", "FDX", "WM", "RSG", "CMI",
-    "DOV", "XYL", "IR", "TT", "JCI",
-    # Consumer discretionary / staples
-    "WMT", "HD", "LOW", "TGT", "MCD", "NKE", "DIS", "CMG", "TJX", "YUM",
-    "DG", "DLTR", "PG", "KO", "PM", "MO", "CL", "EL", "KMB", "GIS",
-    "HSY", "STZ", "CLX", "K", "SYY", "ADM",
-    # Utilities
-    "NEE", "DUK", "SO", "D", "SRE", "PEG", "ED", "EIX", "WEC", "ES", "PPL", "FE", "AEE",
-    # Communication / other tech
-    "T", "VZ", "CRM", "ORCL", "IBM", "ACN", "NOW", "INTC", "ANET", "HPQ", "HPE", "DELL", "WDC", "STX",
-    # Autos / travel
-    "F", "GM", "DAL", "UAL", "LUV", "RCL", "CCL", "NCLH", "HLT",
-    # Materials
-    "NUE", "FCX", "APD", "ECL", "NEM", "DD", "DOW", "PPG", "VMC", "MLM", "LYB",
-    # Real estate
-    "AMT", "PLD", "CCI", "EQIX", "PSA", "O", "SPG", "WELL", "DLR", "AVB", "EQR",
-    # Newer large caps
-    "SHOP", "UBER", "LYFT", "SNOW", "NET", "DKNG", "COIN", "RBLX", "SOFI", "RIVN", "LCID",
-    "BRK-B",
-]
-STOCKS_WATCHLIST = sorted(set(_NASDAQ_100 + _SP500_EXTRA))
+# Full US market instead of a curated watchlist: the whole NYSE+Nasdaq+AMEX
+# common-share universe (scanner/universe.py, refreshed daily) is scanned,
+# narrowed down only by this price band -- so the watchlist itself isn't a
+# fixed list here, just the $-range gate applied in stocks_module.
+STOCKS_MIN_PRICE = _float("STOCKS_MIN_PRICE", 15.0)
+STOCKS_MAX_PRICE = _float("STOCKS_MAX_PRICE", 100.0)
 
 # =====================================================================
 # 2) OPTIONS module -- CALL-contract-only scan across a separate, more
@@ -145,7 +100,7 @@ OPTIONS_TOP_N = _int("OPTIONS_TOP_N", 5)
 
 OPTIONS_DELTA_MIN = _float("OPTIONS_DELTA_MIN", 0.55)
 OPTIONS_DELTA_MAX = _float("OPTIONS_DELTA_MAX", 0.80)
-OPTIONS_DTE_MIN = _int("OPTIONS_DTE_MIN", 45)
+OPTIONS_DTE_MIN = _int("OPTIONS_DTE_MIN", 1)
 OPTIONS_DTE_MAX = _int("OPTIONS_DTE_MAX", 120)
 OPTIONS_VOLUME_MIN = _int("OPTIONS_VOLUME_MIN", 30)
 OPTIONS_OI_MIN = _int("OPTIONS_OI_MIN", 200)
@@ -174,7 +129,7 @@ OPTIONS_WATCHLIST = sorted(set([
 ]))
 
 # =====================================================================
-# 3) CRYPTO module -- top-30-by-market-cap coins via Binance public data
+# 3) CRYPTO module -- top ~60-by-market-cap coins via Binance public data
 #    (ccxt, no API keys), 4h candles, 2 of 3 filters required
 #    (bollinger/rsi/support -- no wedge pattern for crypto).
 # =====================================================================
@@ -197,7 +152,7 @@ CRYPTO_SUPPORT_MIN_TOUCHES = _int("CRYPTO_SUPPORT_MIN_TOUCHES", 2)
 CRYPTO_SUPPORT_MARGIN = _float("CRYPTO_SUPPORT_MARGIN", 0.03)   # within 3% of the level
 CRYPTO_SUPPORT_BREAK_TOL = _float("CRYPTO_SUPPORT_BREAK_TOL", 0.005)
 
-# Top ~30 coins by market cap with a Binance USDT spot pair. Binance
+# Top ~60 coins by market cap with a Binance USDT spot pair. Binance
 # relisted its old MATIC pair as POL in 2024; edit freely as rankings shift.
 CRYPTO_WATCHLIST = [
     "BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT",
@@ -206,6 +161,12 @@ CRYPTO_WATCHLIST = [
     "BCH/USDT", "NEAR/USDT", "UNI/USDT", "ICP/USDT", "ETC/USDT",
     "XLM/USDT", "ATOM/USDT", "FIL/USDT", "APT/USDT", "ARB/USDT",
     "OP/USDT", "INJ/USDT", "SUI/USDT", "TIA/USDT", "HBAR/USDT",
+    "AAVE/USDT", "MKR/USDT", "SNX/USDT", "CRV/USDT", "LDO/USDT",
+    "RUNE/USDT", "KAVA/USDT", "MINA/USDT", "FLOW/USDT", "XTZ/USDT",
+    "EOS/USDT", "THETA/USDT", "AXS/USDT", "SAND/USDT", "MANA/USDT",
+    "GALA/USDT", "CHZ/USDT", "APE/USDT", "GRT/USDT", "IMX/USDT",
+    "STX/USDT", "KAS/USDT", "PEPE/USDT", "WIF/USDT", "BONK/USDT",
+    "FET/USDT", "RENDER/USDT", "JUP/USDT", "PYTH/USDT", "ENA/USDT",
 ]
 
 # --- Files ---
@@ -216,3 +177,5 @@ DATA_DIR = (os.environ.get("DATA_DIR")
             or ".")
 os.makedirs(DATA_DIR, exist_ok=True)
 STATE_FILE = os.environ.get("STATE_FILE", os.path.join(DATA_DIR, "state.json"))
+UNIVERSE_CACHE = os.environ.get("UNIVERSE_CACHE", os.path.join(DATA_DIR, "universe.json"))
+UNIVERSE_MAX_AGE_HOURS = _int("UNIVERSE_MAX_AGE_HOURS", 24)

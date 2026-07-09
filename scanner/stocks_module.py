@@ -1,21 +1,20 @@
 """وحدة الأسهم الأمريكية (مستقلة تماماً عن وحدتَي الأوبشن والكريبتو).
 
-تفحص STOCKS_WATCHLIST بحثاً عن إشارات ارتداد صعودي: بولينجر السفلي، RSI
-تشبع بيعي، منطقة دعم، ووتد هابط -- يتطلب تحقق STOCKS_FILTERS_REQUIRED من
-أصل 4. تُرجع أفضل STOCKS_TOP_N نتيجة، مرتبة بعدد الفلاتر المتحققة ثم بأعلى
-"نسبة ربح محتملة" (المسافة إلى أقرب مقاومة، أو +10% افتراضياً بلا مقاومة
-واضحة).
+تفحص **كل** سوق الأسهم الأمريكي (NYSE + Nasdaq + AMEX عبر scanner/universe.py)
+مقيّداً بنطاق سعري STOCKS_MIN_PRICE..STOCKS_MAX_PRICE، بحثاً عن إشارات ارتداد
+صعودي: بولينجر السفلي، RSI تشبع بيعي، منطقة دعم، ووتد هابط -- يتطلب تحقق
+STOCKS_FILTERS_REQUIRED من أصل 4. تُرجع أفضل STOCKS_TOP_N نتيجة، مرتبة بعدد
+الفلاتر المتحققة ثم بأعلى "نسبة ربح محتملة".
 
 أي خطأ في جلب أو تقييم سهم واحد لا يوقف بقية الفحص -- يُسجَّل ويُتجاوز.
 """
 import asyncio
-import functools
 import logging
 
-from . import config, data
+from . import chart, config, data, universe
 from .indicators import (check_bollinger_lower, check_falling_wedge,
                          check_rsi_oversold, check_support, fmt_price,
-                         find_nearest_resistance)
+                         find_nearest_resistance, find_nearest_support)
 
 log = logging.getLogger(__name__)
 
@@ -45,8 +44,20 @@ def _run_filters(df):
     }
 
 
+def _passes_price_band(df) -> bool:
+    price = float(df["Close"].iloc[-1])
+    avg_vol = df["Volume"].tail(20).mean()
+    return (config.STOCKS_MIN_PRICE <= price <= config.STOCKS_MAX_PRICE
+            and avg_vol >= config.MIN_AVG_VOLUME)
+
+
+def _explain(matched: list[str], details: dict) -> str:
+    parts = [details[k] for k in matched if details.get(k)]
+    return "الشرح: " + "، ".join(parts) if parts else ""
+
+
 def _evaluate(symbol: str, df) -> dict | None:
-    if not data.passes_liquidity(df):
+    if not _passes_price_band(df):
         return None
     results = _run_filters(df)
     matched = [k for k, (ok, _) in results.items() if ok]
@@ -54,6 +65,7 @@ def _evaluate(symbol: str, df) -> dict | None:
         return None
 
     price = float(df["Close"].iloc[-1])
+    details = {k: d for k, (_, d) in results.items()}
     resistance = find_nearest_resistance(
         df, config.STOCKS_SUPPORT_LOOKBACK, config.STOCKS_WEDGE_PIVOT_ORDER,
         config.STOCKS_SUPPORT_CLUSTER_TOL, config.STOCKS_SUPPORT_MIN_TOUCHES)
@@ -69,16 +81,26 @@ def _evaluate(symbol: str, df) -> dict | None:
         "price": price,
         "matched": matched,
         "total": len(FILTER_NAMES),
-        "details": {k: d for k, (_, d) in results.items()},
+        "details": details,
+        "explanation": _explain(matched, details),
         "profit_pct": profit_pct,
         "target_note": target_note,
+        "resistance": resistance,
+        "chart_png": None,
     }
 
 
 async def scan(cancel_event: asyncio.Event | None = None) -> list[dict]:
-    """يفحص كل أسهم STOCKS_WATCHLIST دفعة دفعة، ويرجع أفضل STOCKS_TOP_N نتيجة."""
+    """يفحص كل سوق الأسهم الأمريكي (مقيّداً بالنطاق السعري)، ويرجع أفضل
+    STOCKS_TOP_N نتيجة مع رسم بياني لكل واحدة منها."""
+    try:
+        watchlist = await asyncio.to_thread(universe.get_universe)
+    except Exception:
+        log.exception("Could not load the stock universe")
+        return []
+
     found: list[dict] = []
-    batches = data.make_batches(config.STOCKS_WATCHLIST)
+    batches = data.make_batches(watchlist)
     for batch in batches:
         if cancel_event is not None and cancel_event.is_set():
             break
@@ -98,13 +120,43 @@ async def scan(cancel_event: asyncio.Event | None = None) -> list[dict]:
                 found.append(row)
 
     found.sort(key=lambda r: (len(r["matched"]), r["profit_pct"]), reverse=True)
-    return found[:config.STOCKS_TOP_N]
+    top = found[:config.STOCKS_TOP_N]
+    await _attach_charts(top, cancel_event)
+    return top
+
+
+async def _attach_charts(rows: list[dict], cancel_event: asyncio.Event | None):
+    """Only the final top picks get a chart -- re-fetching a handful of
+    symbols is cheap, rendering one for every candidate during the full
+    market pass would not be."""
+    for row in rows:
+        if cancel_event is not None and cancel_event.is_set():
+            return
+        try:
+            frames = await asyncio.to_thread(
+                data.fetch_batch, [row["symbol"]], config.STOCKS_INTERVAL, config.STOCKS_PERIOD)
+            df = frames.get(row["symbol"])
+            if df is None:
+                continue
+            support = find_nearest_support(
+                df, config.STOCKS_SUPPORT_LOOKBACK, config.STOCKS_WEDGE_PIVOT_ORDER,
+                config.STOCKS_SUPPORT_CLUSTER_TOL, config.STOCKS_SUPPORT_MIN_TOUCHES,
+                config.STOCKS_SUPPORT_MARGIN, config.STOCKS_SUPPORT_BREAK_TOL)
+            row["chart_png"] = chart.render_chart(
+                row["symbol"], df, config.STOCKS_BB_PERIOD, config.STOCKS_BB_STD,
+                support=support, resistance=row["resistance"])
+        except Exception:
+            log.exception("Chart attach failed for %s", row["symbol"])
 
 
 def format_result(row: dict) -> str:
-    """كل نتيجة بسطرين، مع نسبة الربح المحتملة بارزة في نهاية السطر الثاني."""
+    """نص كل نتيجة: سطران (السهم/السعر/الفلاتر، ثم هدف الربح)، تليهما
+    الشرح -- يُستخدم كنص أو كتعليق (caption) على صورة الرسم البياني."""
     matched_names = "، ".join(FILTER_NAMES[k] for k in row["matched"])
     line1 = (f"*{row['symbol']}* — {fmt_price(row['price'])} — "
              f"{len(row['matched'])}/{row['total']} ({matched_names})")
     line2 = f"{row['target_note']} • 🎯 نسبة الربح المحتملة: {row['profit_pct']:+.1f}%"
-    return f"{line1}\n{line2}"
+    text = f"{line1}\n{line2}"
+    if row.get("explanation"):
+        text += f"\n{row['explanation']}"
+    return text

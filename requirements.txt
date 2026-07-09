@@ -6,3 +6,8 @@ requests>=2.31
 python-dotenv>=1.0
 ccxt>=4.0
 tabulate>=0.9
+matplotlib>=3.7
+# mplfinance has never cut a stable 0.12 release (only pre-release tags like
+# 0.12.10b0), so a ">=0.12" pin excludes every available version and fails
+# to resolve; leave it unpinned so pip installs the latest pre-release.
+mplfinance

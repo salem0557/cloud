@@ -35,4 +35,5 @@ def fetch_ohlcv(symbol: str, timeframe: str, limit: int) -> pd.DataFrame | None:
     if not candles:
         return None
     df = pd.DataFrame(candles, columns=["ts", "Open", "High", "Low", "Close", "Volume"])
+    df.index = pd.to_datetime(df["ts"], unit="ms")
     return df[REQUIRED_COLS]
