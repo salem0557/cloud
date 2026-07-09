@@ -10,6 +10,13 @@ Neither Yahoo nor CBOE's free feeds reliably publish delta, so it's derived
 from Black-Scholes (spot, strike, days-to-expiry, implied volatility) — a
 standard, well-understood approximation (European exercise, no dividend
 yield) that's good enough to compare contracts against each other.
+
+Each final pick also carries an IV Rank/Percentile: where its IV sits
+against the underlying's own rolling realized volatility over the past
+year. True historical IV for a specific contract needs a paid data feed we
+don't have, so realized volatility of the underlying (freely available) is
+used as the standard proxy for "the usual IV range" — a well-known
+approximation, not literal historical option IV.
 """
 import datetime as dt
 import logging
@@ -17,6 +24,7 @@ import math
 import re
 import time
 
+import numpy as np
 import requests
 import yfinance as yf
 
@@ -98,6 +106,64 @@ def _bs_delta_theta(spot: float, strike: float, days: int, iv: float | None,
         theta_year = (-(spot * pdf_d1 * iv) / (2 * sqrt_t)
                      + RISK_FREE_RATE * strike * math.exp(-RISK_FREE_RATE * t) * _norm_cdf(-d2))
     return delta, theta_year / 365.0
+
+
+# Per-symbol cache of the underlying's rolling realized-volatility series
+# (see module docstring on IV Rank) -- {symbol: (fetched_at, vol_series)}.
+# A full year of daily history is a whole extra network call, and the
+# result barely changes within a day, so it's cached.
+_realized_vol_cache: dict[str, tuple[float, np.ndarray]] = {}
+
+
+def _realized_vol_series(symbol: str) -> np.ndarray | None:
+    """Rolling annualized realized volatility (close-to-close log returns,
+    IV_RANK_VOL_WINDOW-day window) over the past year, or None if the price
+    history couldn't be fetched or is too short to compute even one window."""
+    cached = _realized_vol_cache.get(symbol)
+    if cached and cached[0] > time.time() - config.IV_RANK_CACHE_HOURS * 3600:
+        return cached[1]
+    try:
+        hist = yf.Ticker(symbol).history(period="1y", interval="1d")
+    except Exception:
+        log.warning("Realized-vol history fetch failed for %s", symbol)
+        return None
+    if hist is None or hist.empty or "Close" not in hist:
+        return None
+    close = hist["Close"].dropna()
+    if len(close) < config.IV_RANK_VOL_WINDOW + 1:
+        return None
+    log_ret = np.log(close / close.shift(1)).dropna()
+    vol_series = (log_ret.rolling(config.IV_RANK_VOL_WINDOW).std()
+                 * math.sqrt(252)).dropna().to_numpy()
+    if vol_series.size == 0:
+        return None
+    _realized_vol_cache[symbol] = (time.time(), vol_series)
+    return vol_series
+
+
+def _iv_rank(symbol: str, iv: float | None) -> tuple[float, float] | None:
+    """(iv_rank_pct, iv_percentile_pct): how one contract's IV compares to
+    the underlying's own realized-volatility range over the past year (see
+    module docstring). None if IV_RANK_ENABLED is off, IV is missing, or the
+    underlying's history couldn't be fetched/is too short."""
+    if not config.IV_RANK_ENABLED or iv is None:
+        return None
+    vol_series = _realized_vol_series(symbol)
+    if vol_series is None:
+        return None
+    vol_min, vol_max = float(vol_series.min()), float(vol_series.max())
+    if vol_max <= vol_min:
+        return None
+    rank = max(0.0, min(100.0, (iv - vol_min) / (vol_max - vol_min) * 100))
+    percentile = float((vol_series < iv).sum()) / vol_series.size * 100
+    return rank, percentile
+
+
+def _attach_iv_rank(symbol: str, picks: list[dict]) -> list[dict]:
+    for c in picks:
+        result = _iv_rank(symbol, c.get("iv"))
+        c["iv_rank"], c["iv_percentile"] = result if result else (None, None)
+    return picks
 
 
 def _raw_candidate(row, spot: float, expiry: str, days: int, is_call: bool) -> dict | None:
@@ -314,7 +380,8 @@ def find_cheap_contracts(symbol: str, spot: float, max_premium: float) -> dict[s
 
 
 def best_options(symbol: str, spot: float) -> dict[str, list[dict]]:
-    """{'call': [top picks, highest delta first]}.
+    """{'call': [top picks, highest delta first]}, each also carrying
+    iv_rank/iv_percentile (see module docstring; None if unavailable).
 
     Only filter: delta must clear DELTA_MIN (see module docstring) — not by
     cheapest premium. Tries Yahoo first, then CBOE's free delayed chain as
@@ -334,5 +401,10 @@ def best_options(symbol: str, spot: float) -> dict[str, list[dict]]:
         _no_options[symbol] = time.time()
         log.info("%s has no listed options", symbol)
         return out
-    out["call"] = _rank_candidates(candidates["call"])[:config.OPTIONS_TOP_N]
+    picks = _rank_candidates(candidates["call"])[:config.OPTIONS_TOP_N]
+    # IV Rank only for the final picks that actually get shown, and only
+    # here (not find_cheap_contracts) -- that command already loops over
+    # hundreds/thousands of symbols, and a full extra year of daily history
+    # per symbol would multiply its already-long runtime.
+    out["call"] = _attach_iv_rank(symbol, picks)
     return out

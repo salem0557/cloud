@@ -162,11 +162,13 @@ def format_match(m) -> str:
 
 
 def _greek_suffix(c: dict) -> str:
-    """IV/delta/theta tail for one contract line, when known — these (plus
-    liquidity) are what the picks are actually ranked by now, not price."""
+    """IV/IV Rank/delta/theta tail for one contract line, when known — these
+    (plus liquidity) are what the picks are actually ranked by now, not price."""
     bits = []
     if c.get("iv") is not None:
         bits.append(f"IV={c['iv'] * 100:.0f}%")
+    if c.get("iv_rank") is not None:
+        bits.append(f"IV Rank={c['iv_rank']:.0f}%")
     if c.get("delta") is not None:
         bits.append(f"دلتا={c['delta']:.2f}")
     if c.get("theta") is not None:

@@ -107,6 +107,13 @@ OPTIONS_MAX_EXPIRIES = _int("OPTIONS_MAX_EXPIRIES", 6)  # chain requests per sto
 OPTIONS_TOP_N = _int("OPTIONS_TOP_N", 3)              # picks per side (call/put)
 OPTIONS_MIN_ACTIVITY = _int("OPTIONS_MIN_ACTIVITY", 20)  # min OI+volume per contract
 
+# --- IV Rank/Percentile: how a picked contract's IV compares to the
+# --- underlying's own realized volatility over the past year (a free proxy
+# --- for "usual IV range" -- true historical option IV needs a paid feed) ---
+IV_RANK_ENABLED = os.environ.get("IV_RANK_ENABLED", "1") == "1"
+IV_RANK_VOL_WINDOW = _int("IV_RANK_VOL_WINDOW", 20)    # rolling window, trading days
+IV_RANK_CACHE_HOURS = _int("IV_RANK_CACHE_HOURS", 24)  # per-symbol cache (barely moves intraday)
+
 # --- On-demand /cheapoptions search: scans the current qualified list for
 # --- contracts priced at or under a cap (contract cost = premium * 100) ---
 CHEAP_OPTION_DEFAULT_MAX = _float("CHEAP_OPTION_DEFAULT_MAX", 50.0)  # $ per contract
