@@ -30,9 +30,10 @@ from telegram.constants import ParseMode
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes, MessageHandler, filters)
 
-from scanner import chart, config, engine, market_calendar, options, performance, sentiment, universe
+from scanner import (chart, config, engine, market_calendar, optimizer, options,
+                    performance, pricing, sentiment, universe)
 from scanner import data as data_mod
-from scanner.indicators import FILTERS, fmt_price
+from scanner.indicators import FILTERS, find_nearest_resistance, fmt_price
 from scanner.state import State
 from scanner.throttle import Throttle
 
@@ -209,11 +210,71 @@ def format_cheap_picks(symbol: str, price: float, picks: dict) -> str:
     return "\n".join(lines)
 
 
+def _format_heat_table(spot: float, pick: dict) -> str:
+    """جدول حرارة نصي (monospace) للربح/الخسارة المتوقعة لأفضل عقد، عبر
+    مستويات HEAT_TABLE_PRICE_LEVELS_PCT السعرية ونقاط HEAT_TABLE_DAY_OFFSETS
+    الزمنية بالإضافة لعمود الانتهاء. ✅ للربح و🔻 للخسارة."""
+    strike, premium, iv, dte = pick["strike"], pick["premium"], pick["iv"], pick["days"]
+    day_offsets = [*config.HEAT_TABLE_DAY_OFFSETS, dte]  # آخر عمود = عند الانتهاء
+    headers = ["السعر"] + [("اليوم" if d == 0 else f"+{d}ي") for d in config.HEAT_TABLE_DAY_OFFSETS] \
+        + ["الانتهاء"]
+
+    rows = []
+    for pct in config.HEAT_TABLE_PRICE_LEVELS_PCT:
+        target = spot * (1 + pct / 100)
+        cells = [f"{target:,.1f}$"]
+        for offset in day_offsets:
+            days_remaining = max(dte - offset, 0)
+            profit = pricing.expected_profit(target, strike, premium, days_remaining, iv)
+            cells.append("-" if profit is None else
+                        f"{'✅' if profit >= 0 else '🔻'}{profit:+.0f}$")
+        rows.append(cells)
+
+    widths = [max(len(r[i]) for r in [headers, *rows]) for i in range(len(headers))]
+    def fmt_row(cells):
+        return " | ".join(c.ljust(w) for c, w in zip(cells, widths))
+    sep = "-+-".join("-" * w for w in widths)
+    return "```\n" + "\n".join([fmt_row(headers), sep, *[fmt_row(r) for r in rows]]) + "\n```"
+
+
+def format_optimizer_block(picks: list[dict], spot: float) -> str:
+    """أفضل عقود Call مرشّحة عبر فلاتر الـOptimizer الأشد (دلتا/DTE/سيولة/
+    IV/سبريد، انظر scanner/optimizer.py)، مرتبة بأعلى احتمالية ربح -- مع
+    تحليل كامل (تكلفة، نقطة تعادل، احتمالية ربح) لكل عقد، وجدول حرارة نصي
+    لأفضلها فقط."""
+    if not picks:
+        return ""
+    lines = ["  📊 أفضل عقود CALL (محلل الأوبشن) — بأعلى احتمالية ربح:"]
+    for i, c in enumerate(picks, 1):
+        approx = "≈" if c.get("estimated") else ""
+        pop_txt = f"{c['probability_of_profit']:.0f}%" if c.get("probability_of_profit") is not None else "-"
+        lines.append(
+            f"    {i}) تنفيذ {c['strike']:.2f}$ • ينتهي {c['expiry']} ({c['days']} يوم)"
+            f" • بريميوم {approx}{c['premium']:.2f}$ = {approx}{c['cost']:.0f}$/عقد"
+            f" • تعادل {c['breakeven']:.2f}$ • احتمالية ربح {pop_txt}{_greek_suffix(c)}"
+        )
+    best = picks[0]
+    target_note = "أقرب مقاومة" if best.get("target_is_resistance") else "افتراضي +10%"
+    if best.get("target_profit") is not None:
+        lines.append(
+            f"    🎯 هدف الربح ({target_note} {best['target_price']:.2f}$):"
+            f" {best['target_profit']:+.0f}$/عقد"
+        )
+    lines.append("  🔥 جدول الربح/الخسارة المتوقع لأفضل عقد (السعر مقابل الوقت):")
+    lines.append(_format_heat_table(spot, best))
+    if any(c.get("estimated") for c in picks):
+        lines.append("  (≈ آخر سعر تداول — سوق الأوبشنز مغلق الآن)")
+    return "\n".join(lines)
+
+
 async def attach_options(matches):
-    """Fill options_text (and has_option) on each match. has_option is only
-    True when best_options() returned at least one ranked CALL contract —
-    used by the scan loop to drop stocks with no tradeable contract from the
-    alert entirely (see filter_by_options)."""
+    """Fill options_text (and has_option) on each match, via the Optimizer
+    (delta/DTE/volume/OI/IV/spread filter + theoretical pricing +
+    probability of profit + heat table, see scanner/optimizer.py) by
+    default, or the simpler delta/premium-only picker in scanner/options.py
+    when OPTIMIZER_ENABLED=0. has_option is only True when a pick was found
+    — used by the scan loop to drop stocks with no tradeable contract from
+    the alert entirely (see filter_by_options)."""
     if not config.OPTIONS_ENABLED:
         return
     for m in matches:
@@ -223,8 +284,15 @@ async def attach_options(matches):
         no_near_term_line = (f"  📊 لا توجد عقود ضمن {config.OPTIONS_MAX_WEEKS} أسابيع القادمة "
                              "(قد تتوفر عقود بتواريخ أبعد)")
         try:
-            picks = await asyncio.to_thread(options.best_options, m.symbol, m.price)
-            text = format_options(picks)
+            if config.OPTIMIZER_ENABLED:
+                resistance = (await asyncio.to_thread(find_nearest_resistance, m.chart_df)
+                             if m.chart_df is not None else None)
+                picks = await asyncio.to_thread(
+                    optimizer.best_contracts, m.symbol, m.price, resistance)
+                text = format_optimizer_block(picks, m.price)
+            else:
+                picks = await asyncio.to_thread(options.best_options, m.symbol, m.price)
+                text = format_options(picks)
             m.has_option = bool(text)
             m.options_text = text or no_options_line
         except options.NoNearTermOptions:

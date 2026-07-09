@@ -119,6 +119,27 @@ IV_RANK_ENABLED = os.environ.get("IV_RANK_ENABLED", "1") == "1"
 IV_RANK_VOL_WINDOW = _int("IV_RANK_VOL_WINDOW", 20)    # rolling window, trading days
 IV_RANK_CACHE_HOURS = _int("IV_RANK_CACHE_HOURS", 24)  # per-symbol cache (barely moves intraday)
 
+# --- Optimizer: OptionStrat-style deeper analysis (theoretical Black-Scholes
+# --- pricing + probability of profit + a P/L heat table) attached to each
+# --- alert's picks. A stricter filter than the simple DELTA_MIN/
+# --- OPTIONS_MAX_PREMIUM picker in scanner/options.py -- if OPTIMIZER_ENABLED
+# --- is off, attach_options() falls back to that simpler picker instead. ---
+OPTIMIZER_ENABLED = os.environ.get("OPTIMIZER_ENABLED", "1") == "1"
+OPTIMIZER_DELTA_MIN = _float("OPTIMIZER_DELTA_MIN", 0.55)
+OPTIMIZER_DELTA_MAX = _float("OPTIMIZER_DELTA_MAX", 0.80)
+OPTIMIZER_DTE_MIN = _int("OPTIMIZER_DTE_MIN", 45)
+OPTIMIZER_DTE_MAX = _int("OPTIMIZER_DTE_MAX", 120)
+OPTIMIZER_VOLUME_MIN = _int("OPTIMIZER_VOLUME_MIN", 30)
+OPTIMIZER_OI_MIN = _int("OPTIMIZER_OI_MIN", 200)
+OPTIMIZER_IV_MAX = _float("OPTIMIZER_IV_MAX", 0.60)
+OPTIMIZER_SPREAD_MAX = _float("OPTIMIZER_SPREAD_MAX", 0.10)
+OPTIMIZER_TOP_N = _int("OPTIMIZER_TOP_N", 3)
+# Heat table shape: price-level rows (% from current price) x day-offset
+# columns (today, +N days...; "at expiry" is appended per-contract using
+# that contract's own DTE, so it's not listed here).
+HEAT_TABLE_PRICE_LEVELS_PCT = [-5, 0, 2.5, 5, 10]
+HEAT_TABLE_DAY_OFFSETS = [0, 15, 30]
+
 # --- On-demand /cheapoptions search: scans the current qualified list for
 # --- contracts priced at or under a cap (contract cost = premium * 100) ---
 CHEAP_OPTION_DEFAULT_MAX = _float("CHEAP_OPTION_DEFAULT_MAX", 50.0)  # $ per contract

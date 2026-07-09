@@ -123,6 +123,32 @@ def check_support(df: pd.DataFrame):
     return True, f"دعم عند {fmt_price(level)}"
 
 
+def find_nearest_resistance(df: pd.DataFrame):
+    """أقرب مستوى مقاومة (قمم متكررة) فوق السعر الحالي، إن وُجد. يُستخدم
+    فقط كهدف ربح تقديري لمحلل عقود الأوبشن (scanner/optimizer.py) -- وليس
+    فلتراً في FILTERS، البوت يبقى استراتيجية صعود بحتة."""
+    highs = df["High"].to_numpy()[-config.SUPPORT_LOOKBACK:]
+    close = float(df["Close"].iloc[-1])
+    pivots = find_pivots(highs, order=config.WEDGE_PIVOT_ORDER, highs=True)
+    if len(pivots) < config.SUPPORT_MIN_TOUCHES:
+        return None
+
+    prices = sorted(highs[i] for i in pivots)
+    levels = []  # (level_price, touches)
+    cluster = [prices[0]]
+    for p in prices[1:]:
+        if p <= cluster[0] * (1 + config.SUPPORT_CLUSTER_TOL):
+            cluster.append(p)
+        else:
+            levels.append((float(np.mean(cluster)), len(cluster)))
+            cluster = [p]
+    levels.append((float(np.mean(cluster)), len(cluster)))
+
+    candidates = [lv for lv, touches in levels
+                 if touches >= config.SUPPORT_MIN_TOUCHES and lv > close]
+    return min(candidates) if candidates else None
+
+
 def check_falling_wedge(df: pd.DataFrame):
     """Falling wedge: descending, converging trendlines through pivot highs/lows,
     with the upper line falling faster and current price inside the pattern."""
