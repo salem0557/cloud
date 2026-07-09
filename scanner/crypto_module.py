@@ -72,7 +72,18 @@ def _evaluate(symbol: str, df) -> dict | None:
         "target_note": target_note,
         "resistance": resistance,
         "chart_png": None,
+        "volume_24h_usdt": None,
     }
+
+
+def _fmt_volume(v: float) -> str:
+    if v >= 1e9:
+        return f"{v / 1e9:.2f}B$"
+    if v >= 1e6:
+        return f"{v / 1e6:.1f}M$"
+    if v >= 1e3:
+        return f"{v / 1e3:.1f}K$"
+    return f"{v:.0f}$"
 
 
 async def scan(cancel_event: asyncio.Event | None = None) -> list[dict]:
@@ -116,6 +127,11 @@ async def scan(cancel_event: asyncio.Event | None = None) -> list[dict]:
                 support=support, resistance=row["resistance"])
         except Exception:
             log.exception("Chart attach failed for %s", row["symbol"])
+        try:
+            row["volume_24h_usdt"] = await asyncio.to_thread(
+                crypto_data.fetch_24h_quote_volume, row["symbol"])
+        except Exception:
+            log.exception("24h volume fetch failed for %s", row["symbol"])
     for row in found:
         row.pop("_df", None)
     return top
@@ -129,6 +145,9 @@ def format_result(row: dict) -> str:
              f"{len(row['matched'])}/{row['total']} ({matched_names})")
     line2 = f"{row['target_note']} • 🎯 نسبة الربح المحتملة: {row['profit_pct']:+.1f}%"
     text = f"{line1}\n{line2}"
+    vol = row.get("volume_24h_usdt")
+    if vol is not None:
+        text += f"\n💧 السيولة (حجم تداول 24 ساعة): {_fmt_volume(vol)}"
     if row.get("explanation"):
         text += f"\n{row['explanation']}"
     return text

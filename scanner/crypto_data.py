@@ -37,3 +37,16 @@ def fetch_ohlcv(symbol: str, timeframe: str, limit: int) -> pd.DataFrame | None:
     df = pd.DataFrame(candles, columns=["ts", "Open", "High", "Low", "Close", "Volume"])
     df.index = pd.to_datetime(df["ts"], unit="ms")
     return df[REQUIRED_COLS]
+
+
+def fetch_24h_quote_volume(symbol: str) -> float | None:
+    """24-hour trading volume in the quote currency (USDT) -- Binance's own
+    liquidity figure (ticker's 24hr endpoint), not derived from the 4h
+    candles used for the filters. None on any failure."""
+    try:
+        ticker = _get_exchange().fetch_ticker(symbol)
+    except Exception:
+        log.warning("ccxt fetch_ticker failed for %s", symbol)
+        return None
+    vol = ticker.get("quoteVolume")
+    return float(vol) if vol is not None else None
