@@ -192,7 +192,7 @@ OPTIONS_MAX_EXPIRIES = _int("OPTIONS_MAX_EXPIRIES", 10)   # chain requests per s
 OPTIONS_MIN_ACTIVITY = _int("OPTIONS_MIN_ACTIVITY", 20)   # min OI+volume per contract
 OPTIONS_TOP_N = _int("OPTIONS_TOP_N", 5)
 
-OPTIONS_DELTA_MIN = _float("OPTIONS_DELTA_MIN", 0.40)     # applied to abs(delta), both sides
+OPTIONS_DELTA_MIN = _float("OPTIONS_DELTA_MIN", 0.40)     # applied to abs(delta)
 OPTIONS_DELTA_MAX = _float("OPTIONS_DELTA_MAX", 1.0)       # no real upper bound (1.0 = max possible)
 OPTIONS_DTE_MIN = _int("OPTIONS_DTE_MIN", 14)
 OPTIONS_DTE_MAX = _int("OPTIONS_DTE_MAX", 360)
@@ -329,7 +329,7 @@ OPTIONS_WATCHLIST = sorted(set(
 # --- POP -- this is a liquidity/cost screener, not a probability one. ---
 HEAVY_DTE_MIN = _int("HEAVY_DTE_MIN", 45)             # no upper cap -- every expiry in the chain
 HEAVY_STRIKE_PCT = _float("HEAVY_STRIKE_PCT", 0.10)   # strike within ±10% of spot, no widening
-HEAVY_PREMIUM_MAX = _float("HEAVY_PREMIUM_MAX", 2.00)  # ask <= 2.00$/share (200$/contract)
+HEAVY_PREMIUM_MAX = _float("HEAVY_PREMIUM_MAX", 3.00)  # ask <= 3.00$/share (300$/contract)
 HEAVY_VOLUME_MIN = _int("HEAVY_VOLUME_MIN", 50)
 HEAVY_OI_MIN = _int("HEAVY_OI_MIN", 300)
 HEAVY_SPREAD_MAX = _float("HEAVY_SPREAD_MAX", 0.10)

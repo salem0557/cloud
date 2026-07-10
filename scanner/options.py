@@ -1,11 +1,12 @@
-"""Shared low-level layer for fetching CALL and PUT option chains from two
-independent free providers, plus Black-Scholes delta/theta since neither
-provider reliably publishes real Greeks.
+"""Shared low-level layer for fetching CALL option chains (no PUT support --
+this bot is CALL-only everywhere) from two independent free providers, plus
+Black-Scholes delta/theta since neither provider reliably publishes real
+Greeks.
 
 This module does NOT filter/rank contracts by itself anymore -- that is
-options_module.py's job, using its own OPTIONS_* thresholds. This module
-only gathers raw candidates so any caller (currently just options_module.py)
-can apply its own criteria on top.
+options_module.py's/heavy_module.py's job, using their own thresholds. This
+module only gathers raw candidates so any caller can apply its own criteria
+on top.
 """
 import datetime as dt
 import logging
@@ -184,9 +185,13 @@ def _raw_candidate(row, spot: float, expiry: str, days: int, is_call: bool,
 
 
 def _add_candidate(candidates, row, spot, expiry, days, is_call: bool, symbol: str, stats: dict):
+    """is_call is always True at every call site in this bot (CALL only, no
+    PUT support) -- kept as an explicit parameter because _raw_candidate's
+    Black-Scholes math is a legitimate call/put formula either way, not
+    because a put path is actually reachable here."""
     raw, rejected_bad_data = _raw_candidate(row, spot, expiry, days, is_call=is_call, symbol=symbol)
     if raw is not None:
-        candidates["call" if is_call else "put"].append(raw)
+        candidates["call"].append(raw)
     elif rejected_bad_data:
         stats["excluded_bad_data"] = stats.get("excluded_bad_data", 0) + 1
 
@@ -205,7 +210,7 @@ def _yahoo_candidates(symbol, spot, today, cutoff, stats, max_expiries=None, min
     ticker = yf.Ticker(symbol)
     expiries = _expiries_with_retry(ticker, symbol)
     if not expiries:
-        return {"call": [], "put": []}, False
+        return {"call": []}, False
 
     upcoming = []
     for exp in expiries:
@@ -225,7 +230,7 @@ def _yahoo_candidates(symbol, spot, today, cutoff, stats, max_expiries=None, min
     if not upcoming:
         raise NoNearTermOptions(symbol)
 
-    candidates = {"call": [], "put": []}
+    candidates = {"call": []}
     fetched = 0
     for exp, days in upcoming:
         chain = None
@@ -240,10 +245,11 @@ def _yahoo_candidates(symbol, spot, today, cutoff, stats, max_expiries=None, min
             log.warning("Yahoo option chain failed: %s %s", symbol, exp)
             continue
         fetched += 1
+        # PUT contracts are unused everywhere in this bot -- CALL only, so
+        # chain.puts is never processed (saves the sanity-check/delta work
+        # on rows nothing would ever read).
         for _, row in chain.calls.iterrows():
             _add_candidate(candidates, row, spot, exp, days, is_call=True, symbol=symbol, stats=stats)
-        for _, row in chain.puts.iterrows():
-            _add_candidate(candidates, row, spot, exp, days, is_call=False, symbol=symbol, stats=stats)
 
     if fetched == 0:
         raise OptionsFetchError(symbol)
@@ -260,7 +266,7 @@ def _cboe_candidates(symbol, spot, today, cutoff, stats, max_expiries=None, min_
         resp = requests.get(CBOE_URL.format(symbol=symbol.upper()), timeout=20,
                             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 404:
-            return {"call": [], "put": []}, False  # not an optionable symbol
+            return {"call": []}, False  # not an optionable symbol
         resp.raise_for_status()
         contracts = resp.json()["data"].get("options") or []
     except OptionsFetchError:
@@ -268,17 +274,18 @@ def _cboe_candidates(symbol, spot, today, cutoff, stats, max_expiries=None, min_
     except Exception as exc:
         raise OptionsFetchError(symbol) from exc
     if not contracts:
-        return {"call": [], "put": []}, False
+        return {"call": []}, False
 
     # Contract names look like DDD261218C00005000: yymmdd, C/P, strike*1000
     pat = re.compile(rf"^{re.escape(symbol.upper())}(\d{{6}})([CP])(\d{{8}})$")
-    candidates = {"call": [], "put": []}
+    candidates = {"call": []}
     any_in_window = False
     for c in contracts:
         m = pat.match(c.get("option", ""))
         if not m:
             continue
-        is_call = m.group(2) == "C"
+        if m.group(2) != "C":
+            continue  # PUT contracts unused everywhere in this bot -- CALL only
         try:
             exp_date = dt.datetime.strptime(m.group(1), "%y%m%d").date()
         except ValueError:
@@ -299,7 +306,7 @@ def _cboe_candidates(symbol, spot, today, cutoff, stats, max_expiries=None, min_
             "iv": c.get("iv"),
         }
         _add_candidate(candidates, row, spot, exp_date.isoformat(), days,
-                       is_call=is_call, symbol=symbol, stats=stats)
+                       is_call=True, symbol=symbol, stats=stats)
 
     # Contracts exist for this symbol, but every one of them expires beyond
     # our near-term window — same distinction as the Yahoo provider above.

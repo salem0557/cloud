@@ -161,25 +161,6 @@ def find_nearest_resistance(df: pd.DataFrame, lookback: int = 250, pivot_order: 
     return min(candidates) if candidates else None
 
 
-def find_nearest_support_below(df: pd.DataFrame, lookback: int = 250, pivot_order: int = 3,
-                               cluster_tol: float = 0.01, min_touches: int = 2):
-    """أقرب مستوى دعم (قيعان متكررة) تحت السعر الحالي، إن وُجد -- بلا شرط
-    قرب من السعر (على عكس find_nearest_support التي تشترط أن يقف السعر
-    عند/قرب المستوى). يُستخدم كهدف ربح تقديري لعقود Put في وحدة الأوبشن،
-    بنفس منطق find_nearest_resistance تماماً لكن بالاتجاه المعاكس."""
-    lows = df["Low"].to_numpy()[-lookback:]
-    close = float(df["Close"].iloc[-1])
-    pivots = find_pivots(lows, order=pivot_order, highs=False)
-    if len(pivots) < min_touches:
-        return None
-
-    prices = sorted(lows[i] for i in pivots)
-    levels = _cluster_levels(prices, cluster_tol)
-
-    candidates = [lv for lv, touches in levels if touches >= min_touches and lv < close]
-    return max(candidates) if candidates else None
-
-
 def check_falling_wedge_tier(df: pd.DataFrame, lookback: int = 120, pivot_order: int = 3,
                              min_bars: int = 20):
     """درجة الوتد الهابط: descending, converging trendlines through pivot

@@ -1,21 +1,20 @@
-"""وحدة عقود الأوبشن -- Call و Put معاً (مستقلة تماماً عن وحدتَي الأسهم
-والكريبتو).
+"""وحدة عقود الأوبشن -- CALL فقط (بلا PUT إطلاقاً، مستقلة تماماً عن وحدتَي
+الأسهم والكريبتو).
 
 تفحص OPTIONS_WATCHLIST (قائمة منفصلة عن قائمة وحدة الأسهم، ~500 سهم من
-الأنشط بسوق العقود) بحثاً عن عقود Call و/أو Put تحقق كل الشروط دفعة واحدة:
-دلتا (بالقيمة المطلقة) بين OPTIONS_DELTA_MIN/MAX، أيام حتى الانتهاء بين
-OPTIONS_DTE_MIN/MAX، سيولة (حجم/عقود مفتوحة) كافية، تقلب ضمني أقل من
-OPTIONS_IV_MAX، سبريد عرض/طلب أقل من OPTIONS_SPREAD_MAX، وسعر الطلب ضمن
-OPTIONS_ASK_MIN..OPTIONS_ASK_MAX للسهم الواحد.
+الأنشط بسوق العقود) بحثاً عن عقود CALL تحقق كل الشروط دفعة واحدة: دلتا بين
+OPTIONS_DELTA_MIN/MAX، أيام حتى الانتهاء بين OPTIONS_DTE_MIN/MAX، سيولة
+(حجم/عقود مفتوحة) كافية، تقلب ضمني أقل من OPTIONS_IV_MAX، سبريد عرض/طلب
+أقل من OPTIONS_SPREAD_MAX، وسعر الطلب ضمن OPTIONS_ASK_MIN..OPTIONS_ASK_MAX
+للسهم الواحد.
 
 لكل عقد مؤهل: احتمالية الربح (Probability of Profit، Black-Scholes عبر
-scipy -- N(d2) للـCall وN(-d2) للـPut، انظر probability_module.py)، والقيمة
-المتوقعة (EV) بناءً على الربح المتوقع عند أقرب مقاومة (Call) أو أقرب دعم
-(Put) للسهم مقابل أقصى خسارة ممكنة (البريميوم المدفوع).
+scipy -- N(d2)، انظر probability_module.py)، والقيمة المتوقعة (EV) بناءً
+على الربح المتوقع عند أقرب مقاومة للسهم مقابل أقصى خسارة ممكنة (البريميوم
+المدفوع).
 
-يدعم فحص القائمة كاملة (كول+بوت معاً أو كول فقط أو بوت فقط عبر sides)،
-وفحص سهم واحد فقط (/options TICKER) بمعزل عن بقية القائمة. أي خطأ في جلب
-أو تقييم عقود سهم واحد لا يوقف بقية الفحص.
+يدعم فحص القائمة كاملة، وفحص سهم واحد فقط (/options TICKER) بمعزل عن بقية
+القائمة. أي خطأ في جلب أو تقييم عقود سهم واحد لا يوقف بقية الفحص.
 
 scan() وscan_leaps() هي async generators: كل عقد يتحقق شروطه يُرسَل فوراً
 (live) بدل الانتظار حتى نهاية الفحص الكامل، ويتوقفان تلقائياً بعد إيجاد
@@ -35,12 +34,12 @@ import time
 from collections.abc import AsyncIterator
 
 from . import config, data, options, probability_module as pm
-from .indicators import find_nearest_resistance, find_nearest_support_below
+from .indicators import find_nearest_resistance
 from .utils import fmt_price
 
 log = logging.getLogger(__name__)
 
-TYPE_TAG = {"call": "🟢 CALL (رهان صعود)", "put": "🔴 PUT (رهان هبوط)"}
+TYPE_TAG = "🟢 CALL (رهان صعود)"
 
 
 def _duration_tag(days: int) -> str:
@@ -79,25 +78,23 @@ def _passes_filters(c: dict) -> bool:
         return False
 
 
-def _enrich(symbol: str, spot: float, c: dict, is_call: bool,
-           target: float | None) -> dict | None:
+def _enrich(symbol: str, spot: float, c: dict, target: float | None) -> dict | None:
     strike, premium, iv, days = c["strike"], c["premium"], c["iv"], c["days"]
-    be = pm.breakeven(strike, premium, is_call)
-    pop = pm.probability_of_profit(spot, be, days, iv, is_call)
+    be = pm.breakeven(strike, premium, is_call=True)
+    pop = pm.probability_of_profit(spot, be, days, iv, is_call=True)
     if pop is None or pop < config.OPTIONS_MIN_POP:
         return None
 
-    # متوسط الربح المحتمل = الربح الصافي المتوقع لو وصل السهم لأقرب مقاومة
-    # (Call) أو أقرب دعم (Put)؛ +10%/-10% افتراضياً بلا مستوى واضح.
+    # متوسط الربح المحتمل = الربح الصافي المتوقع لو وصل السهم لأقرب مقاومة؛
+    # +10% افتراضياً بلا مستوى واضح.
     if target is None:
-        target = spot * 1.10 if is_call else spot * 0.90
-    avg_profit = pm.expected_profit(target, strike, premium, days, iv, is_call)
+        target = spot * 1.10
+    avg_profit = pm.expected_profit(target, strike, premium, days, iv, is_call=True)
     loss = pm.max_loss(premium)
     ev = pm.expected_value(pop, avg_profit, loss) if avg_profit is not None else None
 
-    side = "call" if is_call else "put"
     return {
-        "symbol": symbol, "spot": spot, "side": side,
+        "symbol": symbol, "spot": spot, "side": "call",
         "strike": strike, "expiry": c["expiry"], "days": days,
         "premium": premium, "estimated": c["estimated"],
         "delta": c["delta"], "iv": iv,
@@ -108,10 +105,9 @@ def _enrich(symbol: str, spot: float, c: dict, is_call: bool,
     }
 
 
-def _contracts_for_symbol(symbol: str, spot: float, df, sides: tuple[str, ...]
-                          ) -> tuple[list[dict], int]:
-    """(عقود Call و/أو Put مؤهلة لسهم واحد، عدد العقود المستبعدة لبيانات
-    غير موثوقة). مرتبة بأعلى احتمالية ربح ثم أطول مدة عند التساوي. Raises
+def _contracts_for_symbol(symbol: str, spot: float, df) -> tuple[list[dict], int]:
+    """(عقود CALL مؤهلة لسهم واحد، عدد العقود المستبعدة لبيانات غير
+    موثوقة). مرتبة بأعلى احتمالية ربح ثم أطول مدة عند التساوي. Raises
     options.OptionsFetchError / options.NoNearTermOptions same as
     options.gather_candidates."""
     if options._no_options.get(symbol, 0) > time.time() - options.NO_OPTIONS_TTL:
@@ -123,30 +119,25 @@ def _contracts_for_symbol(symbol: str, spot: float, df, sides: tuple[str, ...]
         options._no_options[symbol] = time.time()
         return [], excluded
 
-    resistance = support = None
+    resistance = None
     if df is not None:
         try:
             resistance = find_nearest_resistance(df, 250, 3, 0.01, 2)
-            support = find_nearest_support_below(df, 250, 3, 0.01, 2)
         except Exception:
-            log.exception("Resistance/support lookup failed for %s", symbol)
+            log.exception("Resistance lookup failed for %s", symbol)
 
     results = []
-    for side in sides:
-        is_call = side == "call"
-        target = resistance if is_call else support
-        qualified = [c for c in candidates.get(side, []) if _passes_filters(c)]
-        for c in qualified:
-            enriched = _enrich(symbol, spot, c, is_call, target)
-            if enriched is not None:
-                results.append(enriched)
+    qualified = [c for c in candidates.get("call", []) if _passes_filters(c)]
+    for c in qualified:
+        enriched = _enrich(symbol, spot, c, resistance)
+        if enriched is not None:
+            results.append(enriched)
 
     results.sort(key=lambda r: (-r["probability_of_profit"], -r["days"]))
     return results, excluded
 
 
-async def scan_symbol(symbol: str, sides: tuple[str, ...] = ("call", "put")
-                      ) -> tuple[float | None, list[dict], str | None, int]:
+async def scan_symbol(symbol: str) -> tuple[float | None, list[dict], str | None, int]:
     """(spot, contracts, error, excluded_bad_data) لسهم واحد فقط -- يُستخدم
     في /options TICKER."""
     symbol = symbol.upper()
@@ -160,7 +151,7 @@ async def scan_symbol(symbol: str, sides: tuple[str, ...] = ("call", "put")
         return None, [], "رمز غير معروف أو لا توجد بيانات له.", 0
     spot = float(df["Close"].iloc[-1])
     try:
-        contracts, excluded = await asyncio.to_thread(_contracts_for_symbol, symbol, spot, df, sides)
+        contracts, excluded = await asyncio.to_thread(_contracts_for_symbol, symbol, spot, df)
     except options.NoNearTermOptions:
         return spot, [], f"لا توجد عقود ضمن {config.OPTIONS_MAX_WEEKS} أسبوع القادمة.", 0
     except options.OptionsFetchError:
@@ -172,7 +163,6 @@ async def scan_symbol(symbol: str, sides: tuple[str, ...] = ("call", "put")
 
 
 async def scan(cancel_event: asyncio.Event | None = None,
-               sides: tuple[str, ...] = ("call", "put"),
                stats: dict | None = None) -> AsyncIterator[dict]:
     """يفحص أسهم OPTIONS_WATCHLIST (بترتيب عشوائي) ويُرسل (yield) كل عقد
     مؤهل فور تحققه، حتى OPTIONS_TOP_N عقد أو نهاية القائمة أو /stop أو
@@ -203,7 +193,7 @@ async def scan(cancel_event: asyncio.Event | None = None,
             try:
                 spot = float(df["Close"].iloc[-1])
                 contracts, excluded = await asyncio.to_thread(
-                    _contracts_for_symbol, symbol, spot, df, sides)
+                    _contracts_for_symbol, symbol, spot, df)
             except (options.OptionsFetchError, options.NoNearTermOptions):
                 continue
             except Exception:
@@ -339,7 +329,7 @@ def format_result(row: dict) -> str:
     """جدول نصي (monospace) لكل عقد، مع نوع العقد ودرجة الاحتمالية بارزة
     قبله، والمدة والقيمة المتوقعة (EV) ضمن الجدول."""
     approx = "≈" if row.get("estimated") else ""
-    header = f"{TYPE_TAG[row['side']]} *{row['symbol']}* — {_tier_label(row['probability_of_profit'])}"
+    header = f"{TYPE_TAG} *{row['symbol']}* — {_tier_label(row['probability_of_profit'])}"
     rows = [
         ("السهم", f"{row['symbol']} ({fmt_price(row['spot'])})"),
         ("تنفيذ (Strike)", f"{row['strike']:.2f}$"),

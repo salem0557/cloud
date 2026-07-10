@@ -1,7 +1,8 @@
 """Telegram bot: three fully independent, on-demand scanning modules --
-stocks (reversal-up technical setups, point-scored), options (CALL+PUT
-screener, Black-Scholes probability + EV), and crypto (top ~100 coins via
-Binance public data, point-scored). No automatic background scanning:
+stocks (reversal-up technical setups, point-scored), options (CALL-only
+screener, Black-Scholes probability + EV; /leaps and /heavy are separate
+CALL-only sub-screeners with their own filters), and crypto (top ~100 coins
+via Binance public data, point-scored). No automatic background scanning:
 every scan runs only when a member sends a command, and stops on its own
 after SESSION_TIMEOUT_SECONDS (15 minutes) or instantly via /stop.
 
@@ -16,7 +17,6 @@ unrelated tool (options_scanner/cli.py's CLI entry point).
 Run:  TELEGRAM_BOT_TOKEN=xxx python bot.py
 """
 import asyncio
-import functools
 import io
 import logging
 import time
@@ -268,48 +268,16 @@ async def cmd_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if context.args:
         symbol = context.args[0].upper()
-        await update.message.reply_text(f"⏳ يفحص عقود {symbol} (Call و Put)...")
+        await update.message.reply_text(f"⏳ يفحص عقود {symbol} (Call فقط)...")
         _start_session(chat_id, _run_ticker_session(chat_id, symbol, context.application),
                       kind="ticker")
     else:
         await update.message.reply_text(
-            f"📊 بدأ فحص وحدة الأوبشن (Call + Put، {len(config.OPTIONS_WATCHLIST)} سهم)... "
+            f"📊 بدأ فحص وحدة الأوبشن (Call فقط، {len(config.OPTIONS_WATCHLIST)} سهم)... "
             f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
         _start_session(chat_id, _run_watchlist_session(
-            chat_id, "📊 نتائج فحص الأوبشن (Call + Put)", options_module.scan,
+            chat_id, "📊 نتائج فحص الأوبشن (Call فقط)", options_module.scan,
             options_module.format_result, context.application), kind="watchlist")
-
-
-async def cmd_options_calls(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await require_membership(update):
-        return
-    chat_id = update.effective_chat.id
-    if chat_id in sessions:
-        await update.message.reply_text("⏳ توجد جلسة قيد التنفيذ بالفعل — أرسل /stop لإيقافها أولاً.")
-        return
-    await update.message.reply_text(
-        f"📊 بدأ فحص عقود CALL فقط ({len(config.OPTIONS_WATCHLIST)} سهم)... "
-        f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
-    scan_calls = functools.partial(options_module.scan, sides=("call",))
-    _start_session(chat_id, _run_watchlist_session(
-        chat_id, "🟢 نتائج فحص عقود CALL", scan_calls, options_module.format_result,
-        context.application), kind="watchlist")
-
-
-async def cmd_options_puts(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await require_membership(update):
-        return
-    chat_id = update.effective_chat.id
-    if chat_id in sessions:
-        await update.message.reply_text("⏳ توجد جلسة قيد التنفيذ بالفعل — أرسل /stop لإيقافها أولاً.")
-        return
-    await update.message.reply_text(
-        f"📊 بدأ فحص عقود PUT فقط ({len(config.OPTIONS_WATCHLIST)} سهم)... "
-        f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
-    scan_puts = functools.partial(options_module.scan, sides=("put",))
-    _start_session(chat_id, _run_watchlist_session(
-        chat_id, "🔴 نتائج فحص عقود PUT", scan_puts, options_module.format_result,
-        context.application), kind="watchlist")
 
 
 async def cmd_leaps(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -337,7 +305,7 @@ async def cmd_heavy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⏳ توجد جلسة قيد التنفيذ بالفعل — أرسل /stop لإيقافها أولاً.")
         return
     await update.message.reply_text(
-        f"🏛️ بدأ فحص وحدة Heavy (Call + Put، Mega/Large/ETF، "
+        f"🏛️ بدأ فحص وحدة Heavy (Call فقط، Mega/Large/ETF، "
         f"{len(config.HEAVY_TICKERS)} رمز)... "
         f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
     _start_session(chat_id, _run_watchlist_session(
@@ -369,8 +337,8 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cancel_event = cancel_events.get(chat_id)
     if cancel_event is not None:
         cancel_event.set()
-    # Watchlist sessions (stocks/options/options_calls/options_puts/leaps/
-    # crypto) check cancel_event at their own per-symbol checkpoint and
+    # Watchlist sessions (stocks/options/leaps/heavy/crypto) check
+    # cancel_event at their own per-symbol checkpoint and
     # return gracefully with whatever they already found -- hard-cancelling
     # the task would discard that. A single-symbol ticker lookup has no such
     # checkpoint, so it still needs the hard cancel to actually stop.
@@ -407,12 +375,10 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"آخر نتائج: {results_line}\n\n"
         "الأوامر المتاحة:\n"
         "/stocks — فحص وحدة الأسهم\n"
-        "/options — فحص وحدة الأوبشن (Call + Put)\n"
-        "/options_calls — عقود Call فقط\n"
-        "/options_puts — عقود Put فقط\n"
-        "/options <رمز> — فحص عقود سهم محدد (Call + Put)\n"
+        "/options — فحص وحدة الأوبشن (Call فقط)\n"
+        "/options <رمز> — فحص عقود سهم محدد (Call فقط)\n"
         "/leaps — عقود CALL طويلة الأجل (365+ يوم)\n"
-        "/heavy — عقود Call+Put على أضخم الأسهم والصناديق (Mega/Large/ETF)\n"
+        "/heavy — عقود Call على أضخم الأسهم والصناديق (Mega/Large/ETF)\n"
         "/crypto — فحص وحدة الكريبتو\n"
         "/stop — إيقاف الجلسة الحالية فوراً\n"
         "/status — هذه الرسالة\n\n"
@@ -427,11 +393,9 @@ async def on_error(update, context: ContextTypes.DEFAULT_TYPE):
 
 BOT_COMMANDS = [
     BotCommand("stocks", "فحص وحدة الأسهم"),
-    BotCommand("options", "فحص وحدة الأوبشن (Call + Put)، أو /options <رمز> لسهم محدد"),
-    BotCommand("options_calls", "فحص عقود CALL فقط"),
-    BotCommand("options_puts", "فحص عقود PUT فقط"),
+    BotCommand("options", "فحص وحدة الأوبشن (Call فقط)، أو /options <رمز> لسهم محدد"),
     BotCommand("leaps", "عقود CALL طويلة الأجل (365+ يوم)"),
-    BotCommand("heavy", "عقود Call+Put على أضخم الأسهم والصناديق (Mega/Large/ETF)"),
+    BotCommand("heavy", "عقود Call على أضخم الأسهم والصناديق (Mega/Large/ETF)"),
     BotCommand("crypto", "فحص وحدة الكريبتو"),
     BotCommand("stop", "إيقاف الجلسة الحالية فوراً"),
     BotCommand("status", "حالة البوت وآخر النتائج"),
@@ -485,8 +449,6 @@ def main():
     app.add_error_handler(on_error)
     app.add_handler(CommandHandler("stocks", cmd_stocks))
     app.add_handler(CommandHandler("options", cmd_options))
-    app.add_handler(CommandHandler("options_calls", cmd_options_calls))
-    app.add_handler(CommandHandler("options_puts", cmd_options_puts))
     app.add_handler(CommandHandler("leaps", cmd_leaps))
     app.add_handler(CommandHandler("heavy", cmd_heavy))
     app.add_handler(CommandHandler("crypto", cmd_crypto))

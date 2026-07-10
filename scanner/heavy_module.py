@@ -1,5 +1,5 @@
-"""وحدة /heavy: فحص عقود Call وPut على قائمة مختارة (HEAVY_TICKERS) من
-أضخم الأسهم والصناديق الأكثر سيولة -- Mega caps، Large caps راسخة،
+"""وحدة /heavy: فحص عقود CALL فقط (بلا PUT) على قائمة مختارة (HEAVY_TICKERS)
+من أضخم الأسهم والصناديق الأكثر سيولة -- Mega caps، Large caps راسخة،
 وETFs كبرى -- مستقلة تماماً عن /options العامة (قائمة مختلفة، وشروطها
 الخاصة: مدى DTE أوسع بلا سقف أعلى، ونطاق strike أصرم).
 
@@ -7,7 +7,7 @@
 - DTE >= HEAVY_DTE_MIN (45 يوم)، بلا سقف أعلى -- يشمل أي LEAPS متوفر
   بالسلسلة الفعلية (2027، 2028، أو أبعد).
 - Strike ضمن ±HEAVY_STRIKE_PCT (10%) من السعر الحالي.
-- Ask <= HEAVY_PREMIUM_MAX (2.00$).
+- Ask <= HEAVY_PREMIUM_MAX (3.00$).
 - Volume >= HEAVY_VOLUME_MIN و Open Interest >= HEAVY_OI_MIN.
 - Spread < HEAVY_SPREAD_MAX (10%).
 
@@ -38,7 +38,7 @@ from .utils import fmt_price
 
 log = logging.getLogger(__name__)
 
-TYPE_TAG = {"call": "🟢 CALL (رهان صعود)", "put": "🔴 PUT (رهان هبوط)"}
+TYPE_TAG = "🟢 CALL (رهان صعود)"
 CATEGORY_TAG = {"mega": "🏛️ MEGA", "large": "🏢 LARGE", "etf": "📦 ETF"}
 
 # Fetch window ceiling -- generous enough that HEAVY_DTE_MIN/HEAVY_MAX_EXPIRIES
@@ -75,10 +75,10 @@ def _passes_filters(c: dict, spot: float) -> bool:
         return False
 
 
-def _row(symbol: str, spot: float, category: str, c: dict, is_call: bool) -> dict:
+def _row(symbol: str, spot: float, category: str, c: dict) -> dict:
     return {
         "symbol": symbol, "spot": spot, "category": category,
-        "side": "call" if is_call else "put",
+        "side": "call",
         "strike": c["strike"], "expiry": c["expiry"], "days": c["days"],
         "premium": c["premium"], "estimated": c["estimated"],
         "bid": c["bid"], "ask": c["ask"], "spread_pct": c["spread_pct"],
@@ -89,7 +89,7 @@ def _row(symbol: str, spot: float, category: str, c: dict, is_call: bool) -> dic
 
 
 def _contracts_for_symbol(symbol: str, spot: float, category: str) -> tuple[list[dict], int]:
-    """(عقود Call/Put مؤهلة لسهم واحد، عدد العقود المستبعدة لبيانات غير
+    """(عقود CALL مؤهلة لسهم واحد، عدد العقود المستبعدة لبيانات غير
     موثوقة). مرتبة محلياً بأعلى سيولة أولاً. Raises options.OptionsFetchError
     / options.NoNearTermOptions same as options.gather_candidates."""
     if options._no_options.get(symbol, 0) > time.time() - options.NO_OPTIONS_TTL:
@@ -104,13 +104,8 @@ def _contracts_for_symbol(symbol: str, spot: float, category: str) -> tuple[list
         options._no_options[symbol] = time.time()
         return [], excluded
 
-    results = []
-    for side in ("call", "put"):
-        is_call = side == "call"
-        for c in candidates.get(side, []):
-            if _passes_filters(c, spot):
-                results.append(_row(symbol, spot, category, c, is_call))
-
+    results = [_row(symbol, spot, category, c)
+              for c in candidates.get("call", []) if _passes_filters(c, spot)]
     results.sort(key=lambda r: -r["liquidity"])
     return results, excluded
 
@@ -164,7 +159,7 @@ def format_result(row: dict) -> str:
     العقد والمدة بارزة بالعنوان، والسيولة (حجم/عقود مفتوحة) ضمن الجدول
     لأنها معيار الترتيب هنا بدل احتمالية الربح."""
     approx = "≈" if row.get("estimated") else ""
-    header = (f"{CATEGORY_TAG[row['category']]} {TYPE_TAG[row['side']]} "
+    header = (f"{CATEGORY_TAG[row['category']]} {TYPE_TAG} "
              f"*{row['symbol']}* — {_duration_tag(row['days'])}")
     rows = [
         ("السهم", f"{row['symbol']} ({fmt_price(row['spot'])})"),
