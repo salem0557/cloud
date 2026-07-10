@@ -1,16 +1,22 @@
 """Telegram bot: three fully independent, on-demand scanning modules --
-stocks (reversal-up technical setups), options (CALL-contract screener),
-and crypto (top-30 coins via Binance public data). No automatic background
-scanning: every scan runs only when a member sends a command, and stops on
-its own after SESSION_TIMEOUT_SECONDS (or instantly via /stop).
+stocks (reversal-up technical setups, point-scored), options (CALL+PUT
+screener, Black-Scholes probability + EV), and crypto (top ~100 coins via
+Binance public data, point-scored). No automatic background scanning:
+every scan runs only when a member sends a command, and stops on its own
+after SESSION_TIMEOUT_SECONDS (15 minutes) or instantly via /stop.
 
 The bot is locked to whichever chat ids were already approved before this
 restructure (scanner/state.py's `approved`) -- there is no /approve command
 anymore, so no new member can be added from within the bot.
 
+Note: this file stays named bot.py (not main.py) even though it's the
+Telegram bot's entry point -- main.py in this repo already belongs to an
+unrelated tool (options_scanner/cli.py's CLI entry point).
+
 Run:  TELEGRAM_BOT_TOKEN=xxx python bot.py
 """
 import asyncio
+import functools
 import io
 import logging
 import time
@@ -24,8 +30,8 @@ from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from scanner import config, crypto_module, market_calendar, options_module, stocks_module
-from scanner.indicators import fmt_price
 from scanner.state import State
+from scanner.utils import fmt_price, split_message
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO
@@ -33,15 +39,16 @@ logging.basicConfig(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("bot")
 
-MSG_LIMIT = 3800  # keep below Telegram's 4096-char cap
-
 state = State()
 # One session (asyncio Task) + cancel Event per chat, at most -- a chat can
 # only have one module running at a time.
 sessions: dict[int, asyncio.Task] = {}
 cancel_events: dict[int, asyncio.Event] = {}
+# Last completed scan per chat, for /status -- {"title": str, "count": int, "ts": float}
+last_results: dict[int, dict] = {}
 
-FOOTER = "⚠️ تحليل فني آلي — ليس توصية بشراء أو بيع، ولا يشكل استشارة استثمارية."
+FOOTER = "⚠️ تقديرات إحصائية وليست ضمانًا."
+NO_RESULTS = "لا توجد فرص تحقق الحد الأدنى حاليًا."
 
 
 # ------------------------------------------------------------ eligibility
@@ -79,23 +86,8 @@ async def require_membership(update: Update) -> bool:
 
 # --------------------------------------------------------------- helpers
 
-def _split_message(text: str) -> list[str]:
-    """Split a long results block into Telegram-sized chunks on paragraph
-    boundaries (each result is one blank-line-separated block)."""
-    parts = text.split("\n\n")
-    chunks, current = [], parts[0]
-    for part in parts[1:]:
-        if len(current) + len(part) + 2 > MSG_LIMIT:
-            chunks.append(current)
-            current = part
-        else:
-            current += "\n\n" + part
-    chunks.append(current)
-    return chunks
-
-
 async def _send(app, chat_id: int, text: str):
-    for chunk in _split_message(text):
+    for chunk in split_message(text):
         try:
             await app.bot.send_message(chat_id, chunk, parse_mode=ParseMode.MARKDOWN)
         except Exception:
@@ -124,29 +116,27 @@ async def _send_row(app, chat_id: int, row: dict, format_fn):
 
 # ------------------------------------------------------- session machinery
 
-async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, app,
-                                 timeout_seconds: int | None = None):
-    """Runs a module's scan() under its own session-timeout cap (defaults to
-    SESSION_TIMEOUT_SECONDS; /options passes a longer one -- see
-    OPTIONS_SESSION_TIMEOUT_SECONDS) and instant-/stop cancellation; sends
-    each result as its OWN message (never batched) and a timeout/stop/error
-    notice as its own message too. A failure here is this module's problem
-    alone -- it never touches another module's session."""
-    timeout_seconds = timeout_seconds or config.SESSION_TIMEOUT_SECONDS
+async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, app):
+    """Runs a module's scan() under SESSION_TIMEOUT_SECONDS and instant-
+    /stop cancellation; sends each result as its OWN message (never
+    batched) and a timeout/stop/error notice as its own message too. A
+    failure here is this module's problem alone -- it never touches
+    another module's session."""
     cancel_event = asyncio.Event()
     cancel_events[chat_id] = cancel_event
     try:
         try:
-            results = await asyncio.wait_for(scan_fn(cancel_event), timeout=timeout_seconds)
+            results = await asyncio.wait_for(scan_fn(cancel_event),
+                                             timeout=config.SESSION_TIMEOUT_SECONDS)
         except asyncio.TimeoutError:
-            await _send(app, chat_id,
-                       f"⏰ {title} — انتهت الجلسة (تجاوزت {timeout_seconds // 60} دقيقة).")
+            await _send(app, chat_id, f"⏰ {title} — انتهت الجلسة، أرسل أمر جديد.")
             return
         if cancel_event.is_set():
             await _send(app, chat_id, f"⏹️ {title} — تم إيقاف الجلسة.")
             return
+        last_results[chat_id] = {"title": title, "count": len(results), "ts": time.time()}
         if not results:
-            await _send(app, chat_id, f"{title}\n\nلا نتائج تحقق الشروط حالياً.\n\n{FOOTER}")
+            await _send(app, chat_id, f"{title}\n\n{NO_RESULTS}\n\n{FOOTER}")
             return
         await _send(app, chat_id, f"{title} — {len(results)} نتيجة:")
         for row in results:
@@ -158,37 +148,38 @@ async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, a
         await _send(app, chat_id, f"⏹️ {title} — تم إيقاف الجلسة.")
     except Exception:
         log.exception("Session failed for chat %s (%s)", chat_id, title)
-        await _send(app, chat_id, f"⚠️ {title} — حدث خطأ غير متوقع أثناء الفحص.")
+        await _send(app, chat_id, f"⚠️ {title} — حدث خطأ غير متوقع أثناء الفحص. جرّب لاحقاً.")
     finally:
         sessions.pop(chat_id, None)
         cancel_events.pop(chat_id, None)
 
 
 async def _run_ticker_session(chat_id: int, symbol: str, app):
-    """/options TICKER: a single-symbol lookup, independent of the full
-    watchlist scan -- same timeout/cancel machinery, its own message."""
+    """/options TICKER: a single-symbol lookup (كول وبوت معاً)، مستقل عن
+    فحص القائمة الكاملة -- نفس آلية المهلة/الإلغاء، رسالة خاصة به."""
     try:
         spot, contracts, error = await asyncio.wait_for(
             options_module.scan_symbol(symbol), timeout=config.SESSION_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
-        await _send(app, chat_id, "⏰ انتهت الجلسة (تجاوزت 5 دقائق).")
+        await _send(app, chat_id, "⏰ انتهت الجلسة، أرسل أمر جديد.")
         return
     except asyncio.CancelledError:
         await _send(app, chat_id, "⏹️ تم إيقاف الجلسة.")
         return
     except Exception:
         log.exception("Ticker session failed for chat %s (%s)", chat_id, symbol)
-        await _send(app, chat_id, "⚠️ حدث خطأ غير متوقع أثناء الفحص.")
+        await _send(app, chat_id, "⚠️ حدث خطأ غير متوقع أثناء الفحص. جرّب لاحقاً.")
         return
     finally:
         sessions.pop(chat_id, None)
 
     if error:
         await _send(app, chat_id, f"📊 *{symbol}* — {error}")
-    elif not contracts:
+        return
+    last_results[chat_id] = {"title": f"📊 عقود {symbol}", "count": len(contracts), "ts": time.time()}
+    if not contracts:
         price_txt = fmt_price(spot) if spot else "-"
-        await _send(app, chat_id,
-                    f"📊 *{symbol}* ({price_txt}) — لا يوجد عقد يحقق الشروط حالياً.\n\n{FOOTER}")
+        await _send(app, chat_id, f"📊 *{symbol}* ({price_txt}) — {NO_RESULTS}\n\n{FOOTER}")
     else:
         await _send(app, chat_id, f"📊 عقود *{symbol}* المؤهلة — {len(contracts)}:")
         for row in contracts:
@@ -202,6 +193,10 @@ def _start_session(chat_id: int, coro) -> asyncio.Task:
     return task
 
 
+def _session_minutes() -> int:
+    return config.SESSION_TIMEOUT_SECONDS // 60
+
+
 # --------------------------------------------------------------- commands
 
 async def cmd_stocks(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -212,9 +207,8 @@ async def cmd_stocks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⏳ توجد جلسة قيد التنفيذ بالفعل — أرسل /stop لإيقافها أولاً.")
         return
     await update.message.reply_text(
-        f"📈 بدأ فحص وحدة الأسهم (كل السوق الأمريكي، من {config.STOCKS_MIN_PRICE:.0f}$ "
-        f"إلى {config.STOCKS_MAX_PRICE:.0f}$)... "
-        f"حتى {config.SESSION_TIMEOUT_SECONDS // 60} دقائق أو /stop للإيقاف الفوري.")
+        f"📈 بدأ فحص وحدة الأسهم ({len(config.STOCKS_WATCHLIST)} سهم)... "
+        f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
     _start_session(chat_id, _run_watchlist_session(
         chat_id, "📈 نتائج فحص الأسهم", stocks_module.scan, stocks_module.format_result,
         context.application))
@@ -229,16 +223,47 @@ async def cmd_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if context.args:
         symbol = context.args[0].upper()
-        await update.message.reply_text(f"⏳ يفحص عقود {symbol}...")
+        await update.message.reply_text(f"⏳ يفحص عقود {symbol} (Call و Put)...")
         _start_session(chat_id, _run_ticker_session(chat_id, symbol, context.application))
     else:
         await update.message.reply_text(
-            f"📊 بدأ فحص وحدة الأوبشن ({len(config.OPTIONS_WATCHLIST)} سهم)... "
-            f"قد يستغرق حتى {config.OPTIONS_SESSION_TIMEOUT_SECONDS // 60} دقيقة "
-            f"(قائمة أكبر تحتاج وقتاً أطول) أو /stop للإيقاف الفوري.")
+            f"📊 بدأ فحص وحدة الأوبشن (Call + Put، {len(config.OPTIONS_WATCHLIST)} سهم)... "
+            f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
         _start_session(chat_id, _run_watchlist_session(
-            chat_id, "📊 نتائج فحص الأوبشن", options_module.scan, options_module.format_result,
-            context.application, timeout_seconds=config.OPTIONS_SESSION_TIMEOUT_SECONDS))
+            chat_id, "📊 نتائج فحص الأوبشن (Call + Put)", options_module.scan,
+            options_module.format_result, context.application))
+
+
+async def cmd_options_calls(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_membership(update):
+        return
+    chat_id = update.effective_chat.id
+    if chat_id in sessions:
+        await update.message.reply_text("⏳ توجد جلسة قيد التنفيذ بالفعل — أرسل /stop لإيقافها أولاً.")
+        return
+    await update.message.reply_text(
+        f"📊 بدأ فحص عقود CALL فقط ({len(config.OPTIONS_WATCHLIST)} سهم)... "
+        f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
+    scan_calls = functools.partial(options_module.scan, sides=("call",))
+    _start_session(chat_id, _run_watchlist_session(
+        chat_id, "🟢 نتائج فحص عقود CALL", scan_calls, options_module.format_result,
+        context.application))
+
+
+async def cmd_options_puts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_membership(update):
+        return
+    chat_id = update.effective_chat.id
+    if chat_id in sessions:
+        await update.message.reply_text("⏳ توجد جلسة قيد التنفيذ بالفعل — أرسل /stop لإيقافها أولاً.")
+        return
+    await update.message.reply_text(
+        f"📊 بدأ فحص عقود PUT فقط ({len(config.OPTIONS_WATCHLIST)} سهم)... "
+        f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
+    scan_puts = functools.partial(options_module.scan, sides=("put",))
+    _start_session(chat_id, _run_watchlist_session(
+        chat_id, "🔴 نتائج فحص عقود PUT", scan_puts, options_module.format_result,
+        context.application))
 
 
 async def cmd_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -250,7 +275,7 @@ async def cmd_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text(
         f"🪙 بدأ فحص وحدة الكريبتو ({len(config.CRYPTO_WATCHLIST)} عملة)... "
-        f"حتى {config.SESSION_TIMEOUT_SECONDS // 60} دقائق أو /stop للإيقاف الفوري.")
+        f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
     _start_session(chat_id, _run_watchlist_session(
         chat_id, "🪙 نتائج فحص الكريبتو", crypto_module.scan, crypto_module.format_result,
         context.application))
@@ -275,24 +300,36 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         member_line = "أنت المشرف 👑"
     elif eligible(chat_id):
         expiry = sub_expiry(chat_id)
-        member_line = "عضو مفعّل ✅" if expiry == 0 else f"عضو مفعّل حتى {time.strftime('%Y-%m-%d', time.localtime(expiry))} ✅"
+        member_line = ("عضو مفعّل ✅" if expiry == 0 else
+                       f"عضو مفعّل حتى {time.strftime('%Y-%m-%d', time.localtime(expiry))} ✅")
     else:
         member_line = "غير مصرح لك ❌ (الخدمة مقفلة على الأعضاء الحاليين فقط)"
     session_line = "قيد التنفيذ ⏳ (أرسل /stop لإيقافها)" if chat_id in sessions else "لا توجد"
     market_line = "مفتوح ✅" if market_calendar.market_is_open() else "مغلق ❌"
+
+    last = last_results.get(chat_id)
+    if last:
+        mins_ago = int((time.time() - last["ts"]) / 60)
+        when = "الآن" if mins_ago < 1 else f"قبل {mins_ago} دقيقة"
+        results_line = f"{last['title']} — {last['count']} نتيجة ({when})"
+    else:
+        results_line = "لا توجد نتائج سابقة في هذه الجلسة"
+
     await update.message.reply_text(
         f"عضويتك: {member_line}\n"
         f"جلستك الحالية: {session_line}\n"
-        f"السوق الأمريكي الآن: {market_line}\n\n"
+        f"السوق الأمريكي الآن: {market_line}\n"
+        f"آخر نتائج: {results_line}\n\n"
         "الأوامر المتاحة:\n"
         "/stocks — فحص وحدة الأسهم\n"
-        "/options — فحص وحدة الأوبشن\n"
-        "/options <رمز> — فحص عقود سهم محدد\n"
+        "/options — فحص وحدة الأوبشن (Call + Put)\n"
+        "/options_calls — عقود Call فقط\n"
+        "/options_puts — عقود Put فقط\n"
+        "/options <رمز> — فحص عقود سهم محدد (Call + Put)\n"
         "/crypto — فحص وحدة الكريبتو\n"
         "/stop — إيقاف الجلسة الحالية فوراً\n"
         "/status — هذه الرسالة\n\n"
-        f"كل جلسة تتوقف تلقائياً بعد {config.SESSION_TIMEOUT_SECONDS // 60} دقائق كحد أقصى "
-        f"(الأوبشن حتى {config.OPTIONS_SESSION_TIMEOUT_SECONDS // 60} دقيقة، لقائمته الأكبر).\n"
+        f"كل جلسة تتوقف تلقائياً بعد {_session_minutes()} دقيقة كحد أقصى.\n"
         f"{FOOTER}"
     )
 
@@ -303,10 +340,12 @@ async def on_error(update, context: ContextTypes.DEFAULT_TYPE):
 
 BOT_COMMANDS = [
     BotCommand("stocks", "فحص وحدة الأسهم"),
-    BotCommand("options", "فحص وحدة الأوبشن، أو /options <رمز> لسهم واحد"),
+    BotCommand("options", "فحص وحدة الأوبشن (Call + Put)، أو /options <رمز> لسهم محدد"),
+    BotCommand("options_calls", "فحص عقود CALL فقط"),
+    BotCommand("options_puts", "فحص عقود PUT فقط"),
     BotCommand("crypto", "فحص وحدة الكريبتو"),
     BotCommand("stop", "إيقاف الجلسة الحالية فوراً"),
-    BotCommand("status", "حالة عضويتك وجلستك"),
+    BotCommand("status", "حالة البوت وآخر النتائج"),
 ]
 
 
@@ -314,11 +353,11 @@ BOT_COMMANDS = [
 # language_code) pair that has commands set for it; a per-chat scope beats
 # the default scope, and a language-specific list beats the "all languages"
 # (language_code unset) list within the same scope. Different Telegram
-# clients have shown at least two different stale menus for this bot that
-# don't match anything in this repo's history (i.e. they were set manually,
-# probably via @BotFather, at unknown scope/language combinations) -- so
-# rather than guess, every plausible combination is cleared here on every
-# startup, then only the intended default-scope/no-language list is set.
+# clients have shown stale menus for this bot that don't match anything in
+# this repo's history (i.e. they were set manually, probably via
+# @BotFather, at unknown scope/language combinations) -- so rather than
+# guess, every plausible combination is cleared here on every startup, then
+# only the intended default-scope/no-language list is set.
 _CANDIDATE_LANGS = [None, "ar", "en"]
 
 
@@ -357,6 +396,8 @@ def main():
     app.add_error_handler(on_error)
     app.add_handler(CommandHandler("stocks", cmd_stocks))
     app.add_handler(CommandHandler("options", cmd_options))
+    app.add_handler(CommandHandler("options_calls", cmd_options_calls))
+    app.add_handler(CommandHandler("options_puts", cmd_options_puts))
     app.add_handler(CommandHandler("crypto", cmd_crypto))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("status", cmd_status))

@@ -10,12 +10,7 @@ note used in the Telegram message.
 import numpy as np
 import pandas as pd
 
-
-def fmt_price(p: float) -> str:
-    """189.20$ for stocks, 61,250.00$ for BTC, 0.000012$ for micro-cap coins."""
-    if p >= 1:
-        return f"{p:,.2f}$"
-    return f"{p:.6f}".rstrip("0").rstrip(".") + "$"
+from .utils import fmt_price
 
 
 # ---------------------------------------------------------------- indicators
@@ -96,12 +91,12 @@ def _cluster_levels(prices: list[float], cluster_tol: float) -> list[tuple[float
     return levels
 
 
-def find_nearest_support(df: pd.DataFrame, lookback: int = 250, pivot_order: int = 3,
-                         cluster_tol: float = 0.01, min_touches: int = 2,
-                         margin: float = 0.015, break_tol: float = 0.005):
-    """The clustered pivot-low support level the price is sitting on or just
-    broke below, if any. Shared by check_support and the chart renderer so
-    the plotted line always matches the filter's own reasoning."""
+def find_nearest_support_info(df: pd.DataFrame, lookback: int = 250, pivot_order: int = 3,
+                              cluster_tol: float = 0.01, min_touches: int = 2,
+                              margin: float = 0.015, break_tol: float = 0.005):
+    """(level, touches) للدعم الذي يقف عنده السعر حالياً أو تحته بقليل، إن
+    وُجد -- touches (عدد مرات الاختبار التاريخية) يُستخدم لتقدير قوة الدعم
+    في نظام النقاط (stocks_module.py/crypto_module.py)."""
     lows = df["Low"].to_numpy()[-lookback:]
     close = float(df["Close"].iloc[-1])
     pivots = find_pivots(lows, order=pivot_order, highs=False)
@@ -111,14 +106,26 @@ def find_nearest_support(df: pd.DataFrame, lookback: int = 250, pivot_order: int
     prices = sorted(lows[i] for i in pivots)
     levels = _cluster_levels(prices, cluster_tol)
 
-    candidates = [lv for lv, touches in levels if touches >= min_touches]
-    for level in candidates:
+    candidates = [(lv, touches) for lv, touches in levels if touches >= min_touches]
+    for level, touches in candidates:
         # Support: price sitting just above, or a slight dip below
         near = 0 <= (close - level) / level <= margin
         slight_break = 0 <= (level - close) / level <= break_tol
         if near or slight_break:
-            return level
+            return level, touches
     return None
+
+
+def find_nearest_support(df: pd.DataFrame, lookback: int = 250, pivot_order: int = 3,
+                         cluster_tol: float = 0.01, min_touches: int = 2,
+                         margin: float = 0.015, break_tol: float = 0.005):
+    """The clustered pivot-low support level the price is sitting on or just
+    broke below, if any (level only -- see find_nearest_support_info for the
+    touch count too). Shared by check_support and the chart renderer so the
+    plotted line always matches the filter's own reasoning."""
+    info = find_nearest_support_info(df, lookback, pivot_order, cluster_tol,
+                                     min_touches, margin, break_tol)
+    return info[0] if info else None
 
 
 def check_support(df: pd.DataFrame, lookback: int = 250, pivot_order: int = 3,
@@ -154,10 +161,34 @@ def find_nearest_resistance(df: pd.DataFrame, lookback: int = 250, pivot_order: 
     return min(candidates) if candidates else None
 
 
-def check_falling_wedge(df: pd.DataFrame, lookback: int = 120, pivot_order: int = 3,
-                        min_bars: int = 20):
-    """Falling wedge: descending, converging trendlines through pivot highs/lows,
-    with the upper line falling faster and current price inside the pattern."""
+def find_nearest_support_below(df: pd.DataFrame, lookback: int = 250, pivot_order: int = 3,
+                               cluster_tol: float = 0.01, min_touches: int = 2):
+    """أقرب مستوى دعم (قيعان متكررة) تحت السعر الحالي، إن وُجد -- بلا شرط
+    قرب من السعر (على عكس find_nearest_support التي تشترط أن يقف السعر
+    عند/قرب المستوى). يُستخدم كهدف ربح تقديري لعقود Put في وحدة الأوبشن،
+    بنفس منطق find_nearest_resistance تماماً لكن بالاتجاه المعاكس."""
+    lows = df["Low"].to_numpy()[-lookback:]
+    close = float(df["Close"].iloc[-1])
+    pivots = find_pivots(lows, order=pivot_order, highs=False)
+    if len(pivots) < min_touches:
+        return None
+
+    prices = sorted(lows[i] for i in pivots)
+    levels = _cluster_levels(prices, cluster_tol)
+
+    candidates = [lv for lv, touches in levels if touches >= min_touches and lv < close]
+    return max(candidates) if candidates else None
+
+
+def check_falling_wedge_tier(df: pd.DataFrame, lookback: int = 120, pivot_order: int = 3,
+                             min_bars: int = 20):
+    """درجة الوتد الهابط: descending, converging trendlines through pivot
+    highs/lows, with the upper line falling faster than the lower one.
+
+    يرجع (tier, detail) حيث tier هي "complete" (نموذج مكتمل: تغطية زمنية
+    كافية والسعر داخل الوتد بهامش ضيق)، "semi" (الخطوط والانحدار صحيحة لكن
+    التغطية الزمنية أو موضع السعر أضعف من الشرط الصارم)، أو None (لا يوجد
+    وتد هابط أصلاً)."""
     data = df.iloc[-lookback:]
     highs = data["High"].to_numpy()
     lows = data["Low"].to_numpy()
@@ -167,7 +198,7 @@ def check_falling_wedge(df: pd.DataFrame, lookback: int = 120, pivot_order: int 
     ph = find_pivots(highs, order=pivot_order, highs=True)
     pl = find_pivots(lows, order=pivot_order, highs=False)
     if len(ph) < 2 or len(pl) < 2:
-        return False, "لا توجد قمم/قيعان كافية"
+        return None, "لا توجد قمم/قيعان كافية"
 
     # Use the most recent pivots (up to 4 of each) to define the wedge
     ph = ph[-4:]
@@ -175,24 +206,34 @@ def check_falling_wedge(df: pd.DataFrame, lookback: int = 120, pivot_order: int 
     hs, hi = np.polyfit(ph, highs[ph], 1)  # slope, intercept of upper line
     ls, li = np.polyfit(pl, lows[pl], 1)   # slope, intercept of lower line
 
-    pattern_start = min(ph[0], pl[0])
-    if n - 1 - pattern_start < min_bars:
-        return False, "النموذج قصير جداً"
-
     both_falling = hs < 0 and ls < 0
     converging = hs < ls  # upper line falls faster than lower line
     if not (both_falling and converging):
-        return False, "لا يوجد وتد هابط"
+        return None, "لا يوجد وتد هابط"
 
     # Convergence (apex) must lie ahead of the last bar, not inside the pattern
     apex = (li - hi) / (hs - ls)
     if apex <= n - 1:
-        return False, "الخطوط تقاطعت"
+        return None, "الخطوط تقاطعت"
 
+    pattern_start = min(ph[0], pl[0])
+    bars_covered = n - 1 - pattern_start
     upper_now = hs * (n - 1) + hi
     lower_now = ls * (n - 1) + li
-    margin = 0.005 * close
-    inside = (lower_now - margin) <= close <= (upper_now + margin)
-    if not inside:
-        return False, "السعر خارج الوتد"
-    return True, "وتد هابط مكتمل التكوين"
+    strict_margin = 0.005 * close
+    loose_margin = 0.02 * close
+    inside_strict = (lower_now - strict_margin) <= close <= (upper_now + strict_margin)
+    inside_loose = (lower_now - loose_margin) <= close <= (upper_now + loose_margin)
+
+    if bars_covered >= min_bars and inside_strict:
+        return "complete", "وتد هابط مكتمل التكوين"
+    if bars_covered >= min_bars * 0.6 and inside_loose:
+        return "semi", "وتد هابط شبه مكتمل"
+    return None, "لا يوجد وتد هابط واضح"
+
+
+def check_falling_wedge(df: pd.DataFrame, lookback: int = 120, pivot_order: int = 3,
+                        min_bars: int = 20):
+    """توافقاً مع الاستخدام القديم: True فقط للوتد المكتمل بالكامل."""
+    tier, detail = check_falling_wedge_tier(df, lookback, pivot_order, min_bars)
+    return tier == "complete", detail

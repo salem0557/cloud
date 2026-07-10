@@ -1,22 +1,23 @@
 """وحدة الأسهم الأمريكية (مستقلة تماماً عن وحدتَي الأوبشن والكريبتو).
 
-تفحص **كل** سوق الأسهم الأمريكي (NYSE + Nasdaq + AMEX عبر scanner/universe.py)
-مقيّداً بنطاق سعري STOCKS_MIN_PRICE..STOCKS_MAX_PRICE، بحثاً عن إشارات ارتداد
-صعودي: بولينجر السفلي، RSI تشبع بيعي، منطقة دعم، ووتد هابط -- يتطلب تحقق
-STOCKS_FILTERS_REQUIRED من أصل 4، وأن تحقق احتمالية ربح (Probability of
-Profit، بنفس نموذج وحدة الأوبشن اللوغاريتمي، لكن بتقلب تاريخي محسوب بدل
-تقلب ضمني) لا تقل عن STOCKS_MIN_POP. تُرجع أفضل STOCKS_TOP_N نتيجة، مرتبة
-بعدد الفلاتر المتحققة ثم بأعلى احتمالية ربح.
+تفحص STOCKS_WATCHLIST (S&P 500 + Nasdaq تقريباً، من config.py) بحثاً عن
+إشارات ارتداد صعودي: بولينجر السفلي، RSI تشبع بيعي، منطقة دعم، ووتد هابط
+(مكتمل أو شبه مكتمل) -- يتطلب تحقق STOCKS_FILTERS_REQUIRED من أصل 4.
+
+الاحتمالية هنا **نظام نقاط مرجّح** (heuristic score من 0 إلى
+STOCKS_SCORE_CAP)، وليست احتمالية إحصائية رياضية كما في وحدة الأوبشن (لا
+يوجد سوق خيارات على السهم نفسه لتلك الحسابات هنا) -- انظر _score أدناه
+للصيغة الكاملة. تُرجع أفضل STOCKS_TOP_N نتيجة تتجاوز STOCKS_MIN_POP.
 
 أي خطأ في جلب أو تقييم سهم واحد لا يوقف بقية الفحص -- يُسجَّل ويُتجاوز.
 """
 import asyncio
 import logging
+import math
 
-from . import chart, config, data, probability, universe
-from .indicators import (check_bollinger_lower, check_falling_wedge,
-                         check_rsi_oversold, check_support, fmt_price,
-                         find_nearest_resistance, find_nearest_support)
+from . import chart, config, data
+from . import indicators
+from .utils import fmt_price
 
 log = logging.getLogger(__name__)
 
@@ -28,29 +29,84 @@ FILTER_NAMES = {
 }
 
 
-def _run_filters(df):
-    """Evaluate all 4 stock filters against df with this module's own
-    thresholds; returns {key: (matched, detail)}."""
-    return {
-        "bollinger": check_bollinger_lower(
-            df, config.STOCKS_BB_PERIOD, config.STOCKS_BB_STD, config.STOCKS_BB_TOLERANCE),
-        "rsi": check_rsi_oversold(
-            df, config.STOCKS_RSI_PERIOD, config.STOCKS_RSI_OVERSOLD),
-        "support": check_support(
-            df, config.STOCKS_SUPPORT_LOOKBACK, config.STOCKS_WEDGE_PIVOT_ORDER,
-            config.STOCKS_SUPPORT_CLUSTER_TOL, config.STOCKS_SUPPORT_MIN_TOUCHES,
-            config.STOCKS_SUPPORT_MARGIN, config.STOCKS_SUPPORT_BREAK_TOL),
-        "wedge": check_falling_wedge(
-            df, config.STOCKS_WEDGE_LOOKBACK, config.STOCKS_WEDGE_PIVOT_ORDER,
-            config.STOCKS_WEDGE_MIN_BARS),
+async def _spy_trend_multiplier() -> float:
+    """SPY فوق متوسطه الحركي 50 يوماً -> STOCKS_TREND_UP_MULT، وإلا
+    STOCKS_TREND_DOWN_MULT. 1.0 (محايد) لو تعذر جلب بيانات SPY -- خطأ في
+    مؤشر الاتجاه العام لا يجب أن يوقف تقييم الأسهم نفسها."""
+    try:
+        frames = await asyncio.to_thread(data.fetch_batch, ["SPY"], "1d", "6mo")
+        df = frames.get("SPY")
+        if df is None or len(df) < config.STOCKS_TREND_SMA_PERIOD:
+            return 1.0
+        sma = df["Close"].tail(config.STOCKS_TREND_SMA_PERIOD).mean()
+        price = float(df["Close"].iloc[-1])
+        return config.STOCKS_TREND_UP_MULT if price > sma else config.STOCKS_TREND_DOWN_MULT
+    except Exception:
+        log.exception("SPY trend fetch failed; using neutral multiplier")
+        return 1.0
+
+
+def _score(df) -> tuple[list[str], float, dict] | None:
+    """(matched_filters, raw_points_before_trend, details) أو None لو لم
+    تتحقق STOCKS_FILTERS_REQUIRED فلاتر."""
+    close = float(df["Close"].iloc[-1])
+
+    rsi_series = indicators.rsi(df["Close"], config.STOCKS_RSI_PERIOD)
+    rsi_val = rsi_series.iloc[-1]
+    rsi_ok = not math.isnan(rsi_val)
+    rsi_matched = rsi_ok and rsi_val < config.STOCKS_RSI_OVERSOLD
+
+    bb_matched, bb_detail = indicators.check_bollinger_lower(
+        df, config.STOCKS_BB_PERIOD, config.STOCKS_BB_STD, config.STOCKS_BB_TOLERANCE)
+    lower, _, _ = indicators.bollinger(df["Close"], config.STOCKS_BB_PERIOD, config.STOCKS_BB_STD)
+    last_lower = lower.iloc[-1]
+    bb_gap = (close - last_lower) / last_lower if not math.isnan(last_lower) else None
+
+    support_info = indicators.find_nearest_support_info(
+        df, config.STOCKS_SUPPORT_LOOKBACK, config.STOCKS_WEDGE_PIVOT_ORDER,
+        config.STOCKS_SUPPORT_CLUSTER_TOL, config.STOCKS_SUPPORT_MIN_TOUCHES,
+        config.STOCKS_SUPPORT_MARGIN, config.STOCKS_SUPPORT_BREAK_TOL)
+    support_matched = support_info is not None
+
+    wedge_tier, wedge_detail = indicators.check_falling_wedge_tier(
+        df, config.STOCKS_WEDGE_LOOKBACK, config.STOCKS_WEDGE_PIVOT_ORDER,
+        config.STOCKS_WEDGE_MIN_BARS)
+    wedge_matched = wedge_tier is not None
+
+    matched_map = {"bollinger": bb_matched, "rsi": rsi_matched,
+                   "support": support_matched, "wedge": wedge_matched}
+    matched = [k for k, ok in matched_map.items() if ok]
+    if len(matched) < config.STOCKS_FILTERS_REQUIRED:
+        return None
+
+    points = 0.0
+    if rsi_ok:
+        if rsi_val < 30:
+            points += config.STOCKS_SCORE_RSI_STRONG
+        elif rsi_val < 35:
+            points += config.STOCKS_SCORE_RSI_WEAK
+    if bb_gap is not None:
+        if bb_gap <= 0.01:
+            points += config.STOCKS_SCORE_BB_STRONG
+        elif bb_gap <= 0.02:
+            points += config.STOCKS_SCORE_BB_WEAK
+    if support_info is not None:
+        _, touches = support_info
+        points += (config.STOCKS_SCORE_SUPPORT_STRONG if touches >= 3
+                  else config.STOCKS_SCORE_SUPPORT_WEAK)
+    if wedge_tier == "complete":
+        points += config.STOCKS_SCORE_WEDGE_COMPLETE
+    elif wedge_tier == "semi":
+        points += config.STOCKS_SCORE_WEDGE_SEMI
+
+    details = {
+        "bollinger": bb_detail,
+        "rsi": f"RSI={rsi_val:.1f}" if rsi_ok else "بيانات غير كافية",
+        "support": f"دعم عند {fmt_price(support_info[0])} (اختُبر {support_info[1]} مرات)"
+                   if support_info else "بعيد عن الدعم",
+        "wedge": wedge_detail,
     }
-
-
-def _passes_price_band(df) -> bool:
-    price = float(df["Close"].iloc[-1])
-    avg_vol = df["Volume"].tail(20).mean()
-    return (config.STOCKS_MIN_PRICE <= price <= config.STOCKS_MAX_PRICE
-            and avg_vol >= config.MIN_AVG_VOLUME)
+    return matched, points, details
 
 
 def _explain(matched: list[str], details: dict) -> str:
@@ -58,17 +114,20 @@ def _explain(matched: list[str], details: dict) -> str:
     return "الشرح: " + "، ".join(parts) if parts else ""
 
 
-def _evaluate(symbol: str, df) -> dict | None:
-    if not _passes_price_band(df):
+def _evaluate(symbol: str, df, trend_mult: float) -> dict | None:
+    if df["Volume"].tail(20).mean() < config.MIN_AVG_VOLUME:
         return None
-    results = _run_filters(df)
-    matched = [k for k, (ok, _) in results.items() if ok]
-    if len(matched) < config.STOCKS_FILTERS_REQUIRED:
+    scored = _score(df)
+    if scored is None:
+        return None
+    matched, points, details = scored
+
+    probability = min(points * trend_mult, config.STOCKS_SCORE_CAP)
+    if probability < config.STOCKS_MIN_POP:
         return None
 
     price = float(df["Close"].iloc[-1])
-    details = {k: d for k, (_, d) in results.items()}
-    resistance = find_nearest_resistance(
+    resistance = indicators.find_nearest_resistance(
         df, config.STOCKS_SUPPORT_LOOKBACK, config.STOCKS_WEDGE_PIVOT_ORDER,
         config.STOCKS_SUPPORT_CLUSTER_TOL, config.STOCKS_SUPPORT_MIN_TOUCHES)
     if resistance is not None:
@@ -77,16 +136,6 @@ def _evaluate(symbol: str, df) -> dict | None:
     else:
         profit_pct = 10.0
         target_note = "افتراضي +10%"
-    target_price = resistance if resistance is not None else price * 1.10
-
-    # Probability of profit: same lognormal model as the options module,
-    # with the underlying's own realized volatility standing in for implied
-    # volatility (there's no options market on the stock itself here).
-    vol = probability.realized_volatility(df["Close"].to_numpy(), bars_per_year=252)
-    pop = probability.probability_of_profit(
-        price, target_price, config.STOCKS_PROFIT_HORIZON_DAYS, vol)
-    if pop is None or pop < config.STOCKS_MIN_POP:
-        return None
 
     return {
         "symbol": symbol,
@@ -98,22 +147,22 @@ def _evaluate(symbol: str, df) -> dict | None:
         "profit_pct": profit_pct,
         "target_note": target_note,
         "resistance": resistance,
-        "probability_of_profit": round(pop, 1),
+        "probability_of_profit": round(probability, 1),
         "chart_png": None,
     }
 
 
 async def scan(cancel_event: asyncio.Event | None = None) -> list[dict]:
-    """يفحص كل سوق الأسهم الأمريكي (مقيّداً بالنطاق السعري)، ويرجع أفضل
-    STOCKS_TOP_N نتيجة مع رسم بياني لكل واحدة منها."""
+    """يفحص كل أسهم STOCKS_WATCHLIST، ويرجع أفضل STOCKS_TOP_N نتيجة مع رسم
+    بياني لكل واحدة منها."""
     try:
-        watchlist = await asyncio.to_thread(universe.get_universe)
+        trend_mult = await _spy_trend_multiplier()
     except Exception:
-        log.exception("Could not load the stock universe")
-        return []
+        log.exception("Unexpected error computing SPY trend; using neutral multiplier")
+        trend_mult = 1.0
 
     found: list[dict] = []
-    batches = data.make_batches(watchlist)
+    batches = data.make_batches(config.STOCKS_WATCHLIST)
     for batch in batches:
         if cancel_event is not None and cancel_event.is_set():
             break
@@ -125,7 +174,7 @@ async def scan(cancel_event: asyncio.Event | None = None) -> list[dict]:
             continue
         for symbol, df in frames.items():
             try:
-                row = _evaluate(symbol, df)
+                row = _evaluate(symbol, df, trend_mult)
             except Exception:
                 log.exception("Stocks evaluation failed for %s", symbol)
                 continue
@@ -141,7 +190,7 @@ async def scan(cancel_event: asyncio.Event | None = None) -> list[dict]:
 async def _attach_charts(rows: list[dict], cancel_event: asyncio.Event | None):
     """Only the final top picks get a chart -- re-fetching a handful of
     symbols is cheap, rendering one for every candidate during the full
-    market pass would not be."""
+    watchlist pass would not be."""
     for row in rows:
         if cancel_event is not None and cancel_event.is_set():
             return
@@ -151,7 +200,7 @@ async def _attach_charts(rows: list[dict], cancel_event: asyncio.Event | None):
             df = frames.get(row["symbol"])
             if df is None:
                 continue
-            support = find_nearest_support(
+            support = indicators.find_nearest_support(
                 df, config.STOCKS_SUPPORT_LOOKBACK, config.STOCKS_WEDGE_PIVOT_ORDER,
                 config.STOCKS_SUPPORT_CLUSTER_TOL, config.STOCKS_SUPPORT_MIN_TOUCHES,
                 config.STOCKS_SUPPORT_MARGIN, config.STOCKS_SUPPORT_BREAK_TOL)
@@ -163,8 +212,8 @@ async def _attach_charts(rows: list[dict], cancel_event: asyncio.Event | None):
 
 
 def format_result(row: dict) -> str:
-    """نص كل نتيجة: سطران (السهم/السعر/الفلاتر، ثم هدف الربح)، تليهما
-    الشرح -- يُستخدم كنص أو كتعليق (caption) على صورة الرسم البياني."""
+    """نص كل نتيجة: سطران (السهم/السعر/الفلاتر، ثم الهدف والاحتمالية)،
+    تليهما الشرح -- يُستخدم كنص أو كتعليق (caption) على صورة الرسم البياني."""
     matched_names = "، ".join(FILTER_NAMES[k] for k in row["matched"])
     line1 = (f"*{row['symbol']}* — {fmt_price(row['price'])} — "
              f"{len(row['matched'])}/{row['total']} ({matched_names})")

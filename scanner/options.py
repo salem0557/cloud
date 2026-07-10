@@ -1,7 +1,6 @@
-"""Shared low-level layer for fetching CALL option chains (this bot only
-ever trades bullish/long-call contracts) from two independent free
-providers, plus Black-Scholes delta/theta since neither provider reliably
-publishes real Greeks.
+"""Shared low-level layer for fetching CALL and PUT option chains from two
+independent free providers, plus Black-Scholes delta/theta since neither
+provider reliably publishes real Greeks.
 
 This module does NOT filter/rank contracts by itself anymore -- that is
 options_module.py's job, using its own OPTIONS_* thresholds. This module
@@ -16,6 +15,7 @@ import time
 
 import requests
 import yfinance as yf
+from scipy.stats import norm
 
 from . import config
 
@@ -65,36 +65,27 @@ def _expiries_with_retry(ticker, symbol: str) -> list[str]:
     return []
 
 
-def _norm_cdf(x: float) -> float:
-    return 0.5 * (1 + math.erf(x / math.sqrt(2)))
-
-
-def _norm_pdf(x: float) -> float:
-    return math.exp(-x * x / 2) / math.sqrt(2 * math.pi)
-
-
 def _bs_delta_theta(spot: float, strike: float, days: int, iv: float | None,
                     is_call: bool = True) -> tuple[float | None, float | None]:
-    """Black-Scholes delta and per-day theta, or (None, None) if IV/days
-    aren't usable. Computed manually (no py_vollib/mibian dependency) --
-    a prior deployment broke for weeks because a stray merge conflict
-    corrupted requirements.txt, so this bot avoids adding new pip
-    dependencies for math that a few lines of pure Python already covers."""
+    """Black-Scholes delta and per-day theta (call or put), or (None, None)
+    if IV/days aren't usable. Uses scipy.stats.norm same as
+    probability_module.py's POP calculation, for one consistent Black-
+    Scholes implementation across the options module."""
     if not days or not iv or iv <= 0 or spot <= 0 or strike <= 0:
         return None, None
     t = days / 365.0
     sqrt_t = math.sqrt(t)
     d1 = (math.log(spot / strike) + (RISK_FREE_RATE + 0.5 * iv * iv) * t) / (iv * sqrt_t)
     d2 = d1 - iv * sqrt_t
-    pdf_d1 = _norm_pdf(d1)
+    pdf_d1 = norm.pdf(d1)
     if is_call:
-        delta = _norm_cdf(d1)
+        delta = norm.cdf(d1)
         theta_year = (-(spot * pdf_d1 * iv) / (2 * sqrt_t)
-                     - RISK_FREE_RATE * strike * math.exp(-RISK_FREE_RATE * t) * _norm_cdf(d2))
+                     - RISK_FREE_RATE * strike * math.exp(-RISK_FREE_RATE * t) * norm.cdf(d2))
     else:
-        delta = _norm_cdf(d1) - 1
+        delta = norm.cdf(d1) - 1
         theta_year = (-(spot * pdf_d1 * iv) / (2 * sqrt_t)
-                     + RISK_FREE_RATE * strike * math.exp(-RISK_FREE_RATE * t) * _norm_cdf(-d2))
+                     + RISK_FREE_RATE * strike * math.exp(-RISK_FREE_RATE * t) * norm.cdf(-d2))
     return delta, theta_year / 365.0
 
 
@@ -139,10 +130,10 @@ def _raw_candidate(row, spot: float, expiry: str, days: int, is_call: bool) -> d
     }
 
 
-def _add_candidate(candidates, row, spot, expiry, days):
-    raw = _raw_candidate(row, spot, expiry, days, is_call=True)
+def _add_candidate(candidates, row, spot, expiry, days, is_call: bool):
+    raw = _raw_candidate(row, spot, expiry, days, is_call=is_call)
     if raw is not None:
-        candidates["call"].append(raw)
+        candidates["call" if is_call else "put"].append(raw)
 
 
 def _yahoo_candidates(symbol, spot, today, cutoff):
@@ -151,7 +142,7 @@ def _yahoo_candidates(symbol, spot, today, cutoff):
     ticker = yf.Ticker(symbol)
     expiries = _expiries_with_retry(ticker, symbol)
     if not expiries:
-        return {"call": []}, False
+        return {"call": [], "put": []}, False
 
     upcoming = []
     for exp in expiries:
@@ -169,7 +160,7 @@ def _yahoo_candidates(symbol, spot, today, cutoff):
     if not upcoming:
         raise NoNearTermOptions(symbol)
 
-    candidates = {"call": []}
+    candidates = {"call": [], "put": []}
     fetched = 0
     for exp, days in upcoming:
         chain = None
@@ -185,7 +176,9 @@ def _yahoo_candidates(symbol, spot, today, cutoff):
             continue
         fetched += 1
         for _, row in chain.calls.iterrows():
-            _add_candidate(candidates, row, spot, exp, days)
+            _add_candidate(candidates, row, spot, exp, days, is_call=True)
+        for _, row in chain.puts.iterrows():
+            _add_candidate(candidates, row, spot, exp, days, is_call=False)
 
     if fetched == 0:
         raise OptionsFetchError(symbol)
@@ -198,7 +191,7 @@ def _cboe_candidates(symbol, spot, today, cutoff):
         resp = requests.get(CBOE_URL.format(symbol=symbol.upper()), timeout=20,
                             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 404:
-            return {"call": []}, False  # not an optionable symbol
+            return {"call": [], "put": []}, False  # not an optionable symbol
         resp.raise_for_status()
         contracts = resp.json()["data"].get("options") or []
     except OptionsFetchError:
@@ -206,16 +199,17 @@ def _cboe_candidates(symbol, spot, today, cutoff):
     except Exception as exc:
         raise OptionsFetchError(symbol) from exc
     if not contracts:
-        return {"call": []}, False
+        return {"call": [], "put": []}, False
 
     # Contract names look like DDD261218C00005000: yymmdd, C/P, strike*1000
     pat = re.compile(rf"^{re.escape(symbol.upper())}(\d{{6}})([CP])(\d{{8}})$")
-    candidates = {"call": []}
+    candidates = {"call": [], "put": []}
     any_in_window = False
     for c in contracts:
         m = pat.match(c.get("option", ""))
-        if not m or m.group(2) != "C":  # only calls: this strategy is long-only
+        if not m:
             continue
+        is_call = m.group(2) == "C"
         try:
             exp_date = dt.datetime.strptime(m.group(1), "%y%m%d").date()
         except ValueError:
@@ -233,7 +227,7 @@ def _cboe_candidates(symbol, spot, today, cutoff):
             "iv": c.get("iv"),
         }
         _add_candidate(candidates, row, spot,
-                       exp_date.isoformat(), (exp_date - today).days)
+                       exp_date.isoformat(), (exp_date - today).days, is_call=is_call)
 
     # Contracts exist for this symbol, but every one of them expires beyond
     # our near-term window — same distinction as the Yahoo provider above.
