@@ -44,6 +44,10 @@ state = State()
 # only have one module running at a time.
 sessions: dict[int, asyncio.Task] = {}
 cancel_events: dict[int, asyncio.Event] = {}
+# "watchlist" | "ticker" -- cmd_stop only hard-cancels ticker sessions (no
+# internal checkpoints to drain gracefully); watchlist sessions rely purely
+# on cancel_event so their scan loop can return whatever it already found.
+session_kind: dict[int, str] = {}
 # Last completed scan per chat, for /status -- {"title": str, "count": int, "ts": float}
 last_results: dict[int, dict] = {}
 
@@ -117,36 +121,57 @@ async def _send_row(app, chat_id: int, row: dict, format_fn):
 # ------------------------------------------------------- session machinery
 
 async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, app):
-    """Runs a module's scan() under SESSION_TIMEOUT_SECONDS and instant-
-    /stop cancellation; sends each result as its OWN message (never
-    batched) and a timeout/stop/error notice as its own message too. A
-    failure here is this module's problem alone -- it never touches
-    another module's session."""
+    """Runs a module's scan() with a SOFT timeout: instead of hard-
+    cancelling the coroutine (which would discard everything scan_fn had
+    already accumulated), a background timer just sets cancel_event after
+    SESSION_TIMEOUT_SECONDS -- the same signal /stop sends -- so scan_fn's
+    own per-symbol checkpoint notices it and returns whatever it already
+    found, same as a manual /stop. Sends each result as its OWN message
+    (never batched). A failure here is this module's problem alone -- it
+    never touches another module's session."""
     cancel_event = asyncio.Event()
     cancel_events[chat_id] = cancel_event
+    timed_out = False
+
+    async def _timeout_setter():
+        nonlocal timed_out
+        await asyncio.sleep(config.SESSION_TIMEOUT_SECONDS)
+        timed_out = True
+        cancel_event.set()
+
+    timer = asyncio.create_task(_timeout_setter())
     try:
         try:
-            results = await asyncio.wait_for(scan_fn(cancel_event),
-                                             timeout=config.SESSION_TIMEOUT_SECONDS)
-        except asyncio.TimeoutError:
-            await _send(app, chat_id, f"⏰ {title} — انتهت الجلسة، أرسل أمر جديد.")
-            return
-        if cancel_event.is_set():
-            await _send(app, chat_id, f"⏹️ {title} — تم إيقاف الجلسة.")
-            return
+            results = await scan_fn(cancel_event)
+        finally:
+            timer.cancel()
+
         last_results[chat_id] = {"title": title, "count": len(results), "ts": time.time()}
         excluded = getattr(results, "excluded_bad_data", 0)
         excluded_line = f"⚠️ استُبعد {excluded} عقد لبيانات غير موثوقة" if excluded else ""
+        stopped_early = cancel_event.is_set()
+
         if not results:
-            msg = f"{title}\n\n{NO_RESULTS}"
+            if stopped_early and timed_out:
+                reason = "⏰ انتهت الجلسة (15 دقيقة) قبل إيجاد أي نتيجة."
+            elif stopped_early:
+                reason = "⏹️ تم إيقاف الجلسة قبل إيجاد أي نتيجة."
+            else:
+                reason = NO_RESULTS
+            msg = f"{title}\n\n{reason}"
             if excluded_line:
                 msg += f"\n\n{excluded_line}"
             await _send(app, chat_id, f"{msg}\n\n{FOOTER}")
             return
-        await _send(app, chat_id, f"{title} — {len(results)} نتيجة:")
+
+        if stopped_early and timed_out:
+            header = f"⏰ {title} — انتهت الجلسة (15 دقيقة)، إليك أفضل {len(results)} نتيجة وُجدت حتى الآن:"
+        elif stopped_early:
+            header = f"⏹️ {title} — تم إيقاف الجلسة، إليك أفضل {len(results)} نتيجة وُجدت حتى الآن:"
+        else:
+            header = f"{title} — {len(results)} نتيجة:"
+        await _send(app, chat_id, header)
         for row in results:
-            if cancel_event.is_set():
-                break
             await _send_row(app, chat_id, row, format_fn)
         await _send(app, chat_id, f"{excluded_line}\n\n{FOOTER}" if excluded_line else FOOTER)
     except asyncio.CancelledError:
@@ -157,6 +182,7 @@ async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, a
     finally:
         sessions.pop(chat_id, None)
         cancel_events.pop(chat_id, None)
+        session_kind.pop(chat_id, None)
 
 
 async def _run_ticker_session(chat_id: int, symbol: str, app):
@@ -177,6 +203,7 @@ async def _run_ticker_session(chat_id: int, symbol: str, app):
         return
     finally:
         sessions.pop(chat_id, None)
+        session_kind.pop(chat_id, None)
 
     if error:
         await _send(app, chat_id, f"📊 *{symbol}* — {error}")
@@ -196,9 +223,10 @@ async def _run_ticker_session(chat_id: int, symbol: str, app):
         await _send(app, chat_id, f"{excluded_line}\n\n{FOOTER}" if excluded_line else FOOTER)
 
 
-def _start_session(chat_id: int, coro) -> asyncio.Task:
+def _start_session(chat_id: int, coro, kind: str) -> asyncio.Task:
     task = asyncio.create_task(coro)
     sessions[chat_id] = task
+    session_kind[chat_id] = kind
     return task
 
 
@@ -220,7 +248,7 @@ async def cmd_stocks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
     _start_session(chat_id, _run_watchlist_session(
         chat_id, "📈 نتائج فحص الأسهم", stocks_module.scan, stocks_module.format_result,
-        context.application))
+        context.application), kind="watchlist")
 
 
 async def cmd_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -233,14 +261,15 @@ async def cmd_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         symbol = context.args[0].upper()
         await update.message.reply_text(f"⏳ يفحص عقود {symbol} (Call و Put)...")
-        _start_session(chat_id, _run_ticker_session(chat_id, symbol, context.application))
+        _start_session(chat_id, _run_ticker_session(chat_id, symbol, context.application),
+                      kind="ticker")
     else:
         await update.message.reply_text(
             f"📊 بدأ فحص وحدة الأوبشن (Call + Put، {len(config.OPTIONS_WATCHLIST)} سهم)... "
             f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
         _start_session(chat_id, _run_watchlist_session(
             chat_id, "📊 نتائج فحص الأوبشن (Call + Put)", options_module.scan,
-            options_module.format_result, context.application))
+            options_module.format_result, context.application), kind="watchlist")
 
 
 async def cmd_options_calls(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -256,7 +285,7 @@ async def cmd_options_calls(update: Update, context: ContextTypes.DEFAULT_TYPE):
     scan_calls = functools.partial(options_module.scan, sides=("call",))
     _start_session(chat_id, _run_watchlist_session(
         chat_id, "🟢 نتائج فحص عقود CALL", scan_calls, options_module.format_result,
-        context.application))
+        context.application), kind="watchlist")
 
 
 async def cmd_options_puts(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -272,7 +301,7 @@ async def cmd_options_puts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     scan_puts = functools.partial(options_module.scan, sides=("put",))
     _start_session(chat_id, _run_watchlist_session(
         chat_id, "🔴 نتائج فحص عقود PUT", scan_puts, options_module.format_result,
-        context.application))
+        context.application), kind="watchlist")
 
 
 async def cmd_leaps(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -289,7 +318,7 @@ async def cmd_leaps(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
     _start_session(chat_id, _run_watchlist_session(
         chat_id, "🗓️ نتائج فحص LEAPS", options_module.scan_leaps,
-        options_module.format_leaps_result, context.application))
+        options_module.format_leaps_result, context.application), kind="watchlist")
 
 
 async def cmd_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -304,7 +333,7 @@ async def cmd_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
     _start_session(chat_id, _run_watchlist_session(
         chat_id, "🪙 نتائج فحص الكريبتو", crypto_module.scan, crypto_module.format_result,
-        context.application))
+        context.application), kind="watchlist")
 
 
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -316,7 +345,13 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cancel_event = cancel_events.get(chat_id)
     if cancel_event is not None:
         cancel_event.set()
-    task.cancel()
+    # Watchlist sessions (stocks/options/options_calls/options_puts/leaps/
+    # crypto) check cancel_event at their own per-symbol checkpoint and
+    # return gracefully with whatever they already found -- hard-cancelling
+    # the task would discard that. A single-symbol ticker lookup has no such
+    # checkpoint, so it still needs the hard cancel to actually stop.
+    if session_kind.get(chat_id) == "ticker":
+        task.cancel()
     await update.message.reply_text("⏹️ جارٍ إيقاف الجلسة...")
 
 
