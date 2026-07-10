@@ -190,7 +190,8 @@ async def scan(cancel_event: asyncio.Event | None = None,
 
 def _passes_leaps_filters(c: dict) -> bool:
     """فلاتر /leaps الخاصة -- مستقلة تماماً عن _passes_filters العامة أعلاه،
-    لا تشترط سيولة/سبريد/سعر طلب معينة، فقط DTE طويل ودلتا وتقلب ضمني."""
+    لا تشترط سيولة/سبريد معينة، فقط DTE طويل ودلتا وتقلب ضمني وسقف تكلفة
+    العقد الكامل (LEAPS_MAX_COST = بريميوم × 100)."""
     try:
         delta = c["delta"]
         iv = c["iv"]
@@ -198,7 +199,8 @@ def _passes_leaps_filters(c: dict) -> bool:
             return False
         return (abs(delta) >= config.LEAPS_DELTA_MIN
                 and iv < config.LEAPS_IV_MAX
-                and c["days"] >= config.LEAPS_DTE_MIN)
+                and c["days"] >= config.LEAPS_DTE_MIN
+                and c["premium"] * 100 <= config.LEAPS_MAX_COST)
     except (KeyError, TypeError):
         return False
 

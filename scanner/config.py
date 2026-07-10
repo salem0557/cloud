@@ -195,6 +195,7 @@ LEAPS_DELTA_MIN = _float("LEAPS_DELTA_MIN", 0.60)   # no upper bound
 LEAPS_IV_MAX = _float("LEAPS_IV_MAX", 0.35)
 LEAPS_MIN_PRICE = _float("LEAPS_MIN_PRICE", 8.0)
 LEAPS_MAX_PRICE = _float("LEAPS_MAX_PRICE", 100.0)
+LEAPS_MAX_COST = _float("LEAPS_MAX_COST", 170.0)   # total contract cost = premium * 100
 # Expiry lookup window: needs to reach well past 365 days, unlike the
 # general options module's OPTIONS_MAX_WEEKS (~1 year).
 LEAPS_MAX_WEEKS = _int("LEAPS_MAX_WEEKS", 104)   # ~2 years
