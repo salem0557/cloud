@@ -17,11 +17,51 @@ import requests
 import yfinance as yf
 from scipy.stats import norm
 
-from . import config
+from . import config, probability_module as pm
 
 log = logging.getLogger(__name__)
 
 RISK_FREE_RATE = 0.045  # ~ current T-bill yield; only used to estimate delta/theta
+
+# --- Data sanity checks, applied to every contract before it's ever handed
+# --- to a caller for POP/EV math. Corrupted or stale feed data (a garbage
+# --- IV, a price/delta pair that can't both be right) must be caught HERE,
+# --- not silently fed into Black-Scholes downstream. ---
+IV_MIN_SANE = 0.10     # 10% -- below this, IV data is almost certainly bad
+IV_MAX_SANE = 3.00     # 300% -- above this, likewise
+# A contract priced under this with a delta above this threshold is
+# self-contradictory: that cheap, it can't really be that deep in the money.
+PRICE_DELTA_CHECK_PRICE = 0.30
+PRICE_DELTA_CHECK_DELTA = 0.50
+# Neither Yahoo nor CBOE publish a delta of their own (see _bs_delta_theta's
+# docstring) -- delta here is always self-computed from IV via Black-
+# Scholes, so re-deriving delta from the same (spot, strike, days, iv) and
+# comparing it back is a no-op (always identical). The meaningful
+# equivalent cross-check available with this data is: does the Black-
+# Scholes THEORETICAL PRICE implied by (spot, strike, days, iv) roughly
+# match the contract's own quoted premium? A large mismatch means the IV
+# value itself is inconsistent with the market price it supposedly came
+# from -- the same class of "feed data doesn't hang together" bug.
+THEORETICAL_PRICE_TOLERANCE_PCT = 0.50   # 50% relative difference
+
+
+def _sanity_check(iv, delta, premium, spot, strike, days, is_call) -> tuple[bool, str | None]:
+    """(سليم؟, سبب الرفض إن وُجد) -- ثلاث فحوصات مستقلة، أي فشل يستبعد
+    العقد فوراً قبل أي استخدام له في حسابات الاحتمالية."""
+    if iv is None or not (IV_MIN_SANE <= iv <= IV_MAX_SANE):
+        return False, f"IV خارج النطاق المعقول ({iv})"
+    if delta is None:
+        return False, "تعذر حساب الدلتا"
+    if premium < PRICE_DELTA_CHECK_PRICE and abs(delta) > PRICE_DELTA_CHECK_DELTA:
+        return False, f"تضارب سعر/دلتا (premium={premium}, delta={delta:.2f})"
+    theoretical = pm.theoretical_price(spot, strike, days, iv, is_call)
+    if theoretical is None:
+        return False, "تعذر حساب السعر النظري للتحقق"
+    baseline = max(premium, 0.01)
+    if abs(theoretical - premium) / baseline > THEORETICAL_PRICE_TOLERANCE_PCT:
+        return False, (f"تضارب بين السعر النظري ({theoretical:.2f}$) "
+                       f"والسعر المعروض ({premium:.2f}$)")
+    return True, None
 
 # Fallback provider: CBOE publishes full delayed option chains (all expiries
 # in ONE request) with no API key. Independent of Yahoo, so it keeps working
@@ -89,9 +129,16 @@ def _bs_delta_theta(spot: float, strike: float, days: int, iv: float | None,
     return delta, theta_year / 365.0
 
 
-def _raw_candidate(row, spot: float, expiry: str, days: int, is_call: bool) -> dict | None:
-    """Pull the raw fields needed for ranking from one option chain row, or
-    None if the contract fails a hard floor (too illiquid, no usable quote).
+def _raw_candidate(row, spot: float, expiry: str, days: int, is_call: bool,
+                   symbol: str = "?") -> tuple[dict | None, bool]:
+    """Pull the raw fields needed for ranking from one option chain row.
+
+    Returns (candidate, rejected_for_bad_data):
+    - (dict, False): usable contract.
+    - (None, False): fails a hard floor (too illiquid, no usable quote) --
+      not a data-quality problem, just not interesting.
+    - (None, True): fails a _sanity_check -- the feed data itself looks
+      corrupted/inconsistent, logged as a warning and counted by the caller.
 
     estimated=True means the premium comes from the last traded price: outside
     options market hours (9:30-16:00 ET) Yahoo zeroes out bid/ask, which must
@@ -100,7 +147,7 @@ def _raw_candidate(row, spot: float, expiry: str, days: int, is_call: bool) -> d
     oi = int(row.get("openInterest") or 0)
     vol = int(row.get("volume") or 0)
     if oi + vol < config.OPTIONS_MIN_ACTIVITY:
-        return None
+        return None, False
 
     bid = float(row.get("bid") or 0)
     ask = float(row.get("ask") or 0)
@@ -114,12 +161,18 @@ def _raw_candidate(row, spot: float, expiry: str, days: int, is_call: bool) -> d
         spread_pct = None  # no live quote to judge
         estimated = True
     else:
-        return None
+        return None, False
 
     strike = float(row["strike"])
     iv_raw = row.get("impliedVolatility", row.get("iv"))
     iv = float(iv_raw) if iv_raw not in (None, "") else None
     delta, theta = _bs_delta_theta(spot, strike, days, iv, is_call)
+
+    ok, reason = _sanity_check(iv, delta, premium, spot, strike, days, is_call)
+    if not ok:
+        log.warning("Rejected %s %s %s (exp %s, strike %s): %s",
+                    symbol, "call" if is_call else "put", "contract", expiry, strike, reason)
+        return None, True
 
     return {
         "strike": strike, "expiry": expiry, "days": days,
@@ -127,16 +180,18 @@ def _raw_candidate(row, spot: float, expiry: str, days: int, is_call: bool) -> d
         "bid": bid, "ask": ask, "spread_pct": spread_pct,
         "volume": vol, "openInterest": oi,
         "iv": iv, "delta": delta, "theta": theta,
-    }
+    }, False
 
 
-def _add_candidate(candidates, row, spot, expiry, days, is_call: bool):
-    raw = _raw_candidate(row, spot, expiry, days, is_call=is_call)
+def _add_candidate(candidates, row, spot, expiry, days, is_call: bool, symbol: str, stats: dict):
+    raw, rejected_bad_data = _raw_candidate(row, spot, expiry, days, is_call=is_call, symbol=symbol)
     if raw is not None:
         candidates["call" if is_call else "put"].append(raw)
+    elif rejected_bad_data:
+        stats["excluded_bad_data"] = stats.get("excluded_bad_data", 0) + 1
 
 
-def _yahoo_candidates(symbol, spot, today, cutoff):
+def _yahoo_candidates(symbol, spot, today, cutoff, stats):
     """Provider 1. Returns (candidates, has_options); raises OptionsFetchError
     or NoNearTermOptions (listed options exist, just none within `cutoff`)."""
     ticker = yf.Ticker(symbol)
@@ -176,16 +231,16 @@ def _yahoo_candidates(symbol, spot, today, cutoff):
             continue
         fetched += 1
         for _, row in chain.calls.iterrows():
-            _add_candidate(candidates, row, spot, exp, days, is_call=True)
+            _add_candidate(candidates, row, spot, exp, days, is_call=True, symbol=symbol, stats=stats)
         for _, row in chain.puts.iterrows():
-            _add_candidate(candidates, row, spot, exp, days, is_call=False)
+            _add_candidate(candidates, row, spot, exp, days, is_call=False, symbol=symbol, stats=stats)
 
     if fetched == 0:
         raise OptionsFetchError(symbol)
     return candidates, True
 
 
-def _cboe_candidates(symbol, spot, today, cutoff):
+def _cboe_candidates(symbol, spot, today, cutoff, stats):
     """Provider 2 (fallback): whole chain in one keyless request from CBOE."""
     try:
         resp = requests.get(CBOE_URL.format(symbol=symbol.upper()), timeout=20,
@@ -226,8 +281,8 @@ def _cboe_candidates(symbol, spot, today, cutoff):
             "volume": c.get("volume"),
             "iv": c.get("iv"),
         }
-        _add_candidate(candidates, row, spot,
-                       exp_date.isoformat(), (exp_date - today).days, is_call=is_call)
+        _add_candidate(candidates, row, spot, exp_date.isoformat(), (exp_date - today).days,
+                       is_call=is_call, symbol=symbol, stats=stats)
 
     # Contracts exist for this symbol, but every one of them expires beyond
     # our near-term window — same distinction as the Yahoo provider above.
@@ -236,10 +291,13 @@ def _cboe_candidates(symbol, spot, today, cutoff):
     return candidates, True
 
 
-def gather_candidates(symbol: str, spot: float, today, cutoff) -> dict | None:
-    """Try both providers in turn; returns the first successful near-term
-    candidates dict, or None if both cleanly confirm the symbol has no
-    listed options at all.
+def gather_candidates(symbol: str, spot: float, today, cutoff) -> tuple[dict | None, int]:
+    """Try both providers in turn; returns (candidates, excluded_bad_data)
+    where candidates is None if both cleanly confirm the symbol has no
+    listed options at all. excluded_bad_data counts contracts dropped by
+    _sanity_check (corrupted/inconsistent feed data) across whichever
+    provider succeeded -- separate from the ordinary illiquid-contract
+    floor, which isn't a data-quality problem and isn't counted here.
 
     Raises OptionsFetchError if both providers failed outright (couldn't be
     reached/answered), or NoNearTermOptions if the symbol does have listed
@@ -252,8 +310,9 @@ def gather_candidates(symbol: str, spot: float, today, cutoff) -> dict | None:
     failures = 0
     near_term_misses = 0
     for provider in providers:
+        stats = {}
         try:
-            candidates, has_options = provider(symbol, spot, today, cutoff)
+            candidates, has_options = provider(symbol, spot, today, cutoff, stats)
         except NoNearTermOptions:
             near_term_misses += 1
             continue
@@ -264,7 +323,7 @@ def gather_candidates(symbol: str, spot: float, today, cutoff) -> dict | None:
             failures += 1
             continue
         if has_options:
-            return candidates
+            return candidates, stats.get("excluded_bad_data", 0)
         # This provider cleanly reports no options; ask the next one to
         # confirm — a throttled Yahoo sometimes answers with emptiness.
 
@@ -272,4 +331,4 @@ def gather_candidates(symbol: str, spot: float, today, cutoff) -> dict | None:
         raise last_error
     if near_term_misses:
         raise NoNearTermOptions(symbol)
-    return None  # both providers cleanly confirm: genuinely no listed options
+    return None, 0  # both providers cleanly confirm: genuinely no listed options

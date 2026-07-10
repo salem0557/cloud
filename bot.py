@@ -135,15 +135,20 @@ async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, a
             await _send(app, chat_id, f"⏹️ {title} — تم إيقاف الجلسة.")
             return
         last_results[chat_id] = {"title": title, "count": len(results), "ts": time.time()}
+        excluded = getattr(results, "excluded_bad_data", 0)
+        excluded_line = f"⚠️ استُبعد {excluded} عقد لبيانات غير موثوقة" if excluded else ""
         if not results:
-            await _send(app, chat_id, f"{title}\n\n{NO_RESULTS}\n\n{FOOTER}")
+            msg = f"{title}\n\n{NO_RESULTS}"
+            if excluded_line:
+                msg += f"\n\n{excluded_line}"
+            await _send(app, chat_id, f"{msg}\n\n{FOOTER}")
             return
         await _send(app, chat_id, f"{title} — {len(results)} نتيجة:")
         for row in results:
             if cancel_event.is_set():
                 break
             await _send_row(app, chat_id, row, format_fn)
-        await _send(app, chat_id, FOOTER)
+        await _send(app, chat_id, f"{excluded_line}\n\n{FOOTER}" if excluded_line else FOOTER)
     except asyncio.CancelledError:
         await _send(app, chat_id, f"⏹️ {title} — تم إيقاف الجلسة.")
     except Exception:
@@ -158,7 +163,7 @@ async def _run_ticker_session(chat_id: int, symbol: str, app):
     """/options TICKER: a single-symbol lookup (كول وبوت معاً)، مستقل عن
     فحص القائمة الكاملة -- نفس آلية المهلة/الإلغاء، رسالة خاصة به."""
     try:
-        spot, contracts, error = await asyncio.wait_for(
+        spot, contracts, error, excluded = await asyncio.wait_for(
             options_module.scan_symbol(symbol), timeout=config.SESSION_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
         await _send(app, chat_id, "⏰ انتهت الجلسة، أرسل أمر جديد.")
@@ -177,14 +182,18 @@ async def _run_ticker_session(chat_id: int, symbol: str, app):
         await _send(app, chat_id, f"📊 *{symbol}* — {error}")
         return
     last_results[chat_id] = {"title": f"📊 عقود {symbol}", "count": len(contracts), "ts": time.time()}
+    excluded_line = f"⚠️ استُبعد {excluded} عقد لبيانات غير موثوقة" if excluded else ""
     if not contracts:
         price_txt = fmt_price(spot) if spot else "-"
-        await _send(app, chat_id, f"📊 *{symbol}* ({price_txt}) — {NO_RESULTS}\n\n{FOOTER}")
+        msg = f"📊 *{symbol}* ({price_txt}) — {NO_RESULTS}"
+        if excluded_line:
+            msg += f"\n\n{excluded_line}"
+        await _send(app, chat_id, f"{msg}\n\n{FOOTER}")
     else:
         await _send(app, chat_id, f"📊 عقود *{symbol}* المؤهلة — {len(contracts)}:")
         for row in contracts:
             await _send_row(app, chat_id, row, options_module.format_result)
-        await _send(app, chat_id, FOOTER)
+        await _send(app, chat_id, f"{excluded_line}\n\n{FOOTER}" if excluded_line else FOOTER)
 
 
 def _start_session(chat_id: int, coro) -> asyncio.Task:

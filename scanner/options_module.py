@@ -31,6 +31,13 @@ log = logging.getLogger(__name__)
 TYPE_TAG = {"call": "🟢 CALL (رهان صعود)", "put": "🔴 PUT (رهان هبوط)"}
 
 
+class ScanResults(list):
+    """قائمة نتائج عادية، مع عداد اختياري للعقود المستبعدة أثناء الفحص
+    لبيانات غير موثوقة (options.py's _sanity_check) -- يسمح لـ bot.py
+    بإضافة سطر تحذير دون تغيير الشكل العام لعائد scan()/scan_leaps()."""
+    excluded_bad_data: int = 0
+
+
 def _duration_tag(days: int) -> str:
     if days <= config.OPTIONS_DURATION_SHORT_MAX:
         return "🕐 قصير - انتبه للوقت"
@@ -96,18 +103,20 @@ def _enrich(symbol: str, spot: float, c: dict, is_call: bool,
     }
 
 
-def _contracts_for_symbol(symbol: str, spot: float, df, sides: tuple[str, ...]) -> list[dict]:
-    """عقود Call و/أو Put مؤهلة لسهم واحد، مرتبة بأعلى احتمالية ربح ثم أطول
-    مدة عند التساوي. Raises options.OptionsFetchError /
-    options.NoNearTermOptions same as options.gather_candidates."""
+def _contracts_for_symbol(symbol: str, spot: float, df, sides: tuple[str, ...]
+                          ) -> tuple[list[dict], int]:
+    """(عقود Call و/أو Put مؤهلة لسهم واحد، عدد العقود المستبعدة لبيانات
+    غير موثوقة). مرتبة بأعلى احتمالية ربح ثم أطول مدة عند التساوي. Raises
+    options.OptionsFetchError / options.NoNearTermOptions same as
+    options.gather_candidates."""
     if options._no_options.get(symbol, 0) > time.time() - options.NO_OPTIONS_TTL:
-        return []
+        return [], 0
     today = dt.date.today()
     cutoff = today + dt.timedelta(weeks=config.OPTIONS_MAX_WEEKS)
-    candidates = options.gather_candidates(symbol, spot, today, cutoff)
+    candidates, excluded = options.gather_candidates(symbol, spot, today, cutoff)
     if candidates is None:
         options._no_options[symbol] = time.time()
-        return []
+        return [], excluded
 
     resistance = support = None
     if df is not None:
@@ -128,39 +137,43 @@ def _contracts_for_symbol(symbol: str, spot: float, df, sides: tuple[str, ...]) 
                 results.append(enriched)
 
     results.sort(key=lambda r: (-r["probability_of_profit"], -r["days"]))
-    return results
+    return results, excluded
 
 
 async def scan_symbol(symbol: str, sides: tuple[str, ...] = ("call", "put")
-                      ) -> tuple[float | None, list[dict], str | None]:
-    """(spot, contracts, error) لسهم واحد فقط -- يُستخدم في /options TICKER."""
+                      ) -> tuple[float | None, list[dict], str | None, int]:
+    """(spot, contracts, error, excluded_bad_data) لسهم واحد فقط -- يُستخدم
+    في /options TICKER."""
     symbol = symbol.upper()
     try:
         frames = await asyncio.to_thread(data.fetch_batch, [symbol], "1d", "6mo")
     except Exception:
         log.exception("Spot price fetch failed for %s", symbol)
-        return None, [], "تعذر جلب سعر السهم."
+        return None, [], "تعذر جلب سعر السهم.", 0
     df = frames.get(symbol)
     if df is None:
-        return None, [], "رمز غير معروف أو لا توجد بيانات له."
+        return None, [], "رمز غير معروف أو لا توجد بيانات له.", 0
     spot = float(df["Close"].iloc[-1])
     try:
-        contracts = await asyncio.to_thread(_contracts_for_symbol, symbol, spot, df, sides)
+        contracts, excluded = await asyncio.to_thread(_contracts_for_symbol, symbol, spot, df, sides)
     except options.NoNearTermOptions:
-        return spot, [], f"لا توجد عقود ضمن {config.OPTIONS_MAX_WEEKS} أسبوع القادمة."
+        return spot, [], f"لا توجد عقود ضمن {config.OPTIONS_MAX_WEEKS} أسبوع القادمة.", 0
     except options.OptionsFetchError:
-        return spot, [], "تعذر جلب سلسلة العقود (فشل المزوّدان)."
+        return spot, [], "تعذر جلب سلسلة العقود (فشل المزوّدان).", 0
     except Exception:
         log.exception("Options lookup failed for %s", symbol)
-        return spot, [], "خطأ غير متوقع أثناء الفحص."
-    return spot, contracts[:config.OPTIONS_TOP_N], None
+        return spot, [], "خطأ غير متوقع أثناء الفحص.", 0
+    return spot, contracts[:config.OPTIONS_TOP_N], None, excluded
 
 
 async def scan(cancel_event: asyncio.Event | None = None,
-               sides: tuple[str, ...] = ("call", "put")) -> list[dict]:
+               sides: tuple[str, ...] = ("call", "put")) -> ScanResults:
     """يفحص كل أسهم OPTIONS_WATCHLIST، ويرجع أفضل OPTIONS_TOP_N عقد إجمالاً
-    (أعلى احتمالية ربح أولاً، ثم أطول مدة عند التساوي)."""
+    (أعلى احتمالية ربح أولاً، ثم أطول مدة عند التساوي). النتيجة تحمل أيضاً
+    .excluded_bad_data (عدد العقود المستبعدة أثناء الفحص كاملاً لبيانات غير
+    موثوقة -- انظر options.py's _sanity_check)."""
     found: list[dict] = []
+    excluded_total = 0
     batches = data.make_batches(config.OPTIONS_WATCHLIST)
     for batch in batches:
         if cancel_event is not None and cancel_event.is_set():
@@ -175,17 +188,20 @@ async def scan(cancel_event: asyncio.Event | None = None,
                 break
             try:
                 spot = float(df["Close"].iloc[-1])
-                contracts = await asyncio.to_thread(
+                contracts, excluded = await asyncio.to_thread(
                     _contracts_for_symbol, symbol, spot, df, sides)
             except (options.OptionsFetchError, options.NoNearTermOptions):
                 continue
             except Exception:
                 log.exception("Options evaluation failed for %s", symbol)
                 continue
+            excluded_total += excluded
             found.extend(contracts)
 
     found.sort(key=lambda r: (-r["probability_of_profit"], -r["days"]))
-    return found[:config.OPTIONS_TOP_N]
+    result = ScanResults(found[:config.OPTIONS_TOP_N])
+    result.excluded_bad_data = excluded_total
+    return result
 
 
 def _passes_leaps_filters(c: dict) -> bool:
@@ -205,18 +221,18 @@ def _passes_leaps_filters(c: dict) -> bool:
         return False
 
 
-def _leaps_for_symbol(symbol: str, spot: float) -> list[dict]:
-    """عقود CALL طويلة الأجل (LEAPS) مؤهلة لسهم واحد. Raises
-    options.OptionsFetchError / options.NoNearTermOptions same as
-    options.gather_candidates."""
+def _leaps_for_symbol(symbol: str, spot: float) -> tuple[list[dict], int]:
+    """(عقود CALL طويلة الأجل (LEAPS) مؤهلة لسهم واحد، عدد العقود المستبعدة
+    لبيانات غير موثوقة). Raises options.OptionsFetchError /
+    options.NoNearTermOptions same as options.gather_candidates."""
     if options._no_options.get(symbol, 0) > time.time() - options.NO_OPTIONS_TTL:
-        return []
+        return [], 0
     today = dt.date.today()
     cutoff = today + dt.timedelta(weeks=config.LEAPS_MAX_WEEKS)
-    candidates = options.gather_candidates(symbol, spot, today, cutoff)
+    candidates, excluded = options.gather_candidates(symbol, spot, today, cutoff)
     if candidates is None:
         options._no_options[symbol] = time.time()
-        return []
+        return [], excluded
 
     results = []
     for c in candidates.get("call", []):
@@ -233,16 +249,18 @@ def _leaps_for_symbol(symbol: str, spot: float) -> list[dict]:
             "breakeven": round(be, 2),
             "probability_of_profit": round(pop, 1) if pop is not None else None,
         })
-    return results
+    return results, excluded
 
 
-async def scan_leaps(cancel_event: asyncio.Event | None = None) -> list[dict]:
+async def scan_leaps(cancel_event: asyncio.Event | None = None) -> ScanResults:
     """يفحص OPTIONS_WATCHLIST بحثاً عن عقود CALL طويلة الأجل (LEAPS، DTE >=
     LEAPS_DTE_MIN) على أسهم سعرها بين LEAPS_MIN_PRICE وLEAPS_MAX_PRICE،
     بدلتا >= LEAPS_DELTA_MIN وتقلب ضمني < LEAPS_IV_MAX. يرجع أفضل
     LEAPS_TOP_N عقد مرتبة بأقل تقلب ضمني (لا احتمالية ربح -- هذا فلتر
-    "أرخص قيمة زمنية نسبياً"، مستقل تماماً عن منطق /options العام)."""
+    "أرخص قيمة زمنية نسبياً"، مستقل تماماً عن منطق /options العام). النتيجة
+    تحمل أيضاً .excluded_bad_data."""
     found: list[dict] = []
+    excluded_total = 0
     batches = data.make_batches(config.OPTIONS_WATCHLIST)
     for batch in batches:
         if cancel_event is not None and cancel_event.is_set():
@@ -259,16 +277,19 @@ async def scan_leaps(cancel_event: asyncio.Event | None = None) -> list[dict]:
             if not (config.LEAPS_MIN_PRICE <= spot <= config.LEAPS_MAX_PRICE):
                 continue
             try:
-                contracts = await asyncio.to_thread(_leaps_for_symbol, symbol, spot)
+                contracts, excluded = await asyncio.to_thread(_leaps_for_symbol, symbol, spot)
             except (options.OptionsFetchError, options.NoNearTermOptions):
                 continue
             except Exception:
                 log.exception("LEAPS evaluation failed for %s", symbol)
                 continue
+            excluded_total += excluded
             found.extend(contracts)
 
     found.sort(key=lambda r: r["iv"])   # أقل تقلب ضمني أولاً
-    return found[:config.LEAPS_TOP_N]
+    result = ScanResults(found[:config.LEAPS_TOP_N])
+    result.excluded_bad_data = excluded_total
+    return result
 
 
 def format_leaps_result(row: dict) -> str:
