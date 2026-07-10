@@ -186,6 +186,20 @@ OPTIONS_TIER_BRONZE = OPTIONS_MIN_POP
 OPTIONS_DURATION_SHORT_MAX = _int("OPTIONS_DURATION_SHORT_MAX", 45)
 OPTIONS_DURATION_MEDIUM_MAX = _int("OPTIONS_DURATION_MEDIUM_MAX", 120)
 
+# --- /leaps: a separate, independent CALL-only screener for long-dated
+# --- deep/near-ITM contracts -- its own filter set, not reusing the
+# --- general OPTIONS_* thresholds above. Ranked by lowest IV (cheapest
+# --- time value relative to the stock's own volatility), not POP. ---
+LEAPS_DTE_MIN = _int("LEAPS_DTE_MIN", 365)
+LEAPS_DELTA_MIN = _float("LEAPS_DELTA_MIN", 0.60)   # no upper bound
+LEAPS_IV_MAX = _float("LEAPS_IV_MAX", 0.35)
+LEAPS_MIN_PRICE = _float("LEAPS_MIN_PRICE", 8.0)
+LEAPS_MAX_PRICE = _float("LEAPS_MAX_PRICE", 100.0)
+# Expiry lookup window: needs to reach well past 365 days, unlike the
+# general options module's OPTIONS_MAX_WEEKS (~1 year).
+LEAPS_MAX_WEEKS = _int("LEAPS_MAX_WEEKS", 104)   # ~2 years
+LEAPS_TOP_N = _int("LEAPS_TOP_N", 5)
+
 # ~500 of the most liquid, most actively-optioned US stocks -- a separate
 # list from STOCKS_WATCHLIST on purpose, since "actively traded options"
 # and "matches a reversal-up technical setup" are unrelated properties.

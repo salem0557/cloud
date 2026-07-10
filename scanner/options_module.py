@@ -188,6 +188,109 @@ async def scan(cancel_event: asyncio.Event | None = None,
     return found[:config.OPTIONS_TOP_N]
 
 
+def _passes_leaps_filters(c: dict) -> bool:
+    """فلاتر /leaps الخاصة -- مستقلة تماماً عن _passes_filters العامة أعلاه،
+    لا تشترط سيولة/سبريد/سعر طلب معينة، فقط DTE طويل ودلتا وتقلب ضمني."""
+    try:
+        delta = c["delta"]
+        iv = c["iv"]
+        if delta is None or iv is None:
+            return False
+        return (abs(delta) >= config.LEAPS_DELTA_MIN
+                and iv < config.LEAPS_IV_MAX
+                and c["days"] >= config.LEAPS_DTE_MIN)
+    except (KeyError, TypeError):
+        return False
+
+
+def _leaps_for_symbol(symbol: str, spot: float) -> list[dict]:
+    """عقود CALL طويلة الأجل (LEAPS) مؤهلة لسهم واحد. Raises
+    options.OptionsFetchError / options.NoNearTermOptions same as
+    options.gather_candidates."""
+    if options._no_options.get(symbol, 0) > time.time() - options.NO_OPTIONS_TTL:
+        return []
+    today = dt.date.today()
+    cutoff = today + dt.timedelta(weeks=config.LEAPS_MAX_WEEKS)
+    candidates = options.gather_candidates(symbol, spot, today, cutoff)
+    if candidates is None:
+        options._no_options[symbol] = time.time()
+        return []
+
+    results = []
+    for c in candidates.get("call", []):
+        if not _passes_leaps_filters(c):
+            continue
+        be = pm.breakeven(c["strike"], c["premium"], is_call=True)
+        pop = pm.probability_of_profit(spot, be, c["days"], c["iv"], is_call=True)
+        results.append({
+            "symbol": symbol, "spot": spot, "side": "call",
+            "strike": c["strike"], "expiry": c["expiry"], "days": c["days"],
+            "premium": c["premium"], "estimated": c["estimated"],
+            "delta": c["delta"], "iv": c["iv"],
+            "cost": round(c["premium"] * 100, 2),
+            "breakeven": round(be, 2),
+            "probability_of_profit": round(pop, 1) if pop is not None else None,
+        })
+    return results
+
+
+async def scan_leaps(cancel_event: asyncio.Event | None = None) -> list[dict]:
+    """يفحص OPTIONS_WATCHLIST بحثاً عن عقود CALL طويلة الأجل (LEAPS، DTE >=
+    LEAPS_DTE_MIN) على أسهم سعرها بين LEAPS_MIN_PRICE وLEAPS_MAX_PRICE،
+    بدلتا >= LEAPS_DELTA_MIN وتقلب ضمني < LEAPS_IV_MAX. يرجع أفضل
+    LEAPS_TOP_N عقد مرتبة بأقل تقلب ضمني (لا احتمالية ربح -- هذا فلتر
+    "أرخص قيمة زمنية نسبياً"، مستقل تماماً عن منطق /options العام)."""
+    found: list[dict] = []
+    batches = data.make_batches(config.OPTIONS_WATCHLIST)
+    for batch in batches:
+        if cancel_event is not None and cancel_event.is_set():
+            break
+        try:
+            frames = await asyncio.to_thread(data.fetch_batch, batch, "1d", "1mo")
+        except Exception:
+            log.exception("LEAPS watchlist batch failed (%s..)", batch[0])
+            continue
+        for symbol, df in frames.items():
+            if cancel_event is not None and cancel_event.is_set():
+                break
+            spot = float(df["Close"].iloc[-1])
+            if not (config.LEAPS_MIN_PRICE <= spot <= config.LEAPS_MAX_PRICE):
+                continue
+            try:
+                contracts = await asyncio.to_thread(_leaps_for_symbol, symbol, spot)
+            except (options.OptionsFetchError, options.NoNearTermOptions):
+                continue
+            except Exception:
+                log.exception("LEAPS evaluation failed for %s", symbol)
+                continue
+            found.extend(contracts)
+
+    found.sort(key=lambda r: r["iv"])   # أقل تقلب ضمني أولاً
+    return found[:config.LEAPS_TOP_N]
+
+
+def format_leaps_result(row: dict) -> str:
+    """جدول نصي (monospace) لعقد LEAPS، مع التقلب الضمني بارزاً (معيار
+    الترتيب) واحتمالية الربح كسياق داعم."""
+    approx = "≈" if row.get("estimated") else ""
+    header = f"🗓️ LEAPS *{row['symbol']}*"
+    rows = [
+        ("السهم", f"{row['symbol']} ({fmt_price(row['spot'])})"),
+        ("تنفيذ (Strike)", f"{row['strike']:.2f}$"),
+        ("الانتهاء", f"{row['expiry']} ({row['days']} يوم)"),
+        ("بريميوم", f"{approx}{row['premium']:.2f}$"),
+        ("تكلفة العقد", f"{approx}{row['cost']:.0f}$"),
+        ("نقطة التعادل", fmt_price(row['breakeven'])),
+        ("دلتا", f"{row['delta']:.2f}" if row['delta'] is not None else "-"),
+        ("🎯 تقلب ضمني (IV)", f"{row['iv'] * 100:.1f}%"),
+        ("احتمالية الربح", f"{row['probability_of_profit']:.0f}%"
+         if row['probability_of_profit'] is not None else "-"),
+    ]
+    label_w = max(len(label) for label, _ in rows)
+    table = "\n".join(f"{label.ljust(label_w)} : {value}" for label, value in rows)
+    return f"{header}\n```\n{table}\n```"
+
+
 def format_result(row: dict) -> str:
     """جدول نصي (monospace) لكل عقد، مع نوع العقد ودرجة الاحتمالية بارزة
     قبله، والمدة والقيمة المتوقعة (EV) ضمن الجدول."""

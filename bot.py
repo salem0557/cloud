@@ -266,6 +266,23 @@ async def cmd_options_puts(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.application))
 
 
+async def cmd_leaps(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_membership(update):
+        return
+    chat_id = update.effective_chat.id
+    if chat_id in sessions:
+        await update.message.reply_text("⏳ توجد جلسة قيد التنفيذ بالفعل — أرسل /stop لإيقافها أولاً.")
+        return
+    await update.message.reply_text(
+        f"🗓️ بدأ فحص عقود LEAPS (CALL، {config.LEAPS_DTE_MIN}+ يوم، أسهم "
+        f"{config.LEAPS_MIN_PRICE:.0f}$-{config.LEAPS_MAX_PRICE:.0f}$، "
+        f"{len(config.OPTIONS_WATCHLIST)} سهم)... "
+        f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
+    _start_session(chat_id, _run_watchlist_session(
+        chat_id, "🗓️ نتائج فحص LEAPS", options_module.scan_leaps,
+        options_module.format_leaps_result, context.application))
+
+
 async def cmd_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_membership(update):
         return
@@ -326,6 +343,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/options_calls — عقود Call فقط\n"
         "/options_puts — عقود Put فقط\n"
         "/options <رمز> — فحص عقود سهم محدد (Call + Put)\n"
+        "/leaps — عقود CALL طويلة الأجل (365+ يوم)\n"
         "/crypto — فحص وحدة الكريبتو\n"
         "/stop — إيقاف الجلسة الحالية فوراً\n"
         "/status — هذه الرسالة\n\n"
@@ -343,6 +361,7 @@ BOT_COMMANDS = [
     BotCommand("options", "فحص وحدة الأوبشن (Call + Put)، أو /options <رمز> لسهم محدد"),
     BotCommand("options_calls", "فحص عقود CALL فقط"),
     BotCommand("options_puts", "فحص عقود PUT فقط"),
+    BotCommand("leaps", "عقود CALL طويلة الأجل (365+ يوم)"),
     BotCommand("crypto", "فحص وحدة الكريبتو"),
     BotCommand("stop", "إيقاف الجلسة الحالية فوراً"),
     BotCommand("status", "حالة البوت وآخر النتائج"),
@@ -398,6 +417,7 @@ def main():
     app.add_handler(CommandHandler("options", cmd_options))
     app.add_handler(CommandHandler("options_calls", cmd_options_calls))
     app.add_handler(CommandHandler("options_puts", cmd_options_puts))
+    app.add_handler(CommandHandler("leaps", cmd_leaps))
     app.add_handler(CommandHandler("crypto", cmd_crypto))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("status", cmd_status))
