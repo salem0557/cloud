@@ -321,6 +321,37 @@ _OPTIONS_EXTRA2 = [
 OPTIONS_WATCHLIST = sorted(set(
     _OPTIONS_CORE + _OPTIONS_LARGE_MID_CAP + _OPTIONS_EXTRA + _OPTIONS_EXTRA2))
 
+# --- /heavy: a separate, independent CALL+PUT screener over a small,
+# --- curated list of mega caps / established large caps / broad ETFs --
+# --- its own filter set (wide DTE incl. far LEAPS, tight ±10% strike band,
+# --- cheap premium, liquidity floors), not reusing the general OPTIONS_*
+# --- thresholds above. Ranked by liquidity (volume + open interest), not
+# --- POP -- this is a liquidity/cost screener, not a probability one. ---
+HEAVY_DTE_MIN = _int("HEAVY_DTE_MIN", 45)             # no upper cap -- every expiry in the chain
+HEAVY_STRIKE_PCT = _float("HEAVY_STRIKE_PCT", 0.10)   # strike within ±10% of spot, no widening
+HEAVY_PREMIUM_MAX = _float("HEAVY_PREMIUM_MAX", 2.00)  # ask <= 2.00$/share (200$/contract)
+HEAVY_VOLUME_MIN = _int("HEAVY_VOLUME_MIN", 50)
+HEAVY_OI_MIN = _int("HEAVY_OI_MIN", 300)
+HEAVY_SPREAD_MAX = _float("HEAVY_SPREAD_MAX", 0.10)
+HEAVY_TOP_N = _int("HEAVY_TOP_N", 5)
+# Cap on Yahoo per-expiry requests IF the CBOE single-request provider
+# (tried first for this module -- see heavy_module.py) fails; generous
+# since HEAVY_DTE_MIN already drops near-term expiries before they count
+# against it.
+HEAVY_MAX_EXPIRIES = _int("HEAVY_MAX_EXPIRIES", 60)
+
+_HEAVY_MEGA = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "AVGO"]
+_HEAVY_LARGE = [
+    "BRK-B", "JPM", "V", "MA", "UNH", "XOM", "CVX", "WMT", "PG", "JNJ", "HD", "KO",
+    "PEP", "MRK", "ABBV", "ORCL", "CRM", "AMD", "NFLX", "DIS", "CSCO", "INTC", "QCOM",
+    "IBM", "MCD", "NKE", "T", "VZ", "CMCSA", "PFE", "F", "GM", "BA",
+]
+_HEAVY_ETF = ["SPY", "QQQ", "IWM", "DIA", "VTI", "VOO", "XLK", "XLF", "XLE", "SMH", "GLD", "SLV"]
+HEAVY_TICKERS = _HEAVY_MEGA + _HEAVY_LARGE + _HEAVY_ETF
+HEAVY_TAG = {**{s: "mega" for s in _HEAVY_MEGA},
+            **{s: "large" for s in _HEAVY_LARGE},
+            **{s: "etf" for s in _HEAVY_ETF}}
+
 # =====================================================================
 # 3) CRYPTO module -- top ~100-by-market-cap coins via Binance public data
 #    (ccxt, no API keys), 4h candles, 2 of 3 filters required

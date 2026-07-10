@@ -29,7 +29,7 @@ from telegram import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, Up
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-from scanner import config, crypto_module, market_calendar, options_module, stocks_module
+from scanner import config, crypto_module, heavy_module, market_calendar, options_module, stocks_module
 from scanner.state import State
 from scanner.utils import fmt_price, split_message
 
@@ -329,6 +329,22 @@ async def cmd_leaps(update: Update, context: ContextTypes.DEFAULT_TYPE):
         options_module.format_leaps_result, context.application), kind="watchlist")
 
 
+async def cmd_heavy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_membership(update):
+        return
+    chat_id = update.effective_chat.id
+    if chat_id in sessions:
+        await update.message.reply_text("⏳ توجد جلسة قيد التنفيذ بالفعل — أرسل /stop لإيقافها أولاً.")
+        return
+    await update.message.reply_text(
+        f"🏛️ بدأ فحص وحدة Heavy (Call + Put، Mega/Large/ETF، "
+        f"{len(config.HEAVY_TICKERS)} رمز)... "
+        f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
+    _start_session(chat_id, _run_watchlist_session(
+        chat_id, "🏛️ نتائج فحص Heavy", heavy_module.scan,
+        heavy_module.format_result, context.application), kind="watchlist")
+
+
 async def cmd_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_membership(update):
         return
@@ -396,6 +412,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/options_puts — عقود Put فقط\n"
         "/options <رمز> — فحص عقود سهم محدد (Call + Put)\n"
         "/leaps — عقود CALL طويلة الأجل (365+ يوم)\n"
+        "/heavy — عقود Call+Put على أضخم الأسهم والصناديق (Mega/Large/ETF)\n"
         "/crypto — فحص وحدة الكريبتو\n"
         "/stop — إيقاف الجلسة الحالية فوراً\n"
         "/status — هذه الرسالة\n\n"
@@ -414,6 +431,7 @@ BOT_COMMANDS = [
     BotCommand("options_calls", "فحص عقود CALL فقط"),
     BotCommand("options_puts", "فحص عقود PUT فقط"),
     BotCommand("leaps", "عقود CALL طويلة الأجل (365+ يوم)"),
+    BotCommand("heavy", "عقود Call+Put على أضخم الأسهم والصناديق (Mega/Large/ETF)"),
     BotCommand("crypto", "فحص وحدة الكريبتو"),
     BotCommand("stop", "إيقاف الجلسة الحالية فوراً"),
     BotCommand("status", "حالة البوت وآخر النتائج"),
@@ -470,6 +488,7 @@ def main():
     app.add_handler(CommandHandler("options_calls", cmd_options_calls))
     app.add_handler(CommandHandler("options_puts", cmd_options_puts))
     app.add_handler(CommandHandler("leaps", cmd_leaps))
+    app.add_handler(CommandHandler("heavy", cmd_heavy))
     app.add_handler(CommandHandler("crypto", cmd_crypto))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("status", cmd_status))

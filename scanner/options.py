@@ -191,9 +191,17 @@ def _add_candidate(candidates, row, spot, expiry, days, is_call: bool, symbol: s
         stats["excluded_bad_data"] = stats.get("excluded_bad_data", 0) + 1
 
 
-def _yahoo_candidates(symbol, spot, today, cutoff, stats):
+def _yahoo_candidates(symbol, spot, today, cutoff, stats, max_expiries=None, min_days=None):
     """Provider 1. Returns (candidates, has_options); raises OptionsFetchError
-    or NoNearTermOptions (listed options exist, just none within `cutoff`)."""
+    or NoNearTermOptions (listed options exist, just none within `cutoff`).
+
+    `max_expiries` overrides config.OPTIONS_MAX_EXPIRIES (None = use the
+    default) -- each expiry costs a separate network round-trip
+    (ticker.option_chain), so this is the real cost knob. `min_days` drops
+    near-term expiries BEFORE they count against that cap, so a caller only
+    interested in far-dated contracts (e.g. heavy_module's LEAPS-inclusive
+    scan) doesn't burn its expiry budget on weeklies it would filter out
+    downstream anyway."""
     ticker = yf.Ticker(symbol)
     expiries = _expiries_with_retry(ticker, symbol)
     if not expiries:
@@ -205,9 +213,11 @@ def _yahoo_candidates(symbol, spot, today, cutoff, stats):
             exp_date = dt.date.fromisoformat(exp)
         except ValueError:
             continue
-        if today <= exp_date <= cutoff:
-            upcoming.append((exp, (exp_date - today).days))
-    upcoming = upcoming[:config.OPTIONS_MAX_EXPIRIES]
+        days = (exp_date - today).days
+        if today <= exp_date <= cutoff and (min_days is None or days >= min_days):
+            upcoming.append((exp, days))
+    limit = config.OPTIONS_MAX_EXPIRIES if max_expiries is None else max_expiries
+    upcoming = upcoming[:limit]
 
     # Expiries exist (checked above) but none fall in our near-term window —
     # e.g. a stock that only lists monthly options further out than
@@ -240,8 +250,12 @@ def _yahoo_candidates(symbol, spot, today, cutoff, stats):
     return candidates, True
 
 
-def _cboe_candidates(symbol, spot, today, cutoff, stats):
-    """Provider 2 (fallback): whole chain in one keyless request from CBOE."""
+def _cboe_candidates(symbol, spot, today, cutoff, stats, max_expiries=None, min_days=None):
+    """Provider 2 (fallback): whole chain in one keyless request from CBOE.
+    Every expiry comes back in that single request, so `max_expiries` is
+    irrelevant here (accepted only so callers can loop over both providers
+    with one uniform call signature) -- `min_days` still applies, to skip
+    near-term contracts the same way the Yahoo provider does."""
     try:
         resp = requests.get(CBOE_URL.format(symbol=symbol.upper()), timeout=20,
                             headers={"User-Agent": "Mozilla/5.0"})
@@ -272,6 +286,9 @@ def _cboe_candidates(symbol, spot, today, cutoff, stats):
         if not today <= exp_date <= cutoff:
             continue
         any_in_window = True
+        days = (exp_date - today).days
+        if min_days is not None and days < min_days:
+            continue
         row = {
             "strike": int(m.group(3)) / 1000,
             "bid": c.get("bid"),
@@ -281,7 +298,7 @@ def _cboe_candidates(symbol, spot, today, cutoff, stats):
             "volume": c.get("volume"),
             "iv": c.get("iv"),
         }
-        _add_candidate(candidates, row, spot, exp_date.isoformat(), (exp_date - today).days,
+        _add_candidate(candidates, row, spot, exp_date.isoformat(), days,
                        is_call=is_call, symbol=symbol, stats=stats)
 
     # Contracts exist for this symbol, but every one of them expires beyond
@@ -291,7 +308,9 @@ def _cboe_candidates(symbol, spot, today, cutoff, stats):
     return candidates, True
 
 
-def gather_candidates(symbol: str, spot: float, today, cutoff) -> tuple[dict | None, int]:
+def gather_candidates(symbol: str, spot: float, today, cutoff,
+                      max_expiries: int | None = None, min_days: int | None = None,
+                      providers: tuple | None = None) -> tuple[dict | None, int]:
     """Try both providers in turn; returns (candidates, excluded_bad_data)
     where candidates is None if both cleanly confirm the symbol has no
     listed options at all. excluded_bad_data counts contracts dropped by
@@ -299,20 +318,29 @@ def gather_candidates(symbol: str, spot: float, today, cutoff) -> tuple[dict | N
     provider succeeded -- separate from the ordinary illiquid-contract
     floor, which isn't a data-quality problem and isn't counted here.
 
+    `max_expiries`/`min_days` are forwarded to whichever provider is tried
+    (see _yahoo_candidates' docstring -- CBOE ignores max_expiries, it
+    always returns the whole chain in one request). `providers` overrides
+    the default (Yahoo first, CBOE fallback) try-order -- heavy_module
+    flips it to CBOE-first, since CBOE's single-request chain is the only
+    practical way to reach far-dated LEAPS without one network round-trip
+    per expiry.
+
     Raises OptionsFetchError if both providers failed outright (couldn't be
     reached/answered), or NoNearTermOptions if the symbol does have listed
     options but none fall within `cutoff` — distinct from "no options at
     all", so the caller can word the resulting message accurately instead of
     claiming a stock with options simply doesn't have any.
     """
-    providers = (_yahoo_candidates, _cboe_candidates)
+    providers = providers or (_yahoo_candidates, _cboe_candidates)
     last_error = None
     failures = 0
     near_term_misses = 0
     for provider in providers:
         stats = {}
         try:
-            candidates, has_options = provider(symbol, spot, today, cutoff, stats)
+            candidates, has_options = provider(symbol, spot, today, cutoff, stats,
+                                               max_expiries, min_days)
         except NoNearTermOptions:
             near_term_misses += 1
             continue
