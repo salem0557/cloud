@@ -93,7 +93,7 @@ STOCKS_SCORE_SUPPORT_WEAK = _int("STOCKS_SCORE_SUPPORT_WEAK", 15)      # tested 
 STOCKS_SCORE_WEDGE_COMPLETE = _int("STOCKS_SCORE_WEDGE_COMPLETE", 25)
 STOCKS_SCORE_WEDGE_SEMI = _int("STOCKS_SCORE_WEDGE_SEMI", 10)
 STOCKS_TREND_UP_MULT = _float("STOCKS_TREND_UP_MULT", 1.1)    # SPY above its 50-day SMA
-STOCKS_TREND_DOWN_MULT = _float("STOCKS_TREND_DOWN_MULT", 0.85)  # SPY below it
+STOCKS_TREND_DOWN_MULT = _float("STOCKS_TREND_DOWN_MULT", 0.90)  # SPY below it
 STOCKS_SCORE_CAP = _float("STOCKS_SCORE_CAP", 85.0)
 STOCKS_TREND_SMA_PERIOD = _int("STOCKS_TREND_SMA_PERIOD", 50)
 
@@ -159,18 +159,18 @@ OPTIONS_MAX_EXPIRIES = _int("OPTIONS_MAX_EXPIRIES", 10)   # chain requests per s
 OPTIONS_MIN_ACTIVITY = _int("OPTIONS_MIN_ACTIVITY", 20)   # min OI+volume per contract
 OPTIONS_TOP_N = _int("OPTIONS_TOP_N", 5)
 
-OPTIONS_DELTA_MIN = _float("OPTIONS_DELTA_MIN", 0.55)     # applied to abs(delta), both sides
-OPTIONS_DELTA_MAX = _float("OPTIONS_DELTA_MAX", 0.80)
+OPTIONS_DELTA_MIN = _float("OPTIONS_DELTA_MIN", 0.40)     # applied to abs(delta), both sides
+OPTIONS_DELTA_MAX = _float("OPTIONS_DELTA_MAX", 1.0)       # no real upper bound (1.0 = max possible)
 OPTIONS_DTE_MIN = _int("OPTIONS_DTE_MIN", 14)
 OPTIONS_DTE_MAX = _int("OPTIONS_DTE_MAX", 360)
 OPTIONS_VOLUME_MIN = _int("OPTIONS_VOLUME_MIN", 30)
 OPTIONS_OI_MIN = _int("OPTIONS_OI_MIN", 200)
 OPTIONS_IV_MAX = _float("OPTIONS_IV_MAX", 0.60)
 OPTIONS_SPREAD_MAX = _float("OPTIONS_SPREAD_MAX", 0.10)
-# Per-share ask price bound (contract cost = ask * 100), e.g. 0.05$-1.50$
-# means a 5$-150$ contract.
+# Per-share ask price bound (contract cost = ask * 100), e.g. 0.05$-2.00$
+# means a 5$-200$ contract.
 OPTIONS_ASK_MIN = _float("OPTIONS_ASK_MIN", 0.05)
-OPTIONS_ASK_MAX = _float("OPTIONS_ASK_MAX", 1.50)
+OPTIONS_ASK_MAX = _float("OPTIONS_ASK_MAX", 2.00)
 # Minimum probability of profit (%) -- a second, independent cut applied
 # after POP is computed, on top of the delta/DTE/liquidity/IV/spread/ask
 # filters above. Also the "bronze" tier floor (see OPTIONS_TIER_*).
@@ -308,7 +308,7 @@ CRYPTO_SCORE_SUPPORT_STRONG = _int("CRYPTO_SCORE_SUPPORT_STRONG", 25)  # tested 
 CRYPTO_SCORE_SUPPORT_WEAK = _int("CRYPTO_SCORE_SUPPORT_WEAK", 15)      # tested 2 times
 CRYPTO_SCORE_VOLUME_INCREASE = _int("CRYPTO_SCORE_VOLUME_INCREASE", 20)  # rising buy volume, 12h
 CRYPTO_TREND_UP_MULT = _float("CRYPTO_TREND_UP_MULT", 1.1)    # BTC above its 50-day SMA
-CRYPTO_TREND_DOWN_MULT = _float("CRYPTO_TREND_DOWN_MULT", 0.75)  # BTC below it
+CRYPTO_TREND_DOWN_MULT = _float("CRYPTO_TREND_DOWN_MULT", 0.85)  # BTC below it
 CRYPTO_SCORE_CAP = _float("CRYPTO_SCORE_CAP", 75.0)
 CRYPTO_TREND_SMA_PERIOD = _int("CRYPTO_TREND_SMA_PERIOD", 50)
 
