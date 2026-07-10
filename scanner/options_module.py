@@ -16,11 +16,23 @@ scipy -- N(d2) للـCall وN(-d2) للـPut، انظر probability_module.py)،
 يدعم فحص القائمة كاملة (كول+بوت معاً أو كول فقط أو بوت فقط عبر sides)،
 وفحص سهم واحد فقط (/options TICKER) بمعزل عن بقية القائمة. أي خطأ في جلب
 أو تقييم عقود سهم واحد لا يوقف بقية الفحص.
+
+scan() وscan_leaps() هي async generators: كل عقد يتحقق شروطه يُرسَل فوراً
+(live) بدل الانتظار حتى نهاية الفحص الكامل، ويتوقفان تلقائياً بعد إيجاد
+OPTIONS_TOP_N / LEAPS_TOP_N نتيجة. قائمة المراقبة تُخلَط عشوائياً في بداية
+كل فحص، لذا الترتيب هنا "أول ما يتحقق الشرط" وليس "الأفضل من بين كل
+السوق" -- ما عدا LEAPS حيث نحافظ على ترتيب محلي (أقل تقلب ضمني أولاً)
+داخل عقود السهم الواحد فقط، لأن الترتيب الشامل عبر كل الأسهم يتطلب مسح
+القائمة كاملة قبل الإرسال. `stats` قاموس اختياري يُمرَّر بالمرجع لتجميع
+عدد العقود المستبعدة لبيانات غير موثوقة (`stats["excluded_bad_data"]`)
+عبر كامل الفحص، لأن الـ generator لا يستطيع إرجاع قيمة إضافية مع كل yield.
 """
 import asyncio
 import datetime as dt
 import logging
+import random
 import time
+from collections.abc import AsyncIterator
 
 from . import config, data, options, probability_module as pm
 from .indicators import find_nearest_resistance, find_nearest_support_below
@@ -29,13 +41,6 @@ from .utils import fmt_price
 log = logging.getLogger(__name__)
 
 TYPE_TAG = {"call": "🟢 CALL (رهان صعود)", "put": "🔴 PUT (رهان هبوط)"}
-
-
-class ScanResults(list):
-    """قائمة نتائج عادية، مع عداد اختياري للعقود المستبعدة أثناء الفحص
-    لبيانات غير موثوقة (options.py's _sanity_check) -- يسمح لـ bot.py
-    بإضافة سطر تحذير دون تغيير الشكل العام لعائد scan()/scan_leaps()."""
-    excluded_bad_data: int = 0
 
 
 def _duration_tag(days: int) -> str:
@@ -167,17 +172,24 @@ async def scan_symbol(symbol: str, sides: tuple[str, ...] = ("call", "put")
 
 
 async def scan(cancel_event: asyncio.Event | None = None,
-               sides: tuple[str, ...] = ("call", "put")) -> ScanResults:
-    """يفحص كل أسهم OPTIONS_WATCHLIST، ويرجع أفضل OPTIONS_TOP_N عقد إجمالاً
-    (أعلى احتمالية ربح أولاً، ثم أطول مدة عند التساوي). النتيجة تحمل أيضاً
-    .excluded_bad_data (عدد العقود المستبعدة أثناء الفحص كاملاً لبيانات غير
-    موثوقة -- انظر options.py's _sanity_check)."""
-    found: list[dict] = []
-    excluded_total = 0
-    batches = data.make_batches(config.OPTIONS_WATCHLIST)
+               sides: tuple[str, ...] = ("call", "put"),
+               stats: dict | None = None) -> AsyncIterator[dict]:
+    """يفحص أسهم OPTIONS_WATCHLIST (بترتيب عشوائي) ويُرسل (yield) كل عقد
+    مؤهل فور تحققه، حتى OPTIONS_TOP_N عقد أو نهاية القائمة أو /stop أو
+    انتهاء الجلسة. `stats["excluded_bad_data"]` يتجمّع بالمرجع (عدد العقود
+    المستبعدة أثناء الفحص لبيانات غير موثوقة -- انظر options.py's
+    _sanity_check)."""
+    if stats is None:
+        stats = {}
+    watchlist = list(config.OPTIONS_WATCHLIST)
+    random.shuffle(watchlist)
+    sent = 0
+    batches = data.make_batches(watchlist)
     for batch in batches:
         if cancel_event is not None and cancel_event.is_set():
-            break
+            return
+        if sent >= config.OPTIONS_TOP_N:
+            return
         try:
             frames = await asyncio.to_thread(data.fetch_batch, batch, "1d", "6mo")
         except Exception:
@@ -185,7 +197,9 @@ async def scan(cancel_event: asyncio.Event | None = None,
             continue
         for symbol, df in frames.items():
             if cancel_event is not None and cancel_event.is_set():
-                break
+                return
+            if sent >= config.OPTIONS_TOP_N:
+                return
             try:
                 spot = float(df["Close"].iloc[-1])
                 contracts, excluded = await asyncio.to_thread(
@@ -195,13 +209,12 @@ async def scan(cancel_event: asyncio.Event | None = None,
             except Exception:
                 log.exception("Options evaluation failed for %s", symbol)
                 continue
-            excluded_total += excluded
-            found.extend(contracts)
-
-    found.sort(key=lambda r: (-r["probability_of_profit"], -r["days"]))
-    result = ScanResults(found[:config.OPTIONS_TOP_N])
-    result.excluded_bad_data = excluded_total
-    return result
+            stats["excluded_bad_data"] = stats.get("excluded_bad_data", 0) + excluded
+            for c in contracts:
+                if sent >= config.OPTIONS_TOP_N:
+                    return
+                yield c
+                sent += 1
 
 
 def _passes_leaps_filters(c: dict) -> bool:
@@ -252,19 +265,26 @@ def _leaps_for_symbol(symbol: str, spot: float) -> tuple[list[dict], int]:
     return results, excluded
 
 
-async def scan_leaps(cancel_event: asyncio.Event | None = None) -> ScanResults:
-    """يفحص OPTIONS_WATCHLIST بحثاً عن عقود CALL طويلة الأجل (LEAPS، DTE >=
-    LEAPS_DTE_MIN) على أسهم سعرها بين LEAPS_MIN_PRICE وLEAPS_MAX_PRICE،
-    بدلتا >= LEAPS_DELTA_MIN وتقلب ضمني < LEAPS_IV_MAX. يرجع أفضل
-    LEAPS_TOP_N عقد مرتبة بأقل تقلب ضمني (لا احتمالية ربح -- هذا فلتر
-    "أرخص قيمة زمنية نسبياً"، مستقل تماماً عن منطق /options العام). النتيجة
-    تحمل أيضاً .excluded_bad_data."""
-    found: list[dict] = []
-    excluded_total = 0
-    batches = data.make_batches(config.OPTIONS_WATCHLIST)
+async def scan_leaps(cancel_event: asyncio.Event | None = None,
+                     stats: dict | None = None) -> AsyncIterator[dict]:
+    """يفحص OPTIONS_WATCHLIST (بترتيب عشوائي) بحثاً عن عقود CALL طويلة الأجل
+    (LEAPS، DTE >= LEAPS_DTE_MIN) على أسهم سعرها بين LEAPS_MIN_PRICE
+    وLEAPS_MAX_PRICE، بدلتا >= LEAPS_DELTA_MIN وتقلب ضمني < LEAPS_IV_MAX.
+    يُرسل (yield) كل عقد مؤهل فور تحققه حتى LEAPS_TOP_N عقد -- عقود السهم
+    الواحد تُرتَّب محلياً بأقل تقلب ضمني أولاً قبل إرسالها، لكن الترتيب
+    الشامل عبر كل الأسهم غير متاح مع البث المباشر. `stats["excluded_bad_data"]`
+    يتجمّع بالمرجع."""
+    if stats is None:
+        stats = {}
+    watchlist = list(config.OPTIONS_WATCHLIST)
+    random.shuffle(watchlist)
+    sent = 0
+    batches = data.make_batches(watchlist)
     for batch in batches:
         if cancel_event is not None and cancel_event.is_set():
-            break
+            return
+        if sent >= config.LEAPS_TOP_N:
+            return
         try:
             frames = await asyncio.to_thread(data.fetch_batch, batch, "1d", "1mo")
         except Exception:
@@ -272,7 +292,9 @@ async def scan_leaps(cancel_event: asyncio.Event | None = None) -> ScanResults:
             continue
         for symbol, df in frames.items():
             if cancel_event is not None and cancel_event.is_set():
-                break
+                return
+            if sent >= config.LEAPS_TOP_N:
+                return
             spot = float(df["Close"].iloc[-1])
             if not (config.LEAPS_MIN_PRICE <= spot <= config.LEAPS_MAX_PRICE):
                 continue
@@ -283,13 +305,12 @@ async def scan_leaps(cancel_event: asyncio.Event | None = None) -> ScanResults:
             except Exception:
                 log.exception("LEAPS evaluation failed for %s", symbol)
                 continue
-            excluded_total += excluded
-            found.extend(contracts)
-
-    found.sort(key=lambda r: r["iv"])   # أقل تقلب ضمني أولاً
-    result = ScanResults(found[:config.LEAPS_TOP_N])
-    result.excluded_bad_data = excluded_total
-    return result
+            stats["excluded_bad_data"] = stats.get("excluded_bad_data", 0) + excluded
+            for c in sorted(contracts, key=lambda r: r["iv"]):
+                if sent >= config.LEAPS_TOP_N:
+                    return
+                yield c
+                sent += 1
 
 
 def format_leaps_result(row: dict) -> str:

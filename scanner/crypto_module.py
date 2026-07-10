@@ -10,11 +10,19 @@ CRYPTO_SCORE_CAP)، بنفس منطق وحدة الأسهم، مع نقطة إض
 الشرائي المتزايد آخر 12 ساعة، ومعدَّلة باتجاه BTC العام (متوسطه الحركي 50
 يوماً) -- انظر _score أدناه للصيغة الكاملة.
 
+scan() هي async generator: كل عملة تتحقق شروطها تُرسَل فوراً (live) بدل
+الانتظار حتى نهاية الفحص الكامل، ويتوقف الفحص تلقائياً بعد إيجاد
+CRYPTO_TOP_N نتيجة. قائمة المراقبة تُخلَط عشوائياً في بداية كل فحص حتى لا
+تنحاز النتائج دائماً لنفس العملات الأولى في CRYPTO_WATCHLIST -- الترتيب
+هنا "أول ما يتحقق الشرط"، وليس "الأفضل من بين كل السوق".
+
 أي خطأ في جلب أو تقييم عملة واحدة لا يوقف بقية الفحص.
 """
 import asyncio
 import logging
 import math
+import random
+from collections.abc import AsyncIterator
 
 from . import chart, config, crypto_data
 from . import indicators
@@ -158,19 +166,47 @@ def _evaluate(symbol: str, df, trend_mult: float) -> dict | None:
     }
 
 
-async def scan(cancel_event: asyncio.Event | None = None) -> list[dict]:
-    """يفحص كل عملات CRYPTO_WATCHLIST، ويرجع أفضل CRYPTO_TOP_N نتيجة مع رسم
-    بياني لكل واحدة منها."""
+def _attach_chart_and_volume(row: dict, df) -> None:
+    try:
+        support = indicators.find_nearest_support(
+            df, config.CRYPTO_SUPPORT_LOOKBACK, 3,
+            config.CRYPTO_SUPPORT_CLUSTER_TOL, config.CRYPTO_SUPPORT_MIN_TOUCHES,
+            config.CRYPTO_SUPPORT_MARGIN, config.CRYPTO_SUPPORT_BREAK_TOL)
+        row["chart_png"] = chart.render_chart(
+            row["symbol"], df, config.CRYPTO_BB_PERIOD, config.CRYPTO_BB_STD,
+            support=support, resistance=row["resistance"])
+    except Exception:
+        log.exception("Chart attach failed for %s", row["symbol"])
+
+
+async def _attach_volume(row: dict) -> None:
+    try:
+        row["volume_24h_usdt"] = await asyncio.to_thread(
+            crypto_data.fetch_24h_quote_volume, row["symbol"])
+    except Exception:
+        log.exception("24h volume fetch failed for %s", row["symbol"])
+
+
+async def scan(cancel_event: asyncio.Event | None = None,
+               stats: dict | None = None) -> AsyncIterator[dict]:
+    """يفحص عملات CRYPTO_WATCHLIST (بترتيب عشوائي) ويُرسل (yield) كل نتيجة
+    فور تحققها، حتى CRYPTO_TOP_N نتيجة أو نهاية القائمة أو /stop أو انتهاء
+    الجلسة. `stats` غير مستخدم هنا (موجود فقط لتوحيد التوقيع مع
+    options_module.scan)."""
     try:
         trend_mult = await _btc_trend_multiplier()
     except Exception:
         log.exception("Unexpected error computing BTC trend; using neutral multiplier")
         trend_mult = 1.0
 
-    found: list[dict] = []
-    for symbol in config.CRYPTO_WATCHLIST:
+    watchlist = list(config.CRYPTO_WATCHLIST)
+    random.shuffle(watchlist)
+    sent = 0
+    for symbol in watchlist:
         if cancel_event is not None and cancel_event.is_set():
-            break
+            return
+        if sent >= config.CRYPTO_TOP_N:
+            return
         try:
             df = await asyncio.to_thread(
                 crypto_data.fetch_ohlcv, symbol, config.CRYPTO_TIMEFRAME,
@@ -185,34 +221,12 @@ async def scan(cancel_event: asyncio.Event | None = None) -> list[dict]:
         except Exception:
             log.exception("Crypto evaluation failed for %s", symbol)
             continue
-        if row is not None:
-            row["_df"] = df  # kept only long enough to render the chart below
-            found.append(row)
-
-    found.sort(key=lambda r: (len(r["matched"]), r["probability_of_profit"]), reverse=True)
-    top = found[:config.CRYPTO_TOP_N]
-    for row in top:
-        df = row.pop("_df", None)
-        if df is None or (cancel_event is not None and cancel_event.is_set()):
+        if row is None:
             continue
-        try:
-            support = indicators.find_nearest_support(
-                df, config.CRYPTO_SUPPORT_LOOKBACK, 3,
-                config.CRYPTO_SUPPORT_CLUSTER_TOL, config.CRYPTO_SUPPORT_MIN_TOUCHES,
-                config.CRYPTO_SUPPORT_MARGIN, config.CRYPTO_SUPPORT_BREAK_TOL)
-            row["chart_png"] = chart.render_chart(
-                row["symbol"], df, config.CRYPTO_BB_PERIOD, config.CRYPTO_BB_STD,
-                support=support, resistance=row["resistance"])
-        except Exception:
-            log.exception("Chart attach failed for %s", row["symbol"])
-        try:
-            row["volume_24h_usdt"] = await asyncio.to_thread(
-                crypto_data.fetch_24h_quote_volume, row["symbol"])
-        except Exception:
-            log.exception("24h volume fetch failed for %s", row["symbol"])
-    for row in found:
-        row.pop("_df", None)
-    return top
+        _attach_chart_and_volume(row, df)
+        await _attach_volume(row)
+        yield row
+        sent += 1
 
 
 def format_result(row: dict) -> str:

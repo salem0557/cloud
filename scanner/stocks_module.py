@@ -7,13 +7,22 @@
 الاحتمالية هنا **نظام نقاط مرجّح** (heuristic score من 0 إلى
 STOCKS_SCORE_CAP)، وليست احتمالية إحصائية رياضية كما في وحدة الأوبشن (لا
 يوجد سوق خيارات على السهم نفسه لتلك الحسابات هنا) -- انظر _score أدناه
-للصيغة الكاملة. تُرجع أفضل STOCKS_TOP_N نتيجة تتجاوز STOCKS_MIN_POP.
+للصيغة الكاملة.
+
+scan() هي async generator: كل سهم يتحقق شروطه يُرسَل فوراً (live) بدل
+الانتظار حتى نهاية الفحص الكامل، ويتوقف الفحص تلقائياً بعد إيجاد
+STOCKS_TOP_N نتيجة (خروج مبكر يوفر وقتاً أيضاً). قائمة المراقبة تُخلَط
+عشوائياً في بداية كل فحص حتى لا تنحاز النتائج دائماً لنفس الأسهم الأولى
+أبجدياً في STOCKS_WATCHLIST -- الترتيب هنا "أول ما يتحقق الشرط"، وليس
+"الأفضل من بين كل السوق" (ذاك يتطلب مسح كل السوق قبل الإرسال).
 
 أي خطأ في جلب أو تقييم سهم واحد لا يوقف بقية الفحص -- يُسجَّل ويُتجاوز.
 """
 import asyncio
 import logging
 import math
+import random
+from collections.abc import AsyncIterator
 
 from . import chart, config, data
 from . import indicators
@@ -152,20 +161,40 @@ def _evaluate(symbol: str, df, trend_mult: float) -> dict | None:
     }
 
 
-async def scan(cancel_event: asyncio.Event | None = None) -> list[dict]:
-    """يفحص كل أسهم STOCKS_WATCHLIST، ويرجع أفضل STOCKS_TOP_N نتيجة مع رسم
-    بياني لكل واحدة منها."""
+def _attach_chart(row: dict, df) -> None:
+    try:
+        support = indicators.find_nearest_support(
+            df, config.STOCKS_SUPPORT_LOOKBACK, config.STOCKS_WEDGE_PIVOT_ORDER,
+            config.STOCKS_SUPPORT_CLUSTER_TOL, config.STOCKS_SUPPORT_MIN_TOUCHES,
+            config.STOCKS_SUPPORT_MARGIN, config.STOCKS_SUPPORT_BREAK_TOL)
+        row["chart_png"] = chart.render_chart(
+            row["symbol"], df, config.STOCKS_BB_PERIOD, config.STOCKS_BB_STD,
+            support=support, resistance=row["resistance"])
+    except Exception:
+        log.exception("Chart attach failed for %s", row["symbol"])
+
+
+async def scan(cancel_event: asyncio.Event | None = None,
+               stats: dict | None = None) -> AsyncIterator[dict]:
+    """يفحص أسهم STOCKS_WATCHLIST (بترتيب عشوائي) ويُرسل (yield) كل نتيجة
+    فور تحققها، حتى STOCKS_TOP_N نتيجة أو نهاية القائمة أو /stop أو انتهاء
+    الجلسة. `stats` غير مستخدم هنا (موجود فقط لتوحيد التوقيع مع
+    options_module.scan)."""
     try:
         trend_mult = await _spy_trend_multiplier()
     except Exception:
         log.exception("Unexpected error computing SPY trend; using neutral multiplier")
         trend_mult = 1.0
 
-    found: list[dict] = []
-    batches = data.make_batches(config.STOCKS_WATCHLIST)
+    watchlist = list(config.STOCKS_WATCHLIST)
+    random.shuffle(watchlist)
+    sent = 0
+    batches = data.make_batches(watchlist)
     for batch in batches:
         if cancel_event is not None and cancel_event.is_set():
-            break
+            return
+        if sent >= config.STOCKS_TOP_N:
+            return
         try:
             frames = await asyncio.to_thread(
                 data.fetch_batch, batch, config.STOCKS_INTERVAL, config.STOCKS_PERIOD)
@@ -173,42 +202,20 @@ async def scan(cancel_event: asyncio.Event | None = None) -> list[dict]:
             log.exception("Stocks batch download failed (%s..)", batch[0])
             continue
         for symbol, df in frames.items():
+            if cancel_event is not None and cancel_event.is_set():
+                return
+            if sent >= config.STOCKS_TOP_N:
+                return
             try:
                 row = _evaluate(symbol, df, trend_mult)
             except Exception:
                 log.exception("Stocks evaluation failed for %s", symbol)
                 continue
-            if row is not None:
-                found.append(row)
-
-    found.sort(key=lambda r: (len(r["matched"]), r["probability_of_profit"]), reverse=True)
-    top = found[:config.STOCKS_TOP_N]
-    await _attach_charts(top, cancel_event)
-    return top
-
-
-async def _attach_charts(rows: list[dict], cancel_event: asyncio.Event | None):
-    """Only the final top picks get a chart -- re-fetching a handful of
-    symbols is cheap, rendering one for every candidate during the full
-    watchlist pass would not be."""
-    for row in rows:
-        if cancel_event is not None and cancel_event.is_set():
-            return
-        try:
-            frames = await asyncio.to_thread(
-                data.fetch_batch, [row["symbol"]], config.STOCKS_INTERVAL, config.STOCKS_PERIOD)
-            df = frames.get(row["symbol"])
-            if df is None:
+            if row is None:
                 continue
-            support = indicators.find_nearest_support(
-                df, config.STOCKS_SUPPORT_LOOKBACK, config.STOCKS_WEDGE_PIVOT_ORDER,
-                config.STOCKS_SUPPORT_CLUSTER_TOL, config.STOCKS_SUPPORT_MIN_TOUCHES,
-                config.STOCKS_SUPPORT_MARGIN, config.STOCKS_SUPPORT_BREAK_TOL)
-            row["chart_png"] = chart.render_chart(
-                row["symbol"], df, config.STOCKS_BB_PERIOD, config.STOCKS_BB_STD,
-                support=support, resistance=row["resistance"])
-        except Exception:
-            log.exception("Chart attach failed for %s", row["symbol"])
+            _attach_chart(row, df)
+            yield row
+            sent += 1
 
 
 def format_result(row: dict) -> str:

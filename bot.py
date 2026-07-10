@@ -121,17 +121,23 @@ async def _send_row(app, chat_id: int, row: dict, format_fn):
 # ------------------------------------------------------- session machinery
 
 async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, app):
-    """Runs a module's scan() with a SOFT timeout: instead of hard-
-    cancelling the coroutine (which would discard everything scan_fn had
-    already accumulated), a background timer just sets cancel_event after
-    SESSION_TIMEOUT_SECONDS -- the same signal /stop sends -- so scan_fn's
-    own per-symbol checkpoint notices it and returns whatever it already
-    found, same as a manual /stop. Sends each result as its OWN message
-    (never batched). A failure here is this module's problem alone -- it
-    never touches another module's session."""
+    """Runs a module's scan() -- an async generator -- and sends each
+    qualifying result to Telegram AS SOON AS it's found, instead of
+    collecting them and sending a batch at the end. A background timer sets
+    cancel_event after SESSION_TIMEOUT_SECONDS (the same signal /stop
+    sends); scan_fn's own per-symbol checkpoint notices it and stops
+    yielding, same as a manual /stop -- whatever was already sent stays
+    sent. A failure here is this module's problem alone -- it never touches
+    another module's session.
+
+    Tradeoff: since results are streamed as they're found rather than
+    collected and ranked, this is "first N qualifying results in randomized
+    scan order", not "best N results across the whole watchlist" (global
+    ranking would require scanning everything before sending anything)."""
     cancel_event = asyncio.Event()
     cancel_events[chat_id] = cancel_event
     timed_out = False
+    stats: dict = {}
 
     async def _timeout_setter():
         nonlocal timed_out
@@ -140,18 +146,21 @@ async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, a
         cancel_event.set()
 
     timer = asyncio.create_task(_timeout_setter())
+    sent_count = 0
     try:
         try:
-            results = await scan_fn(cancel_event)
+            async for row in scan_fn(cancel_event, stats=stats):
+                await _send_row(app, chat_id, row, format_fn)
+                sent_count += 1
         finally:
             timer.cancel()
 
-        last_results[chat_id] = {"title": title, "count": len(results), "ts": time.time()}
-        excluded = getattr(results, "excluded_bad_data", 0)
+        last_results[chat_id] = {"title": title, "count": sent_count, "ts": time.time()}
+        excluded = stats.get("excluded_bad_data", 0)
         excluded_line = f"⚠️ استُبعد {excluded} عقد لبيانات غير موثوقة" if excluded else ""
         stopped_early = cancel_event.is_set()
 
-        if not results:
+        if sent_count == 0:
             if stopped_early and timed_out:
                 reason = "⏰ انتهت الجلسة (15 دقيقة) قبل إيجاد أي نتيجة."
             elif stopped_early:
@@ -165,15 +174,14 @@ async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, a
             return
 
         if stopped_early and timed_out:
-            header = f"⏰ {title} — انتهت الجلسة (15 دقيقة)، إليك أفضل {len(results)} نتيجة وُجدت حتى الآن:"
+            closing = f"⏰ {title} — انتهت الجلسة (15 دقيقة)، أُرسل {sent_count} نتيجة أعلاه."
         elif stopped_early:
-            header = f"⏹️ {title} — تم إيقاف الجلسة، إليك أفضل {len(results)} نتيجة وُجدت حتى الآن:"
+            closing = f"⏹️ {title} — تم إيقاف الجلسة، أُرسل {sent_count} نتيجة أعلاه."
         else:
-            header = f"{title} — {len(results)} نتيجة:"
-        await _send(app, chat_id, header)
-        for row in results:
-            await _send_row(app, chat_id, row, format_fn)
-        await _send(app, chat_id, f"{excluded_line}\n\n{FOOTER}" if excluded_line else FOOTER)
+            closing = f"✅ {title} — اكتمل الفحص، أُرسل {sent_count} نتيجة."
+        footer_msg = (f"{closing}\n\n{excluded_line}\n\n{FOOTER}" if excluded_line
+                     else f"{closing}\n\n{FOOTER}")
+        await _send(app, chat_id, footer_msg)
     except asyncio.CancelledError:
         await _send(app, chat_id, f"⏹️ {title} — تم إيقاف الجلسة.")
     except Exception:
