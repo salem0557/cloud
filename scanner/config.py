@@ -62,9 +62,9 @@ MIN_AVG_VOLUME = _int("MIN_AVG_VOLUME", 100_000)   # avg daily volume, stocks li
 # =====================================================================
 STOCKS_INTERVAL = os.environ.get("STOCKS_INTERVAL", "1d")
 STOCKS_PERIOD = os.environ.get("STOCKS_PERIOD", "6mo")
-STOCKS_FILTERS_REQUIRED = _int("STOCKS_FILTERS_REQUIRED", 3)   # out of 4
+STOCKS_FILTERS_REQUIRED = _int("STOCKS_FILTERS_REQUIRED", 2)   # out of 4
 STOCKS_TOP_N = _int("STOCKS_TOP_N", 5)
-STOCKS_MIN_POP = _float("STOCKS_MIN_POP", 45.0)   # minimum score (%) to display
+STOCKS_MIN_POP = _float("STOCKS_MIN_POP", 35.0)   # minimum score (%) to display
 
 STOCKS_BB_PERIOD = _int("STOCKS_BB_PERIOD", 20)
 STOCKS_BB_STD = _float("STOCKS_BB_STD", 2.0)
@@ -146,7 +146,40 @@ _SP500_EXTRA = [
     "SHOP", "UBER", "LYFT", "SNOW", "NET", "DKNG", "COIN", "RBLX", "SOFI", "RIVN", "LCID",
     "BRK-B",
 ]
-STOCKS_WATCHLIST = sorted(set(_NASDAQ_100 + _SP500_EXTRA))
+# Additional S&P 500 constituents to broaden coverage closer to the full
+# index (~500 names) -- same "curated, not auto-synced" caveat as above.
+_SP500_MORE = [
+    # Tech / software / semis
+    "ADSK", "AKAM", "EPAM", "FFIV", "FICO", "FTV", "GDDY", "GEN",
+    "JNPR", "KEYS", "MPWR", "MSI", "NTAP", "PAYC", "PTC", "QRVO", "SWKS", "TDY", "TER",
+    "TRMB", "TYL", "VRSN", "WU", "ZBRA",
+    # Financials
+    "AIG", "AJG", "AMP", "BEN", "BRO", "CBOE", "CFG", "CMA", "FDS", "FITB", "GL",
+    "HBAN", "IVZ", "KEY", "L", "MCO", "MKTX", "MSCI", "MTB", "NDAQ", "NTRS", "PFG",
+    "RF", "RJF", "TROW", "WRB", "WTW", "ZION",
+    # Healthcare
+    "ALGN", "BAX", "CAH", "CNC", "COR", "CRL", "HOLX", "INCY", "MCK", "MOH", "MRNA",
+    "PODD", "RVTY", "TECH", "VTRS", "XRAY", "ZBH",
+    # Consumer staples / discretionary
+    "APTV", "AZO", "BBY", "BF-B", "BWA", "CAG", "CHD", "CHRW", "CPB", "DPZ", "ETSY",
+    "EXPD", "EXPE", "GRMN", "HAS", "HRL", "KMX", "LEN", "LKQ", "LW", "MGM", "MHK",
+    "MKC", "NVR", "PHM", "POOL", "RL", "SJM", "TAP", "TPR", "TSCO", "TSN", "ULTA", "WYNN",
+    # Industrials
+    "ALLE", "AME", "AOS", "BALL", "CARR", "EFX", "GNRC", "GWW", "HII", "HWM", "IEX",
+    "J", "LDOS", "LHX", "MAS", "MMM", "NDSN", "OTIS", "PWR", "ROK", "SNA", "SWK",
+    "TDG", "TXT", "URI", "VLTO", "WAB",
+    # Energy / materials
+    "ALB", "AVY", "CE", "CF", "EMN", "FMC", "IFF", "IP", "MOS", "OKE", "PKG", "SHW",
+    "SW", "TRGP", "VLO",
+    # Real estate
+    "ARE", "BXP", "CPT", "CSGP", "DOC", "EXR", "FRT", "HST", "INVH", "IRM", "KIM",
+    "MAA", "REG", "SBAC", "UDR", "VICI", "VTR", "WY",
+    # Utilities
+    "AES", "ATO", "CMS", "CNP", "DTE", "ETR", "EVRG", "LNT", "NI", "NRG", "PCG", "PNW",
+    # Communication / media
+    "FOX", "FOXA", "IPG", "LYV", "MTCH", "NWS", "NWSA", "OMC", "PARA",
+]
+STOCKS_WATCHLIST = sorted(set(_NASDAQ_100 + _SP500_EXTRA + _SP500_MORE))
 
 # =====================================================================
 # 2) OPTIONS module -- CALL + PUT contract scan across a separate, more
