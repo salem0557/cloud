@@ -35,6 +35,27 @@ def _float(name: str, default: float) -> float:
 # --- Telegram ---
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
+# --- Update delivery: webhook vs long polling. "auto" (default) tries a
+# --- webhook server when a public URL can be determined, and transparently
+# --- falls back to polling either when no URL is configured or when
+# --- starting the webhook server itself fails at startup (see bot.py's
+# --- _try_run_webhook) -- so an unconfigured deployment just keeps working
+# --- via polling instead of refusing to start. Force one explicitly with
+# --- BOT_MODE=webhook (still falls back on failure) or BOT_MODE=polling
+# --- (skips webhook entirely, e.g. to stay on a Railway "worker" process
+# --- with no public port).
+BOT_MODE = os.environ.get("BOT_MODE", "auto").lower()   # auto | webhook | polling
+# On Railway, a service with a public domain generated sets
+# RAILWAY_PUBLIC_DOMAIN automatically (bare host, no scheme) -- WEBHOOK_URL
+# overrides that explicitly for any other host/platform.
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL") or (
+    f"https://{os.environ['RAILWAY_PUBLIC_DOMAIN']}"
+    if os.environ.get("RAILWAY_PUBLIC_DOMAIN") else None)
+WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/telegram-webhook")
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET") or None   # optional Telegram secret_token
+WEBHOOK_LISTEN = os.environ.get("WEBHOOK_LISTEN", "0.0.0.0")
+WEBHOOK_PORT = _int("PORT", 8080)   # Railway injects PORT for web-type services
+
 # --- Access: the bot is locked to whichever chat ids are already present in
 # --- state.approved (see scanner/state.py). There is no /approve command,
 # --- so no new member can ever be added by the bot itself -- membership is

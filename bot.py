@@ -653,6 +653,54 @@ async def post_init(app: Application):
         log.exception("Failed to set command menu")
 
 
+def _try_run_webhook(app: Application, run_webhook=None, delete_webhook=None) -> bool:
+    """Attempts to start the built-in webhook server (blocks until the bot
+    stops, same as run_polling). Returns True if it ran to a normal stop --
+    the caller should just return in that case. Returns False if it never
+    got the chance to start (no URL configured) or failed at startup, in
+    which case the caller falls back to run_polling instead.
+
+    A failure AFTER a successful start (e.g. the server crashes mid-flight)
+    is not something this function can retroactively fall back from --
+    only startup-time failures are caught here.
+
+    `run_webhook`/`delete_webhook` default to `app.run_webhook`/
+    `app.bot.delete_webhook` -- overridable only so tests can simulate a
+    startup failure without binding a real port or calling Telegram's API
+    (python-telegram-bot's Bot/Application objects don't allow monkey-
+    patching their own methods directly)."""
+    run_webhook = run_webhook or app.run_webhook
+    delete_webhook = delete_webhook or app.bot.delete_webhook
+
+    if not config.WEBHOOK_URL:
+        if config.BOT_MODE == "webhook":
+            log.warning("BOT_MODE=webhook but no WEBHOOK_URL/RAILWAY_PUBLIC_DOMAIN could be "
+                       "determined -- falling back to polling")
+        return False
+
+    full_url = config.WEBHOOK_URL.rstrip("/") + config.WEBHOOK_PATH
+    log.info("Starting in webhook mode at %s (listen=%s port=%s)",
+             full_url, config.WEBHOOK_LISTEN, config.WEBHOOK_PORT)
+    try:
+        run_webhook(
+            listen=config.WEBHOOK_LISTEN,
+            port=config.WEBHOOK_PORT,
+            url_path=config.WEBHOOK_PATH,
+            webhook_url=full_url,
+            secret_token=config.WEBHOOK_SECRET,
+            allowed_updates=Update.ALL_TYPES,
+        )
+        return True
+    except Exception:
+        log.exception("Webhook startup failed -- clearing any webhook registration with "
+                      "Telegram and falling back to polling")
+        try:
+            asyncio.run(delete_webhook(drop_pending_updates=False))
+        except Exception:
+            log.exception("Could not clear webhook registration before falling back to polling")
+        return False
+
+
 def main():
     if not config.BOT_TOKEN:
         raise SystemExit("Set TELEGRAM_BOT_TOKEN environment variable")
@@ -671,8 +719,13 @@ def main():
     app.add_handler(CommandHandler("untrack", cmd_untrack))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("status", cmd_status))
+    # The hourly position monitor is identical under either mode -- it's a
+    # JobQueue job on the same Application, not tied to how updates arrive.
     app.job_queue.run_repeating(_position_monitor_job,
                                 interval=config.POSITION_MONITOR_INTERVAL_SECONDS, first=60)
+
+    if config.BOT_MODE != "polling" and _try_run_webhook(app):
+        return
     log.info("Bot starting (polling, manual commands only + hourly position monitor)")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
