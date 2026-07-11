@@ -1,8 +1,10 @@
 """وحدة الأسهم الأمريكية (مستقلة تماماً عن وحدتَي الأوبشن والكريبتو).
 
-تفحص STOCKS_WATCHLIST (S&P 500 + Nasdaq تقريباً، من config.py) بحثاً عن
+تفحص STOCKS_WATCHLIST (داو جونز + S&P 500 + ناسداك-100 تقريباً، من
+config.py -- قائمة ثابتة مُعدّة يدوياً، انظر تعليق config.py) بحثاً عن
 إشارات ارتداد صعودي: بولينجر السفلي، RSI تشبع بيعي، منطقة دعم، ووتد هابط
-(مكتمل أو شبه مكتمل) -- يتطلب تحقق STOCKS_FILTERS_REQUIRED من أصل 4.
+(مكتمل أو شبه مكتمل) -- يتطلب تحقق STOCKS_FILTERS_REQUIRED من أصل 4،
+وسعر السهم أقل من STOCKS_MAX_PRICE (100$ افتراضياً).
 
 الاحتمالية هنا **نظام نقاط مرجّح** (heuristic score من 0 إلى
 STOCKS_SCORE_CAP)، وليست احتمالية إحصائية رياضية كما في وحدة الأوبشن (لا
@@ -10,11 +12,11 @@ STOCKS_SCORE_CAP)، وليست احتمالية إحصائية رياضية كم
 للصيغة الكاملة.
 
 scan() هي async generator: كل سهم يتحقق شروطه يُرسَل فوراً (live) بدل
-الانتظار حتى نهاية الفحص الكامل، ويتوقف الفحص تلقائياً بعد إيجاد
-STOCKS_TOP_N نتيجة (خروج مبكر يوفر وقتاً أيضاً). قائمة المراقبة تُخلَط
-عشوائياً في بداية كل فحص حتى لا تنحاز النتائج دائماً لنفس الأسهم الأولى
-أبجدياً في STOCKS_WATCHLIST -- الترتيب هنا "أول ما يتحقق الشرط"، وليس
-"الأفضل من بين كل السوق" (ذاك يتطلب مسح كل السوق قبل الإرسال).
+الانتظار حتى نهاية الفحص الكامل. **بلا خروج مبكر** -- يمسح القائمة كاملة
+ويُرسل كل سهم مؤهل، مهما كان عددهم (خلافاً لبقية الوحدات options/leaps/
+heavy/crypto اللي تتوقف عند أول N نتيجة؛ هذا خيار خاص بوحدة الأسهم فقط).
+قائمة المراقبة تُخلَط عشوائياً في بداية كل فحص فقط لتفادي أي ترتيب ثابت
+بالإرسال، لا لأغراض التوقف المبكر (لا يوجد توقف مبكر هنا أصلاً).
 
 أي خطأ في جلب أو تقييم سهم واحد لا يوقف بقية الفحص -- يُسجَّل ويُتجاوز.
 """
@@ -126,6 +128,9 @@ def _explain(matched: list[str], details: dict) -> str:
 def _evaluate(symbol: str, df, trend_mult: float) -> dict | None:
     if df["Volume"].tail(20).mean() < config.MIN_AVG_VOLUME:
         return None
+    price = float(df["Close"].iloc[-1])
+    if price >= config.STOCKS_MAX_PRICE:
+        return None
     scored = _score(df)
     if scored is None:
         return None
@@ -135,7 +140,6 @@ def _evaluate(symbol: str, df, trend_mult: float) -> dict | None:
     if probability < config.STOCKS_MIN_POP:
         return None
 
-    price = float(df["Close"].iloc[-1])
     resistance = indicators.find_nearest_resistance(
         df, config.STOCKS_SUPPORT_LOOKBACK, config.STOCKS_WEDGE_PIVOT_ORDER,
         config.STOCKS_SUPPORT_CLUSTER_TOL, config.STOCKS_SUPPORT_MIN_TOUCHES)
@@ -176,8 +180,8 @@ def _attach_chart(row: dict, df) -> None:
 
 async def scan(cancel_event: asyncio.Event | None = None,
                stats: dict | None = None) -> AsyncIterator[dict]:
-    """يفحص أسهم STOCKS_WATCHLIST (بترتيب عشوائي) ويُرسل (yield) كل نتيجة
-    فور تحققها، حتى STOCKS_TOP_N نتيجة أو نهاية القائمة أو /stop أو انتهاء
+    """يفحص كامل أسهم STOCKS_WATCHLIST (بترتيب عشوائي، بلا خروج مبكر) ويُرسل
+    (yield) كل سهم مؤهل فور تحققه، حتى نهاية القائمة أو /stop أو انتهاء
     الجلسة. `stats` غير مستخدم هنا (موجود فقط لتوحيد التوقيع مع
     options_module.scan)."""
     try:
@@ -188,12 +192,9 @@ async def scan(cancel_event: asyncio.Event | None = None,
 
     watchlist = list(config.STOCKS_WATCHLIST)
     random.shuffle(watchlist)
-    sent = 0
     batches = data.make_batches(watchlist)
     for batch in batches:
         if cancel_event is not None and cancel_event.is_set():
-            return
-        if sent >= config.STOCKS_TOP_N:
             return
         try:
             frames = await asyncio.to_thread(
@@ -204,8 +205,6 @@ async def scan(cancel_event: asyncio.Event | None = None,
         for symbol, df in frames.items():
             if cancel_event is not None and cancel_event.is_set():
                 return
-            if sent >= config.STOCKS_TOP_N:
-                return
             try:
                 row = _evaluate(symbol, df, trend_mult)
             except Exception:
@@ -215,7 +214,6 @@ async def scan(cancel_event: asyncio.Event | None = None,
                 continue
             _attach_chart(row, df)
             yield row
-            sent += 1
 
 
 def format_result(row: dict) -> str:

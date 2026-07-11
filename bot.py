@@ -217,13 +217,13 @@ async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, a
 
 
 async def _run_golden_pass(chat_id: int, golden_candidates: list[dict], app):
-    """After a /stocks session, a small follow-up check (bounded by how
-    many stocks qualified -- at most STOCKS_TOP_N, no scan-session timeout
-    of its own) on just the stocks that already qualified: does this exact
-    ticker also have a CALL contract passing every /options filter right
-    now? A stock with no qualifying contract is skipped silently -- same
-    as /leaps and /heavy do for an unqualified symbol, not an error, most
-    stocks simply won't have one."""
+    """After a /stocks session, a follow-up check (bounded by however many
+    stocks qualified -- /stocks itself has no early-exit cap anymore, no
+    scan-session timeout of its own here either) on just the stocks that
+    already qualified: does this exact ticker also have a CALL contract
+    passing every /options filter right now? A stock with no qualifying
+    contract is skipped silently -- same as /leaps and /heavy do for an
+    unqualified symbol, not an error, most stocks simply won't have one."""
     for stock_row in golden_candidates:
         golden_row = await golden_module.check_confluence(stock_row)
         if golden_row is None:

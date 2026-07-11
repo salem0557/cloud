@@ -84,8 +84,12 @@ MIN_AVG_VOLUME = _int("MIN_AVG_VOLUME", 100_000)   # avg daily volume, stocks li
 STOCKS_INTERVAL = os.environ.get("STOCKS_INTERVAL", "1d")
 STOCKS_PERIOD = os.environ.get("STOCKS_PERIOD", "6mo")
 STOCKS_FILTERS_REQUIRED = _int("STOCKS_FILTERS_REQUIRED", 2)   # out of 4
-STOCKS_TOP_N = _int("STOCKS_TOP_N", 5)
 STOCKS_MIN_POP = _float("STOCKS_MIN_POP", 35.0)   # minimum score (%) to display
+# No STOCKS_TOP_N / early-exit cap -- scan() walks the ENTIRE watchlist and
+# yields every qualifying stock, not just the first N found (unlike
+# options/leaps/heavy/crypto, which still stop early -- an explicit,
+# stocks-only choice).
+STOCKS_MAX_PRICE = _float("STOCKS_MAX_PRICE", 100.0)   # skip anything at/above this price
 
 STOCKS_BB_PERIOD = _int("STOCKS_BB_PERIOD", 20)
 STOCKS_BB_STD = _float("STOCKS_BB_STD", 2.0)
@@ -200,7 +204,15 @@ _SP500_MORE = [
     # Communication / media
     "FOX", "FOXA", "IPG", "LYV", "MTCH", "NWS", "NWSA", "OMC", "PARA",
 ]
-STOCKS_WATCHLIST = sorted(set(_NASDAQ_100 + _SP500_EXTRA + _SP500_MORE))
+# Round 3: smaller/mid-cap S&P 500 names skipped by the earlier passes above
+# (which leaned toward well-known large caps) -- exactly the kind of stock
+# STOCKS_MAX_PRICE (<$100) is meant to surface, so worth covering properly.
+_SP500_ROUND3 = [
+    "ACGL", "AIZ", "AMCR", "BR", "CINF", "CTLT", "CZR", "DGX", "DVA", "GPC",
+    "HIG", "HRB", "JBHT", "KVUE", "LH", "LII", "LNC", "LSTR", "NWL", "PNR",
+    "RHI", "ROL", "SAIA", "THC", "UHS", "UNM", "WBA", "WHR",
+]
+STOCKS_WATCHLIST = sorted(set(_NASDAQ_100 + _SP500_EXTRA + _SP500_MORE + _SP500_ROUND3))
 
 # =====================================================================
 # 2) OPTIONS module -- CALL + PUT contract scan across a separate, more

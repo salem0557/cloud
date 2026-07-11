@@ -7,8 +7,9 @@
 أداءها بمعزل عن /stocks و/options العاديين.
 
 مستقل تماماً عن جلسة /options العامة: لا يمس OPTIONS_WATCHLIST ولا يبدأ
-جلسة/مهلة منفصلة -- مجرد فحص إضافي صغير (بحد أقصى STOCKS_TOP_N سهم) يُشغَّل
-بعد جلسة /stocks نفسها، من نفس bot.py's _run_watchlist_session.
+جلسة/مهلة منفصلة -- مجرد فحص إضافي يُشغَّل بعد جلسة /stocks نفسها (على كل
+سهم حقق عتبة الذهبية، مهما كان عددهم -- /stocks بلا خروج مبكر الآن)، من
+نفس bot.py's _run_watchlist_session.
 """
 import asyncio
 import logging
