@@ -30,8 +30,8 @@ from telegram import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, Up
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-from scanner import (config, crypto_module, heavy_module, market_calendar, options_module,
-                     positions_module, review_module, signals_db, stocks_module)
+from scanner import (config, crypto_module, golden_module, heavy_module, market_calendar,
+                     options_module, positions_module, review_module, signals_db, stocks_module)
 from scanner.state import State
 from scanner.utils import fmt_price, split_message
 
@@ -163,12 +163,15 @@ async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, a
 
     timer = asyncio.create_task(_timeout_setter())
     sent_count = 0
+    golden_candidates: list[dict] = []
     try:
         try:
             async for row in scan_fn(cancel_event, stats=stats):
                 await _send_row(app, chat_id, row, format_fn)
                 await _log_row(section, row)
                 sent_count += 1
+                if section == "stocks" and golden_module.stock_qualifies_for_golden(row):
+                    golden_candidates.append(row)
         finally:
             timer.cancel()
 
@@ -199,6 +202,9 @@ async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, a
         footer_msg = (f"{closing}\n\n{excluded_line}\n\n{FOOTER}" if excluded_line
                      else f"{closing}\n\n{FOOTER}")
         await _send(app, chat_id, footer_msg)
+
+        if golden_candidates:
+            await _run_golden_pass(chat_id, golden_candidates, app)
     except asyncio.CancelledError:
         await _send(app, chat_id, f"⏹️ {title} — تم إيقاف الجلسة.")
     except Exception:
@@ -208,6 +214,22 @@ async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, a
         sessions.pop(chat_id, None)
         cancel_events.pop(chat_id, None)
         session_kind.pop(chat_id, None)
+
+
+async def _run_golden_pass(chat_id: int, golden_candidates: list[dict], app):
+    """After a /stocks session, a small follow-up check (bounded by how
+    many stocks qualified -- at most STOCKS_TOP_N, no scan-session timeout
+    of its own) on just the stocks that already qualified: does this exact
+    ticker also have a CALL contract passing every /options filter right
+    now? A stock with no qualifying contract is skipped silently -- same
+    as /leaps and /heavy do for an unqualified symbol, not an error, most
+    stocks simply won't have one."""
+    for stock_row in golden_candidates:
+        golden_row = await golden_module.check_confluence(stock_row)
+        if golden_row is None:
+            continue
+        await _send(app, chat_id, golden_module.format_golden_result(golden_row))
+        await _log_row("golden", golden_row)
 
 
 async def _run_ticker_session(chat_id: int, symbol: str, app):

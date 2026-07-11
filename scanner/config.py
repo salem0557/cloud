@@ -452,3 +452,12 @@ POSITION_STOPLOSS_PCT = _float("POSITION_STOPLOSS_PCT", -30.0)   # premium % vs 
 POSITION_PROFIT_PCT = _float("POSITION_PROFIT_PCT", 50.0)
 POSITION_THETA_WARNING_DAYS = _int("POSITION_THETA_WARNING_DAYS", 21)
 POSITION_MONITOR_INTERVAL_SECONDS = _int("POSITION_MONITOR_INTERVAL_SECONDS", 3600)
+
+# =====================================================================
+# Golden signal confluence (scanner/golden_module.py) -- runs after every
+# /stocks session, on the stocks it already sent. A stricter bar than the
+# general STOCKS_FILTERS_REQUIRED (2) on purpose: "golden" means both the
+# stock AND one of its own CALL contracts qualify at once, which should be
+# rarer than an ordinary /stocks hit.
+# =====================================================================
+GOLDEN_STOCKS_FILTERS_REQUIRED = _int("GOLDEN_STOCKS_FILTERS_REQUIRED", 3)   # out of 4
