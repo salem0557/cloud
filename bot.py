@@ -17,6 +17,7 @@ unrelated tool (options_scanner/cli.py's CLI entry point).
 Run:  TELEGRAM_BOT_TOKEN=xxx python bot.py
 """
 import asyncio
+import datetime as dt
 import io
 import logging
 import time
@@ -30,7 +31,7 @@ from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from scanner import (config, crypto_module, heavy_module, market_calendar, options_module,
-                     review_module, signals_db, stocks_module)
+                     positions_module, review_module, signals_db, stocks_module)
 from scanner.state import State
 from scanner.utils import fmt_price, split_message
 
@@ -379,6 +380,115 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _send(context.application, chat_id, review_module.format_stats_report(stats))
 
 
+async def cmd_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/track TICKER STRIKE EXPIRY PRICE TYPE -- self-reported: the bot has
+    no brokerage integration, it only knows about a position because the
+    member typed it in. Scoped per chat_id (see signals_db.py), so this
+    never touches another member's positions."""
+    if not await require_membership(update):
+        return
+    chat_id = update.effective_chat.id
+    args = context.args
+    if len(args) != 5:
+        await update.message.reply_text(
+            "الصيغة: /track TICKER STRIKE EXPIRY PRICE TYPE\n"
+            "مثال: /track T 21 2026-10-16 1.27 call")
+        return
+    symbol, strike_s, expiry_s, price_s, side = args
+    symbol = symbol.upper()
+    if side.lower() != "call":
+        await update.message.reply_text("🚫 البوت الحالي Call فقط — ما يقدر يتابع مراكز Put.")
+        return
+    try:
+        strike = float(strike_s)
+        entry_price = float(price_s)
+        expiry_date = dt.date.fromisoformat(expiry_s)
+    except ValueError:
+        await update.message.reply_text(
+            "تعذر فهم الأمر. تأكد إن STRIKE وPRICE أرقام، وEXPIRY بصيغة YYYY-MM-DD.")
+        return
+    if strike <= 0 or entry_price <= 0:
+        await update.message.reply_text("STRIKE وPRICE لازم يكونوا أكبر من صفر.")
+        return
+    original_dte = (expiry_date - dt.date.today()).days
+    if original_dte < 0:
+        await update.message.reply_text("⚠️ تاريخ الانتهاء اللي كتبته بالماضي.")
+        return
+
+    position_id = await asyncio.to_thread(
+        signals_db.add_position, chat_id, symbol, strike, expiry_s, entry_price, original_dte)
+    if position_id is None:
+        await update.message.reply_text(
+            f"⚠️ عندك مركز مفتوح بالفعل على {symbol} {strike:.2f}$ {expiry_s} — "
+            f"شغّل /untrack {symbol} أولاً لو تبي تحدّثه.")
+        return
+    await update.message.reply_text(
+        f"✅ تمت متابعة المركز: *{symbol}* {strike:.2f}$ {expiry_s} — "
+        f"دخول {fmt_price(entry_price)} ({original_dte} يوم للانتهاء).\n"
+        f"مراقبة تلقائية كل ساعة خلال ساعات السوق.",
+        parse_mode=ParseMode.MARKDOWN)
+
+
+async def cmd_positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_membership(update):
+        return
+    chat_id = update.effective_chat.id
+    rows = await asyncio.to_thread(signals_db.fetch_open_positions, chat_id)
+    if not rows:
+        await update.message.reply_text("ما عندك مراكز مفتوحة حالياً. استخدم /track لإضافة واحد.")
+        return
+    await update.message.reply_text(f"📌 مراكزك المفتوحة ({len(rows)}):")
+    for row in rows:
+        current = await positions_module.reprice(row)
+        await _send(context.application, chat_id, positions_module.format_position_line(row, current))
+
+
+async def cmd_untrack(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/untrack TICKER [STRIKE] [EXPIRY] -- STRIKE/EXPIRY only needed to
+    disambiguate when a member has more than one open position on the
+    same underlying."""
+    if not await require_membership(update):
+        return
+    chat_id = update.effective_chat.id
+    args = context.args
+    if not args:
+        await update.message.reply_text("الصيغة: /untrack TICKER [STRIKE] [EXPIRY]")
+        return
+    symbol = args[0].upper()
+    strike = expiry = None
+    try:
+        if len(args) >= 2:
+            strike = float(args[1])
+        if len(args) >= 3:
+            expiry = args[2]
+    except ValueError:
+        await update.message.reply_text("تعذر فهم STRIKE — لازم يكون رقم.")
+        return
+
+    matches = await asyncio.to_thread(
+        signals_db.fetch_matching_positions, chat_id, symbol, strike, expiry)
+    if not matches:
+        await update.message.reply_text(f"ما لقيت مركز مفتوح على {symbol}.")
+        return
+    if len(matches) > 1:
+        lines = "\n".join(f"• {m['strike']:.2f}$ {m['expiry']}" for m in matches)
+        await update.message.reply_text(
+            f"عندك أكثر من مركز مفتوح على {symbol}، حدد أكثر:\n{lines}\n\n"
+            f"مثال: /untrack {symbol} {matches[0]['strike']:.2f} {matches[0]['expiry']}")
+        return
+
+    row = matches[0]
+    final_price = await positions_module.reprice(row)
+    await asyncio.to_thread(signals_db.close_position, row["id"], final_price, "manual")
+    pl_txt = ""
+    if final_price is not None:
+        pl_pct = (final_price - row["entry_price"]) / row["entry_price"] * 100
+        pl_txt = (f" — النتيجة النهائية: {pl_pct:+.0f}% "
+                 f"({fmt_price(row['entry_price'])} → {fmt_price(final_price)})")
+    await update.message.reply_text(
+        f"✅ تم إيقاف متابعة {symbol} {row['strike']:.2f}$ {row['expiry']}{pl_txt}")
+
+
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     task = sessions.get(chat_id)
@@ -433,6 +543,9 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/crypto — فحص وحدة الكريبتو\n"
         "/review — مراجعة الإشارات المستحقة (7/30 يوم) وتحديث سجل الأداء\n"
         "/stats — تقرير أداء من السجل التاريخي\n"
+        "/track TICKER STRIKE EXPIRY PRICE TYPE — متابعة مركز مفتوح\n"
+        "/positions — مراكزك المفتوحة وربح/خسارة كل واحد الآن\n"
+        "/untrack TICKER [STRIKE] [EXPIRY] — إيقاف متابعة مركز\n"
         "/stop — إيقاف الجلسة الحالية فوراً\n"
         "/status — هذه الرسالة\n\n"
         f"كل جلسة تتوقف تلقائياً بعد {_session_minutes()} دقيقة كحد أقصى.\n"
@@ -444,6 +557,24 @@ async def on_error(update, context: ContextTypes.DEFAULT_TYPE):
     log.error("Unhandled error", exc_info=context.error)
 
 
+async def _position_monitor_job(context: ContextTypes.DEFAULT_TYPE):
+    """Runs every hour (job_queue.run_repeating below), but only actually
+    does anything during market hours -- a permanent lightweight exception
+    to the "every scan is a manual 15-minute session" rule (see cmd_stocks
+    etc.): it never touches `sessions`/`cancel_events`, never blocks a
+    member from starting a scan, and a member starting a scan doesn't
+    delay it either. Failures here must never crash the bot process."""
+    if not market_calendar.market_is_open():
+        return
+    try:
+        alerts = await positions_module.check_positions_for_alerts()
+    except Exception:
+        log.exception("Position monitor job failed")
+        return
+    for alert in alerts:
+        await _send(context.application, alert["chat_id"], alert["message"])
+
+
 BOT_COMMANDS = [
     BotCommand("stocks", "فحص وحدة الأسهم"),
     BotCommand("options", "فحص وحدة الأوبشن (Call فقط)، أو /options <رمز> لسهم محدد"),
@@ -452,6 +583,9 @@ BOT_COMMANDS = [
     BotCommand("crypto", "فحص وحدة الكريبتو"),
     BotCommand("review", "مراجعة الإشارات المستحقة (7/30 يوم)"),
     BotCommand("stats", "تقرير أداء من السجل التاريخي"),
+    BotCommand("track", "متابعة مركز: /track TICKER STRIKE EXPIRY PRICE TYPE"),
+    BotCommand("positions", "عرض مراكزك المفتوحة وربح/خسارة كل واحد الآن"),
+    BotCommand("untrack", "إيقاف متابعة مركز: /untrack TICKER [STRIKE] [EXPIRY]"),
     BotCommand("stop", "إيقاف الجلسة الحالية فوراً"),
     BotCommand("status", "حالة البوت وآخر النتائج"),
 ]
@@ -510,9 +644,14 @@ def main():
     app.add_handler(CommandHandler("crypto", cmd_crypto))
     app.add_handler(CommandHandler("review", cmd_review))
     app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("track", cmd_track))
+    app.add_handler(CommandHandler("positions", cmd_positions))
+    app.add_handler(CommandHandler("untrack", cmd_untrack))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("status", cmd_status))
-    log.info("Bot starting (polling, manual commands only)")
+    app.job_queue.run_repeating(_position_monitor_job,
+                                interval=config.POSITION_MONITOR_INTERVAL_SECONDS, first=60)
+    log.info("Bot starting (polling, manual commands only + hourly position monitor)")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 

@@ -4,8 +4,10 @@ need to score and summarize them.
 
 Lives at config.SIGNALS_DB_FILE, inside DATA_DIR -- a Railway Volume mount
 in production (see config.py's comment), so it survives redeploys unlike
-the rest of the container's filesystem. A later phase adds a `positions`
-table to the same file for /track-ed open contracts.
+the rest of the container's filesystem. Also holds the `positions` table:
+real contracts a member self-reported via /track (the bot has no
+brokerage integration -- it never detects a purchase on its own), scoped
+per chat_id so each member only ever sees their own.
 
 All functions here are synchronous (sqlite3 is not asyncio-native) --
 callers wrap them in asyncio.to_thread, the same convention this codebase
@@ -60,6 +62,34 @@ _INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_signals_section ON signals(section)",
 ]
 
+_POSITIONS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS positions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL,            -- scoped per member -- see module docstring
+    symbol TEXT NOT NULL,
+    strike REAL NOT NULL,
+    expiry TEXT NOT NULL,
+    entry_price REAL NOT NULL,           -- premium paid, from /track's PRICE argument
+    side TEXT NOT NULL DEFAULT 'call',   -- always 'call' -- the bot has no PUT support
+    tracked_ts REAL NOT NULL,            -- when /track was run
+    original_dte INTEGER NOT NULL,       -- days-to-expiry at /track time -- the "half the
+                                          -- original duration" time-stop alert needs this,
+                                          -- not today's DTE, which keeps shrinking
+    status TEXT NOT NULL DEFAULT 'open', -- open | closed
+    closed_ts REAL,
+    closed_price REAL,
+    closed_reason TEXT,
+    alerted_stoploss INTEGER NOT NULL DEFAULT 0,   -- one-shot flags -- each alert fires
+    alerted_profit INTEGER NOT NULL DEFAULT 0,     -- once per position, not every hour it
+    alerted_timestop INTEGER NOT NULL DEFAULT 0,   -- stays past the threshold
+    alerted_theta INTEGER NOT NULL DEFAULT 0
+)
+"""
+_POSITIONS_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_positions_chat ON positions(chat_id, status)",
+]
+_ALERT_COLUMNS = {"alerted_stoploss", "alerted_profit", "alerted_timestop", "alerted_theta"}
+
 
 @contextmanager
 def _db():
@@ -78,6 +108,9 @@ def init_db() -> None:
     with _db() as conn:
         conn.execute(_SCHEMA)
         for stmt in _INDEXES:
+            conn.execute(stmt)
+        conn.execute(_POSITIONS_SCHEMA)
+        for stmt in _POSITIONS_INDEXES:
             conn.execute(stmt)
 
 
@@ -217,3 +250,74 @@ def fetch_reviewed_signals() -> list[sqlite3.Row]:
 def count_open_signals() -> int:
     with _db() as conn:
         return conn.execute("SELECT COUNT(*) FROM signals WHERE status='open'").fetchone()[0]
+
+
+# ------------------------------------------------------------- positions
+
+def find_open_position(chat_id: int, symbol: str, strike: float, expiry: str) -> sqlite3.Row | None:
+    with _db() as conn:
+        return conn.execute(
+            "SELECT * FROM positions WHERE chat_id=? AND symbol=? AND strike=? "
+            "AND expiry=? AND status='open'",
+            (chat_id, symbol, strike, expiry)).fetchone()
+
+
+def add_position(chat_id: int, symbol: str, strike: float, expiry: str, entry_price: float,
+                 original_dte: int, ts: float | None = None) -> int | None:
+    """Returns the new position's id, or None if an identical OPEN position
+    already exists for this chat -- the caller should tell the member to
+    /untrack it first instead of silently creating a duplicate tracker."""
+    if find_open_position(chat_id, symbol, strike, expiry) is not None:
+        return None
+    ts = ts if ts is not None else time.time()
+    with _db() as conn:
+        cur = conn.execute(
+            """INSERT INTO positions
+               (chat_id, symbol, strike, expiry, entry_price, tracked_ts, original_dte)
+               VALUES (?,?,?,?,?,?,?)""",
+            (chat_id, symbol, strike, expiry, entry_price, ts, original_dte))
+        return cur.lastrowid
+
+
+def fetch_open_positions(chat_id: int | None = None) -> list[sqlite3.Row]:
+    """All open positions, or one chat's -- the monitoring job wants every
+    chat's; /positions wants just the caller's."""
+    with _db() as conn:
+        if chat_id is None:
+            return conn.execute("SELECT * FROM positions WHERE status='open'").fetchall()
+        return conn.execute(
+            "SELECT * FROM positions WHERE chat_id=? AND status='open'", (chat_id,)).fetchall()
+
+
+def fetch_matching_positions(chat_id: int, symbol: str, strike: float | None = None,
+                             expiry: str | None = None) -> list[sqlite3.Row]:
+    """For /untrack -- symbol alone often disambiguates, strike/expiry
+    narrow it further when a member has more than one open position on the
+    same underlying."""
+    sql = "SELECT * FROM positions WHERE chat_id=? AND symbol=? AND status='open'"
+    params: tuple = (chat_id, symbol)
+    if strike is not None:
+        sql += " AND strike=?"
+        params += (strike,)
+    if expiry is not None:
+        sql += " AND expiry=?"
+        params += (expiry,)
+    with _db() as conn:
+        return conn.execute(sql, params).fetchall()
+
+
+def close_position(position_id: int, closed_price: float | None, reason: str,
+                   ts: float | None = None) -> None:
+    ts = ts if ts is not None else time.time()
+    with _db() as conn:
+        conn.execute(
+            "UPDATE positions SET status='closed', closed_ts=?, closed_price=?, closed_reason=? "
+            "WHERE id=?",
+            (ts, closed_price, reason, position_id))
+
+
+def mark_alerted(position_id: int, column: str) -> None:
+    if column not in _ALERT_COLUMNS:
+        raise ValueError(f"unknown alert column: {column!r}")
+    with _db() as conn:
+        conn.execute(f"UPDATE positions SET {column}=1 WHERE id=?", (position_id,))

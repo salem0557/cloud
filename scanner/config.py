@@ -442,3 +442,13 @@ REVIEW_MAX_PER_RUN = _int("REVIEW_MAX_PER_RUN", 150)
 # /stats will rank it among the "best combos" -- guards against a single
 # lucky/unlucky signal dominating the ranking.
 REVIEW_MIN_COMBO_SAMPLE = _int("REVIEW_MIN_COMBO_SAMPLE", 3)
+
+# =====================================================================
+# Open-position guard (scanner/positions_module.py) -- /track, /positions,
+# /untrack, and the hourly monitoring job in bot.py. Self-reported
+# positions only; the bot has no brokerage integration.
+# =====================================================================
+POSITION_STOPLOSS_PCT = _float("POSITION_STOPLOSS_PCT", -30.0)   # premium % vs entry
+POSITION_PROFIT_PCT = _float("POSITION_PROFIT_PCT", 50.0)
+POSITION_THETA_WARNING_DAYS = _int("POSITION_THETA_WARNING_DAYS", 21)
+POSITION_MONITOR_INTERVAL_SECONDS = _int("POSITION_MONITOR_INTERVAL_SECONDS", 3600)
