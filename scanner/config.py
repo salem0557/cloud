@@ -424,3 +424,21 @@ DATA_DIR = (os.environ.get("DATA_DIR")
             or ".")
 os.makedirs(DATA_DIR, exist_ok=True)
 STATE_FILE = os.environ.get("STATE_FILE", os.path.join(DATA_DIR, "state.json"))
+SIGNALS_DB_FILE = os.environ.get("SIGNALS_DB_FILE", os.path.join(DATA_DIR, "signals.db"))
+POSITIONS_DB_FILE = os.environ.get("POSITIONS_DB_FILE", SIGNALS_DB_FILE)  # same file, separate table
+
+# =====================================================================
+# Signal history / review (scanner/signals_db.py, scanner/review_module.py)
+# =====================================================================
+# A signal "hits" if the underlying moved this much (%) in the expected
+# direction by the review checkpoint (stocks/crypto only -- options/leaps/
+# heavy use "the contract is worth more than it was bought for" instead).
+REVIEW_HIT_MOVE_PCT = _float("REVIEW_HIT_MOVE_PCT", 3.0)
+REVIEW_WINDOWS_DAYS = (7, 30)   # checkpoints /review evaluates
+# Safety cap so one /review run can't stall on hundreds of accumulated
+# signals -- run it again to keep working through the backlog.
+REVIEW_MAX_PER_RUN = _int("REVIEW_MAX_PER_RUN", 150)
+# A filter-combination needs at least this many reviewed signals before
+# /stats will rank it among the "best combos" -- guards against a single
+# lucky/unlucky signal dominating the ranking.
+REVIEW_MIN_COMBO_SAMPLE = _int("REVIEW_MIN_COMBO_SAMPLE", 3)

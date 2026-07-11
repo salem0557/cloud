@@ -367,3 +367,28 @@ def gather_candidates(symbol: str, spot: float, today, cutoff,
     if near_term_misses:
         raise NoNearTermOptions(symbol)
     return None, 0  # both providers cleanly confirm: genuinely no listed options
+
+
+def fetch_contract_premium(symbol: str, strike: float, expiry: str,
+                           is_call: bool = True) -> float | None:
+    """Current premium (mid of bid/ask, or last trade price with no live
+    quote) for ONE specific already-known contract -- used by /review and
+    position monitoring to reprice a tracked position, not by the scanning
+    pipeline (which pulls whole chains via gather_candidates). None if the
+    contract can't be found (wrong/expired expiry, delisted, no quote) --
+    callers treat that as "fall back to another valuation method", not an
+    error worth logging loudly."""
+    try:
+        chain = yf.Ticker(symbol).option_chain(expiry)
+    except Exception:
+        return None
+    table = chain.calls if is_call else chain.puts
+    match = table[(table["strike"] - strike).abs() < 0.01]
+    if match.empty:
+        return None
+    row = match.iloc[0]
+    bid, ask = float(row.get("bid") or 0), float(row.get("ask") or 0)
+    if ask >= bid > 0:
+        return round((bid + ask) / 2, 2)
+    last = float(row.get("lastPrice") or 0)
+    return round(last, 2) if last > 0 else None

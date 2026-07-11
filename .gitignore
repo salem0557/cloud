@@ -2,6 +2,9 @@ __pycache__/
 *.pyc
 .env
 state.json
+signals.db
+signals.db-wal
+signals.db-shm
 universe.json
 *.csv
 .venv/

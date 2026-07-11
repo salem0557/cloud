@@ -39,6 +39,19 @@ def fetch_ohlcv(symbol: str, timeframe: str, limit: int) -> pd.DataFrame | None:
     return df[REQUIRED_COLS]
 
 
+def fetch_last_price(symbol: str) -> float | None:
+    """Last traded price via the ticker endpoint -- lighter than pulling
+    OHLCV candles just to read the latest close (used by /review, which
+    only needs one number per symbol)."""
+    try:
+        ticker = _get_exchange().fetch_ticker(symbol)
+    except Exception:
+        log.warning("ccxt fetch_ticker failed for %s", symbol)
+        return None
+    last = ticker.get("last")
+    return float(last) if last is not None else None
+
+
 def fetch_24h_quote_volume(symbol: str) -> float | None:
     """24-hour trading volume in the quote currency (USDT) -- Binance's own
     liquidity figure (ticker's 24hr endpoint), not derived from the 4h

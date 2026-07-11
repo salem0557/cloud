@@ -29,7 +29,8 @@ from telegram import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, Up
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-from scanner import config, crypto_module, heavy_module, market_calendar, options_module, stocks_module
+from scanner import (config, crypto_module, heavy_module, market_calendar, options_module,
+                     review_module, signals_db, stocks_module)
 from scanner.state import State
 from scanner.utils import fmt_price, split_message
 
@@ -118,9 +119,20 @@ async def _send_row(app, chat_id: int, row: dict, format_fn):
         await _send(app, chat_id, text)
 
 
+async def _log_row(section: str, row: dict):
+    """Records a qualifying result to signals.db for /review and /stats --
+    independent of whether the Telegram send above it succeeded (the
+    signal genuinely qualified either way). A logging failure must never
+    take down the scan session itself."""
+    try:
+        await asyncio.to_thread(signals_db.log_signal, section, row)
+    except Exception:
+        log.exception("Failed to log %s signal for %s", section, row.get("symbol"))
+
+
 # ------------------------------------------------------- session machinery
 
-async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, app):
+async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, app, section: str):
     """Runs a module's scan() -- an async generator -- and sends each
     qualifying result to Telegram AS SOON AS it's found, instead of
     collecting them and sending a batch at the end. A background timer sets
@@ -133,7 +145,10 @@ async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, a
     Tradeoff: since results are streamed as they're found rather than
     collected and ranked, this is "first N qualifying results in randomized
     scan order", not "best N results across the whole watchlist" (global
-    ranking would require scanning everything before sending anything)."""
+    ranking would require scanning everything before sending anything).
+
+    `section` tags every result logged to signals.db (stocks/crypto/
+    options/leaps/heavy/golden) -- see _log_row."""
     cancel_event = asyncio.Event()
     cancel_events[chat_id] = cancel_event
     timed_out = False
@@ -151,6 +166,7 @@ async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, a
         try:
             async for row in scan_fn(cancel_event, stats=stats):
                 await _send_row(app, chat_id, row, format_fn)
+                await _log_row(section, row)
                 sent_count += 1
         finally:
             timer.cancel()
@@ -194,8 +210,8 @@ async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, a
 
 
 async def _run_ticker_session(chat_id: int, symbol: str, app):
-    """/options TICKER: a single-symbol lookup (كول وبوت معاً)، مستقل عن
-    فحص القائمة الكاملة -- نفس آلية المهلة/الإلغاء، رسالة خاصة به."""
+    """/options TICKER: a single-symbol lookup (Call فقط)، مستقل عن فحص
+    القائمة الكاملة -- نفس آلية المهلة/الإلغاء، رسالة خاصة به."""
     try:
         spot, contracts, error, excluded = await asyncio.wait_for(
             options_module.scan_symbol(symbol), timeout=config.SESSION_TIMEOUT_SECONDS)
@@ -228,6 +244,7 @@ async def _run_ticker_session(chat_id: int, symbol: str, app):
         await _send(app, chat_id, f"📊 عقود *{symbol}* المؤهلة — {len(contracts)}:")
         for row in contracts:
             await _send_row(app, chat_id, row, options_module.format_result)
+            await _log_row("options", row)
         await _send(app, chat_id, f"{excluded_line}\n\n{FOOTER}" if excluded_line else FOOTER)
 
 
@@ -256,7 +273,7 @@ async def cmd_stocks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
     _start_session(chat_id, _run_watchlist_session(
         chat_id, "📈 نتائج فحص الأسهم", stocks_module.scan, stocks_module.format_result,
-        context.application), kind="watchlist")
+        context.application, section="stocks"), kind="watchlist")
 
 
 async def cmd_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -277,7 +294,7 @@ async def cmd_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
         _start_session(chat_id, _run_watchlist_session(
             chat_id, "📊 نتائج فحص الأوبشن (Call فقط)", options_module.scan,
-            options_module.format_result, context.application), kind="watchlist")
+            options_module.format_result, context.application, section="options"), kind="watchlist")
 
 
 async def cmd_leaps(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -294,7 +311,7 @@ async def cmd_leaps(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
     _start_session(chat_id, _run_watchlist_session(
         chat_id, "🗓️ نتائج فحص LEAPS", options_module.scan_leaps,
-        options_module.format_leaps_result, context.application), kind="watchlist")
+        options_module.format_leaps_result, context.application, section="leaps"), kind="watchlist")
 
 
 async def cmd_heavy(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -310,7 +327,7 @@ async def cmd_heavy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
     _start_session(chat_id, _run_watchlist_session(
         chat_id, "🏛️ نتائج فحص Heavy", heavy_module.scan,
-        heavy_module.format_result, context.application), kind="watchlist")
+        heavy_module.format_result, context.application, section="heavy"), kind="watchlist")
 
 
 async def cmd_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -325,7 +342,41 @@ async def cmd_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
     _start_session(chat_id, _run_watchlist_session(
         chat_id, "🪙 نتائج فحص الكريبتو", crypto_module.scan, crypto_module.format_result,
-        context.application), kind="watchlist")
+        context.application, section="crypto"), kind="watchlist")
+
+
+async def cmd_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Scores every signal due at its 7-day/30-day checkpoint against real
+    market data and updates signals.db -- open to any approved member
+    (the record isn't per-user, it's a shared market log), independent of
+    the one-scan-session-per-chat machinery above (/review isn't a scan)."""
+    if not await require_membership(update):
+        return
+    chat_id = update.effective_chat.id
+    await update.message.reply_text("📋 جارٍ مراجعة الإشارات المستحقة (7 و30 يوم)...")
+    try:
+        summary = await review_module.run_review()
+    except Exception:
+        log.exception("Review failed for chat %s", chat_id)
+        await update.message.reply_text("⚠️ حدث خطأ غير متوقع أثناء المراجعة. جرّب لاحقاً.")
+        return
+    await _send(context.application, chat_id, review_module.format_review_summary(summary))
+
+
+async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Aggregate performance report over every reviewed signal -- run
+    /review first if this comes back empty, it only reports on signals
+    that have already crossed a review checkpoint."""
+    if not await require_membership(update):
+        return
+    chat_id = update.effective_chat.id
+    try:
+        stats = await review_module.compute_stats()
+    except Exception:
+        log.exception("Stats failed for chat %s", chat_id)
+        await update.message.reply_text("⚠️ حدث خطأ غير متوقع أثناء إعداد التقرير. جرّب لاحقاً.")
+        return
+    await _send(context.application, chat_id, review_module.format_stats_report(stats))
 
 
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -380,6 +431,8 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/leaps — عقود CALL طويلة الأجل (365+ يوم)\n"
         "/heavy — عقود Call على أضخم الأسهم والصناديق (Mega/Large/ETF)\n"
         "/crypto — فحص وحدة الكريبتو\n"
+        "/review — مراجعة الإشارات المستحقة (7/30 يوم) وتحديث سجل الأداء\n"
+        "/stats — تقرير أداء من السجل التاريخي\n"
         "/stop — إيقاف الجلسة الحالية فوراً\n"
         "/status — هذه الرسالة\n\n"
         f"كل جلسة تتوقف تلقائياً بعد {_session_minutes()} دقيقة كحد أقصى.\n"
@@ -397,6 +450,8 @@ BOT_COMMANDS = [
     BotCommand("leaps", "عقود CALL طويلة الأجل (365+ يوم)"),
     BotCommand("heavy", "عقود Call على أضخم الأسهم والصناديق (Mega/Large/ETF)"),
     BotCommand("crypto", "فحص وحدة الكريبتو"),
+    BotCommand("review", "مراجعة الإشارات المستحقة (7/30 يوم)"),
+    BotCommand("stats", "تقرير أداء من السجل التاريخي"),
     BotCommand("stop", "إيقاف الجلسة الحالية فوراً"),
     BotCommand("status", "حالة البوت وآخر النتائج"),
 ]
@@ -445,6 +500,7 @@ async def post_init(app: Application):
 def main():
     if not config.BOT_TOKEN:
         raise SystemExit("Set TELEGRAM_BOT_TOKEN environment variable")
+    signals_db.init_db()
     app = Application.builder().token(config.BOT_TOKEN).post_init(post_init).build()
     app.add_error_handler(on_error)
     app.add_handler(CommandHandler("stocks", cmd_stocks))
@@ -452,6 +508,8 @@ def main():
     app.add_handler(CommandHandler("leaps", cmd_leaps))
     app.add_handler(CommandHandler("heavy", cmd_heavy))
     app.add_handler(CommandHandler("crypto", cmd_crypto))
+    app.add_handler(CommandHandler("review", cmd_review))
+    app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("status", cmd_status))
     log.info("Bot starting (polling, manual commands only)")
