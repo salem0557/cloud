@@ -223,10 +223,10 @@ STOCKS_WATCHLIST = sorted(set(_NASDAQ_100 + _SP500_EXTRA + _SP500_MORE + _SP500_
 OPTIONS_MAX_WEEKS = _int("OPTIONS_MAX_WEEKS", 53)        # nearest expiry .. ~ DTE_MAX (360d)
 OPTIONS_MAX_EXPIRIES = _int("OPTIONS_MAX_EXPIRIES", 10)   # chain requests per stock
 OPTIONS_MIN_ACTIVITY = _int("OPTIONS_MIN_ACTIVITY", 20)   # min OI+volume per contract
-# No longer caps options_module.scan() (the general /options watchlist
-# scan has no early-exit cap at all -- see options_module.py); still used
-# by scan_symbol's per-ticker contract display cap (/options TICKER) and
-# by LEAPS_TOP_N-style caps elsewhere.
+# No longer caps options_module.scan() or scan_leaps() (both the general
+# /options watchlist scan and /leaps have no early-exit cap at all -- see
+# options_module.py); still used by scan_symbol's per-ticker contract
+# display cap (/options TICKER).
 OPTIONS_TOP_N = _int("OPTIONS_TOP_N", 5)
 
 OPTIONS_DELTA_MIN = _float("OPTIONS_DELTA_MIN", 0.40)     # applied to abs(delta)
@@ -269,7 +269,6 @@ LEAPS_MAX_COST = _float("LEAPS_MAX_COST", 170.0)   # total contract cost = premi
 # Expiry lookup window: needs to reach well past 365 days, unlike the
 # general options module's OPTIONS_MAX_WEEKS (~1 year).
 LEAPS_MAX_WEEKS = _int("LEAPS_MAX_WEEKS", 104)   # ~2 years
-LEAPS_TOP_N = _int("LEAPS_TOP_N", 5)
 
 # ~500 of the most liquid, most actively-optioned US stocks -- a separate
 # list from STOCKS_WATCHLIST on purpose, since "actively traded options"

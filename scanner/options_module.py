@@ -17,12 +17,10 @@ scipy -- N(d2)، انظر probability_module.py)، والقيمة المتوقع
 القائمة. أي خطأ في جلب أو تقييم عقود سهم واحد لا يوقف بقية الفحص.
 
 scan() وscan_leaps() هي async generators: كل عقد يتحقق شروطه يُرسَل فوراً
-(live) بدل الانتظار حتى نهاية الفحص الكامل. **scan() (فحص /options العام)
-بلا سقف على عدد النتائج** -- يمسح القائمة كاملة (596 سهم) ويُرسل كل عقد
-مؤهل، مهما كان عددهم؛ scan_leaps() لا يزال يتوقف عند أول LEAPS_TOP_N
-نتيجة. قائمة المراقبة تُخلَط عشوائياً في بداية كل فحص فقط لتفادي أي ترتيب
-ثابت بالإرسال -- ولمنع تحيّز LEAPS نحو نفس الأسهم الأولى أبجدياً، بما إنه
-لا يزال يتوقف مبكراً. عقود LEAPS للسهم الواحد تُرتَّب محلياً (أقل تقلب
+(live) بدل الانتظار حتى نهاية الفحص الكامل. **كلاهما بلا سقف على عدد
+النتائج** -- يمسحان القائمة كاملة (596 سهم) ويُرسلان كل عقد مؤهل، مهما
+كان عدده. قائمة المراقبة تُخلَط عشوائياً في بداية كل فحص فقط لتفادي أي
+ترتيب ثابت بالإرسال. عقود LEAPS للسهم الواحد تُرتَّب محلياً (أقل تقلب
 ضمني أولاً) قبل إرسالها، لكن الترتيب الشامل عبر كل الأسهم غير متاح لنفس
 سبب البث المباشر. `stats` قاموس اختياري يُمرَّر بالمرجع لتجميع عدد العقود
 المستبعدة لبيانات غير موثوقة (`stats["excluded_bad_data"]`) عبر كامل
@@ -168,8 +166,8 @@ async def scan(cancel_event: asyncio.Event | None = None,
                stats: dict | None = None) -> AsyncIterator[dict]:
     """يفحص كامل أسهم OPTIONS_WATCHLIST (بترتيب عشوائي، بلا خروج مبكر) ويُرسل
     (yield) كل عقد مؤهل فور تحققه، حتى نهاية القائمة أو /stop أو انتهاء
-    الجلسة -- خلافاً لـ/leaps و/heavy، اللي لا يزالان يتوقفان عند أول
-    LEAPS_TOP_N/HEAVY_TOP_N نتيجة. `stats["excluded_bad_data"]` يتجمّع
+    الجلسة -- مثل /leaps تماماً (بلا سقف)، خلافاً لـ/heavy اللي لا يزال
+    يتوقف عند أول HEAVY_TOP_N نتيجة. `stats["excluded_bad_data"]` يتجمّع
     بالمرجع (عدد العقود المستبعدة أثناء الفحص لبيانات غير موثوقة -- انظر
     options.py's _sanity_check)."""
     if stats is None:
@@ -252,23 +250,20 @@ def _leaps_for_symbol(symbol: str, spot: float) -> tuple[list[dict], int]:
 
 async def scan_leaps(cancel_event: asyncio.Event | None = None,
                      stats: dict | None = None) -> AsyncIterator[dict]:
-    """يفحص OPTIONS_WATCHLIST (بترتيب عشوائي) بحثاً عن عقود CALL طويلة الأجل
-    (LEAPS، DTE >= LEAPS_DTE_MIN) على أسهم سعرها بين LEAPS_MIN_PRICE
-    وLEAPS_MAX_PRICE، بدلتا >= LEAPS_DELTA_MIN وتقلب ضمني < LEAPS_IV_MAX.
-    يُرسل (yield) كل عقد مؤهل فور تحققه حتى LEAPS_TOP_N عقد -- عقود السهم
-    الواحد تُرتَّب محلياً بأقل تقلب ضمني أولاً قبل إرسالها، لكن الترتيب
-    الشامل عبر كل الأسهم غير متاح مع البث المباشر. `stats["excluded_bad_data"]`
-    يتجمّع بالمرجع."""
+    """يفحص كامل OPTIONS_WATCHLIST (بترتيب عشوائي، بلا خروج مبكر) بحثاً عن
+    عقود CALL طويلة الأجل (LEAPS، DTE >= LEAPS_DTE_MIN) على أسهم سعرها بين
+    LEAPS_MIN_PRICE وLEAPS_MAX_PRICE، بدلتا >= LEAPS_DELTA_MIN وتقلب ضمني <
+    LEAPS_IV_MAX. يُرسل (yield) كل عقد مؤهل فور تحققه، حتى نهاية القائمة أو
+    /stop أو انتهاء الجلسة -- عقود السهم الواحد تُرتَّب محلياً بأقل تقلب
+    ضمني أولاً قبل إرسالها، لكن الترتيب الشامل عبر كل الأسهم غير متاح مع
+    البث المباشر. `stats["excluded_bad_data"]` يتجمّع بالمرجع."""
     if stats is None:
         stats = {}
     watchlist = list(config.OPTIONS_WATCHLIST)
     random.shuffle(watchlist)
-    sent = 0
     batches = data.make_batches(watchlist)
     for batch in batches:
         if cancel_event is not None and cancel_event.is_set():
-            return
-        if sent >= config.LEAPS_TOP_N:
             return
         try:
             frames = await asyncio.to_thread(data.fetch_batch, batch, "1d", "1mo")
@@ -277,8 +272,6 @@ async def scan_leaps(cancel_event: asyncio.Event | None = None,
             continue
         for symbol, df in frames.items():
             if cancel_event is not None and cancel_event.is_set():
-                return
-            if sent >= config.LEAPS_TOP_N:
                 return
             spot = float(df["Close"].iloc[-1])
             if not (config.LEAPS_MIN_PRICE <= spot <= config.LEAPS_MAX_PRICE):
@@ -292,10 +285,7 @@ async def scan_leaps(cancel_event: asyncio.Event | None = None,
                 continue
             stats["excluded_bad_data"] = stats.get("excluded_bad_data", 0) + excluded
             for c in sorted(contracts, key=lambda r: r["iv"]):
-                if sent >= config.LEAPS_TOP_N:
-                    return
                 yield c
-                sent += 1
 
 
 def format_leaps_result(row: dict) -> str:
