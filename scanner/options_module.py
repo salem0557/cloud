@@ -17,14 +17,16 @@ scipy -- N(d2)، انظر probability_module.py)، والقيمة المتوقع
 القائمة. أي خطأ في جلب أو تقييم عقود سهم واحد لا يوقف بقية الفحص.
 
 scan() وscan_leaps() هي async generators: كل عقد يتحقق شروطه يُرسَل فوراً
-(live) بدل الانتظار حتى نهاية الفحص الكامل، ويتوقفان تلقائياً بعد إيجاد
-OPTIONS_TOP_N / LEAPS_TOP_N نتيجة. قائمة المراقبة تُخلَط عشوائياً في بداية
-كل فحص، لذا الترتيب هنا "أول ما يتحقق الشرط" وليس "الأفضل من بين كل
-السوق" -- ما عدا LEAPS حيث نحافظ على ترتيب محلي (أقل تقلب ضمني أولاً)
-داخل عقود السهم الواحد فقط، لأن الترتيب الشامل عبر كل الأسهم يتطلب مسح
-القائمة كاملة قبل الإرسال. `stats` قاموس اختياري يُمرَّر بالمرجع لتجميع
-عدد العقود المستبعدة لبيانات غير موثوقة (`stats["excluded_bad_data"]`)
-عبر كامل الفحص، لأن الـ generator لا يستطيع إرجاع قيمة إضافية مع كل yield.
+(live) بدل الانتظار حتى نهاية الفحص الكامل. **scan() (فحص /options العام)
+بلا سقف على عدد النتائج** -- يمسح القائمة كاملة (596 سهم) ويُرسل كل عقد
+مؤهل، مهما كان عددهم؛ scan_leaps() لا يزال يتوقف عند أول LEAPS_TOP_N
+نتيجة. قائمة المراقبة تُخلَط عشوائياً في بداية كل فحص فقط لتفادي أي ترتيب
+ثابت بالإرسال -- ولمنع تحيّز LEAPS نحو نفس الأسهم الأولى أبجدياً، بما إنه
+لا يزال يتوقف مبكراً. عقود LEAPS للسهم الواحد تُرتَّب محلياً (أقل تقلب
+ضمني أولاً) قبل إرسالها، لكن الترتيب الشامل عبر كل الأسهم غير متاح لنفس
+سبب البث المباشر. `stats` قاموس اختياري يُمرَّر بالمرجع لتجميع عدد العقود
+المستبعدة لبيانات غير موثوقة (`stats["excluded_bad_data"]`) عبر كامل
+الفحص، لأن الـ generator لا يستطيع إرجاع قيمة إضافية مع كل yield.
 """
 import asyncio
 import datetime as dt
@@ -164,21 +166,19 @@ async def scan_symbol(symbol: str) -> tuple[float | None, list[dict], str | None
 
 async def scan(cancel_event: asyncio.Event | None = None,
                stats: dict | None = None) -> AsyncIterator[dict]:
-    """يفحص أسهم OPTIONS_WATCHLIST (بترتيب عشوائي) ويُرسل (yield) كل عقد
-    مؤهل فور تحققه، حتى OPTIONS_TOP_N عقد أو نهاية القائمة أو /stop أو
-    انتهاء الجلسة. `stats["excluded_bad_data"]` يتجمّع بالمرجع (عدد العقود
-    المستبعدة أثناء الفحص لبيانات غير موثوقة -- انظر options.py's
-    _sanity_check)."""
+    """يفحص كامل أسهم OPTIONS_WATCHLIST (بترتيب عشوائي، بلا خروج مبكر) ويُرسل
+    (yield) كل عقد مؤهل فور تحققه، حتى نهاية القائمة أو /stop أو انتهاء
+    الجلسة -- خلافاً لـ/leaps و/heavy، اللي لا يزالان يتوقفان عند أول
+    LEAPS_TOP_N/HEAVY_TOP_N نتيجة. `stats["excluded_bad_data"]` يتجمّع
+    بالمرجع (عدد العقود المستبعدة أثناء الفحص لبيانات غير موثوقة -- انظر
+    options.py's _sanity_check)."""
     if stats is None:
         stats = {}
     watchlist = list(config.OPTIONS_WATCHLIST)
     random.shuffle(watchlist)
-    sent = 0
     batches = data.make_batches(watchlist)
     for batch in batches:
         if cancel_event is not None and cancel_event.is_set():
-            return
-        if sent >= config.OPTIONS_TOP_N:
             return
         try:
             frames = await asyncio.to_thread(data.fetch_batch, batch, "1d", "6mo")
@@ -187,8 +187,6 @@ async def scan(cancel_event: asyncio.Event | None = None,
             continue
         for symbol, df in frames.items():
             if cancel_event is not None and cancel_event.is_set():
-                return
-            if sent >= config.OPTIONS_TOP_N:
                 return
             try:
                 spot = float(df["Close"].iloc[-1])
@@ -201,10 +199,7 @@ async def scan(cancel_event: asyncio.Event | None = None,
                 continue
             stats["excluded_bad_data"] = stats.get("excluded_bad_data", 0) + excluded
             for c in contracts:
-                if sent >= config.OPTIONS_TOP_N:
-                    return
                 yield c
-                sent += 1
 
 
 def _passes_leaps_filters(c: dict) -> bool:
