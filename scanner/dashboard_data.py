@@ -9,9 +9,12 @@
 تظهر هنا، خلافاً لرسالة تيليجرام الأصلية للنوع العادي.
 """
 import datetime as dt
+import logging
 import re
 
-from . import config, probability_module as pm
+from . import config, probability_module as pm, signals_db
+
+log = logging.getLogger(__name__)
 
 _COND_RE = re.compile(r"delta=([\d.]+),\s*iv=(\d+)%,\s*dte=(\d+)")
 _DTE_ONLY_RE = re.compile(r"dte=(\d+)")
@@ -103,6 +106,45 @@ def row_to_contract(row) -> dict:
 
 def build_catalog(rows) -> list[dict]:
     return [row_to_contract(r) for r in rows]
+
+
+def backfill_missing_probability() -> int:
+    """يعيد حساب احتمالية الربح (POP) للإشارات القديمة اللي سُجِّلت قبل
+    توفّرها -- أبرزها عقود HEAVY المسجَّلة قبل تحديث لاحق أضاف حساب POP
+    لهذا النوع (كان "فلتر سيولة فقط" بلا احتمالية إطلاقاً)، وهذا سبب عدم
+    ظهور تصنيف 🥇/🥈/🥉 عليها بلوحة الويب رغم أن الكود الحالي يحسبها لكل
+    عقد HEAVY جديد.
+
+    يعيد الحساب من نفس الحقول المخزَّنة أصلاً بالصف (strike، premium،
+    السعر وقت الإشارة، تاريخ الانتهاء) بالإضافة للتقلب الضمني (IV) لو
+    كان مُضمَّناً بنص conditions. صف بلا IV مخزَّن (نص conditions قديم
+    جداً، من قبل تضمين IV/دلتا فيه أصلاً) يُتخطَّى بصمت -- لا توجد طريقة
+    لاسترجاع رقم لم يُسجَّل أبداً. آمنة الاستدعاء عند كل إقلاع (idempotent):
+    الصفوف اللي عندها احتمالية محسوبة فعلاً لا تدخل الاستعلام من الأساس.
+
+    يرجع عدد الصفوف اللي أُصلِحت فعلياً."""
+    rows = signals_db.fetch_signals_missing_probability()
+    updated = 0
+    for row in rows:
+        delta, iv, days = _parse_conditions(row["conditions"])
+        if iv is None:
+            continue
+        strike, premium, spot = row["strike"], row["contract_price"], row["underlying_price"]
+        if not strike or not premium or not spot or not days:
+            continue
+        try:
+            be = pm.breakeven(strike, premium, is_call=True)
+            pop = pm.probability_of_profit(spot, be, days, iv, is_call=True)
+        except Exception:
+            log.exception("Backfill POP computation failed for signal id=%s", row["id"])
+            continue
+        if pop is None:
+            continue
+        signals_db.update_signal_probability(row["id"], round(pop, 1))
+        updated += 1
+    if updated:
+        log.info("Backfilled probability_of_profit for %d old signal(s)", updated)
+    return updated
 
 
 # ------------------------------------------------------------ smart analyst

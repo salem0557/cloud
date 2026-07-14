@@ -264,8 +264,8 @@ OPTIONS_DELTA_MIN = _float("OPTIONS_DELTA_MIN", 0.50)     # applied to abs(delta
 OPTIONS_DELTA_MAX = _float("OPTIONS_DELTA_MAX", 1.0)       # no real upper bound (1.0 = max possible)
 OPTIONS_DTE_MIN = _int("OPTIONS_DTE_MIN", 14)
 OPTIONS_DTE_MAX = _int("OPTIONS_DTE_MAX", 360)
-OPTIONS_VOLUME_MIN = _int("OPTIONS_VOLUME_MIN", 30)
-OPTIONS_OI_MIN = _int("OPTIONS_OI_MIN", 200)
+OPTIONS_VOLUME_MIN = _int("OPTIONS_VOLUME_MIN", 15)   # loosened from 30 -- widen the search
+OPTIONS_OI_MIN = _int("OPTIONS_OI_MIN", 100)          # loosened from 200 -- widen the search
 OPTIONS_IV_MAX = _float("OPTIONS_IV_MAX", 0.30)
 OPTIONS_SPREAD_MAX = _float("OPTIONS_SPREAD_MAX", 0.15)   # loosened from 0.10
 # Per-share ask price bound (contract cost = ask * 100), e.g. 0.05$-2.00$
@@ -274,13 +274,17 @@ OPTIONS_ASK_MIN = _float("OPTIONS_ASK_MIN", 0.05)
 OPTIONS_ASK_MAX = _float("OPTIONS_ASK_MAX", 2.00)
 # Minimum probability of profit (%) -- a second, independent cut applied
 # after POP is computed, on top of the delta/DTE/liquidity/IV/spread/ask
-# filters above. Also the "bronze" tier floor (see OPTIONS_TIER_*).
-OPTIONS_MIN_POP = _float("OPTIONS_MIN_POP", 30.0)
+# filters above. Also the "bronze" tier floor (see OPTIONS_TIER_*). Raised
+# from 30 to 45 on request -- since this is also OPTIONS_TIER_BRONZE, the
+# GOLD/SILVER bands below were shifted up by the same +15 points so a
+# 3-tier spread survives (otherwise every passing result would always
+# read as gold, since the old 40%/35% bands sat below the new floor).
+OPTIONS_MIN_POP = _float("OPTIONS_MIN_POP", 45.0)
 
 # Result tier badges by POP (%): 🥇 gold >= GOLD, 🥈 silver >= SILVER,
 # 🥉 bronze >= BRONZE (== OPTIONS_MIN_POP, the display floor).
-OPTIONS_TIER_GOLD = _float("OPTIONS_TIER_GOLD", 40.0)
-OPTIONS_TIER_SILVER = _float("OPTIONS_TIER_SILVER", 35.0)
+OPTIONS_TIER_GOLD = _float("OPTIONS_TIER_GOLD", 65.0)
+OPTIONS_TIER_SILVER = _float("OPTIONS_TIER_SILVER", 55.0)
 OPTIONS_TIER_BRONZE = OPTIONS_MIN_POP
 
 # Duration tags by DTE: short/medium/long(LEAPS).
@@ -298,8 +302,10 @@ LEAPS_MIN_PRICE = _float("LEAPS_MIN_PRICE", 8.0)
 LEAPS_MAX_PRICE = _float("LEAPS_MAX_PRICE", 100.0)
 LEAPS_MAX_COST = _float("LEAPS_MAX_COST", 170.0)   # total contract cost = premium * 100
 # Expiry lookup window: needs to reach well past 365 days, unlike the
-# general options module's OPTIONS_MAX_WEEKS (~1 year).
-LEAPS_MAX_WEEKS = _int("LEAPS_MAX_WEEKS", 104)   # ~2 years
+# general options module's OPTIONS_MAX_WEEKS (~1 year). Widened from 104
+# (~2 years) to capture longer-dated LEAPS chains that were previously
+# out of reach.
+LEAPS_MAX_WEEKS = _int("LEAPS_MAX_WEEKS", 156)   # ~3 years
 
 # ~500 of the most liquid, most actively-optioned US stocks -- a separate
 # list from STOCKS_WATCHLIST on purpose, since "actively traded options"
@@ -385,8 +391,14 @@ _OPTIONS_EXTRA2 = [
     "PWR", "MYRG", "ROAD", "GVA", "NVR", "PHM", "DHI", "LEN", "KBH", "TOL",
     "MTH", "TMHC", "MHO", "GRBK", "CCS", "BZH", "LGIH", "IBP", "TPH", "WLK",
 ]
+# STOCKS_WATCHLIST unioned in on request to widen the search significantly
+# -- names liquid enough to qualify for the stocks scanner are generally
+# liquid enough to have a real options market too (not guaranteed for
+# every single one, but any that aren't simply fail the liquidity filters
+# below like any other candidate -- no harm done, just extra scan time).
 OPTIONS_WATCHLIST = sorted(set(
-    _OPTIONS_CORE + _OPTIONS_LARGE_MID_CAP + _OPTIONS_EXTRA + _OPTIONS_EXTRA2))
+    _OPTIONS_CORE + _OPTIONS_LARGE_MID_CAP + _OPTIONS_EXTRA + _OPTIONS_EXTRA2
+    + STOCKS_WATCHLIST))
 
 # --- /heavy: the mega/large-cap/ETF tag within the merged /options command
 # --- -- a small, curated ticker list (HEAVY_TICKERS) instead of the
@@ -397,8 +409,8 @@ OPTIONS_WATCHLIST = sorted(set(
 HEAVY_DTE_MIN = _int("HEAVY_DTE_MIN", 45)             # no upper cap -- every expiry in the chain
 HEAVY_STRIKE_PCT = _float("HEAVY_STRIKE_PCT", 0.10)   # strike within ±10% of spot, no widening
 HEAVY_PREMIUM_MAX = _float("HEAVY_PREMIUM_MAX", 3.00)  # ask <= 3.00$/share (300$/contract)
-HEAVY_VOLUME_MIN = _int("HEAVY_VOLUME_MIN", 50)
-HEAVY_OI_MIN = _int("HEAVY_OI_MIN", 300)
+HEAVY_VOLUME_MIN = _int("HEAVY_VOLUME_MIN", 25)   # loosened from 50 -- widen the search
+HEAVY_OI_MIN = _int("HEAVY_OI_MIN", 150)          # loosened from 300 -- widen the search
 HEAVY_SPREAD_MAX = _float("HEAVY_SPREAD_MAX", 0.10)
 # Cap on Yahoo per-expiry requests IF the CBOE single-request provider
 # (tried first for this module -- see heavy_module.py) fails; generous
@@ -412,10 +424,25 @@ _HEAVY_LARGE = [
     "PEP", "MRK", "ABBV", "ORCL", "CRM", "AMD", "NFLX", "DIS", "CSCO", "INTC", "QCOM",
     "IBM", "MCD", "NKE", "T", "VZ", "CMCSA", "PFE", "F", "GM", "BA",
 ]
-_HEAVY_ETF = ["SPY", "QQQ", "IWM", "DIA", "VTI", "VOO", "XLK", "XLF", "XLE", "SMH", "GLD", "SLV"]
-HEAVY_TICKERS = _HEAVY_MEGA + _HEAVY_LARGE + _HEAVY_ETF
+# Round 2: widening the deliberately-small HEAVY_TICKERS curated list on
+# request, still mega/large-cap and broad-ETF only (not the general
+# OPTIONS_WATCHLIST's ~600-name breadth) -- more sectors, more names per
+# sector, so /options's HEAVY tag has a bigger pool to clear the raised
+# OPTIONS_MIN_POP (45%) from.
+_HEAVY_LARGE2 = [
+    "ADBE", "TXN", "COST", "ABT", "TMO", "LIN", "NEE", "LOW", "SBUX", "MDT",
+    "BMY", "GS", "MS", "BLK", "SCHW", "AXP", "C", "WFC", "USB", "PM", "MO",
+    "CAT", "DE", "HON", "RTX", "LMT", "GE", "UPS", "ADP", "INTU", "NOW",
+    "AMAT", "MU", "LRCX", "PANW", "UBER", "ABNB", "PYPL", "SQ", "COIN",
+    "PLTR", "SOFI", "RIVN", "SHOP", "BABA",
+]
+_HEAVY_ETF = [
+    "SPY", "QQQ", "IWM", "DIA", "VTI", "VOO", "XLK", "XLF", "XLE", "SMH", "GLD", "SLV",
+    "XLV", "XLY", "XLI", "XLP", "XLU", "ARKK", "EEM", "TLT",
+]
+HEAVY_TICKERS = _HEAVY_MEGA + _HEAVY_LARGE + _HEAVY_LARGE2 + _HEAVY_ETF
 HEAVY_TAG = {**{s: "mega" for s in _HEAVY_MEGA},
-            **{s: "large" for s in _HEAVY_LARGE},
+            **{s: "large" for s in _HEAVY_LARGE + _HEAVY_LARGE2},
             **{s: "etf" for s in _HEAVY_ETF}}
 
 # =====================================================================

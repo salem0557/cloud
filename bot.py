@@ -32,7 +32,7 @@ from telegram import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, Up
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-from scanner import (config, crypto_module, golden_module, market_calendar,
+from scanner import (config, crypto_module, dashboard_data, golden_module, market_calendar,
                      options_module, positions_module, review_module, signals_db, stocks_module,
                      webapp)
 from scanner.state import State
@@ -690,6 +690,7 @@ def main():
     if not config.BOT_TOKEN:
         raise SystemExit("Set TELEGRAM_BOT_TOKEN environment variable")
     signals_db.init_db()
+    dashboard_data.backfill_missing_probability()
     app = Application.builder().token(config.BOT_TOKEN).post_init(post_init).build()
     app.add_error_handler(on_error)
     app.add_handler(CommandHandler("stocks", cmd_stocks))

@@ -250,8 +250,7 @@
     </div>
     <nav class="tabs" id="tabs">
       <a href="#/catalog" data-tab="catalog">📇 كتالوج العقود</a>
-      <a href="#/market" data-tab="market">🌡️ حالة السوق</a>
-      <a href="#/news" data-tab="news">📰 الأخبار</a>
+      <a href="#/briefing" data-tab="briefing">🧠 ملخص السوق اليومي</a>
       <a href="#/analyst" data-tab="analyst">🧭 المحلل الذكي</a>
     </nav>
   </header>
@@ -287,18 +286,11 @@
       <div class="grid" id="grid"><div class="loading">جارٍ التحميل…</div></div>
     </section>
 
-    <!-- ===== market ===== -->
-    <section class="page" id="page-market">
-      <h2 class="pagehead">حالة السوق العام</h2>
-      <p class="pagesub">قراءة آلية مبنية على قواعد ثابتة (اتجاه SPY مقابل متوسطه الحركي 50 يوماً، ومستوى مؤشر الخوف VIX) — وليست مؤشر Fear & Greed تجاري.</p>
-      <div id="marketBody"><div class="loading">جارٍ التحميل…</div></div>
-    </section>
-
-    <!-- ===== news ===== -->
-    <section class="page" id="page-news">
-      <h2 class="pagehead">أخبار الأسواق</h2>
-      <p class="pagesub">مجمّعة من yfinance لمؤشرَي السوق العام ولأبرز رموز الكتالوج الحالي.</p>
-      <div class="news-list" id="newsList"><div class="loading">جارٍ التحميل…</div></div>
+    <!-- ===== daily briefing (market status + top drivers + tips) ===== -->
+    <section class="page" id="page-briefing">
+      <h2 class="pagehead">ملخص السوق اليومي</h2>
+      <p class="pagesub">نظرة عامة على السوق الأمريكي، أبرز محركاته وأخباره اليوم، ونصائح تداول عامة — كلها آلية مبنية على قواعد ثابتة، وليست مؤشر Fear &amp; Greed تجاري ولا ذكاءً اصطناعياً توليدياً.</p>
+      <div id="briefingBody"><div class="loading">جارٍ التحميل…</div></div>
     </section>
 
     <!-- ===== analyst ===== -->
@@ -311,7 +303,7 @@
     </section>
 
     <footer class="page-foot">
-      البيانات مسجَّلة فعلياً من جلسات <span class="mono ltr">/options</span> السابقة (قاعدة <span class="mono ltr">signals.db</span>) — الطزاجة تعتمد على آخر مرة شغّل فيها أحد الأعضاء الفحص، وليست فحصاً حياً يبدأ عند فتح الصفحة. حالة السوق والمحلل الذكي كلاهما منطق قواعد ثابتة من نفس أرقام البوت، بلا نموذج ذكاء اصطناعي توليدي.
+      البيانات مسجَّلة فعلياً من جلسات <span class="mono ltr">/options</span> السابقة (قاعدة <span class="mono ltr">signals.db</span>) — الطزاجة تعتمد على آخر مرة شغّل فيها أحد الأعضاء الفحص، وليست فحصاً حياً يبدأ عند فتح الصفحة. ملخص السوق اليومي والمحلل الذكي كلاهما منطق قواعد ثابتة من نفس أرقام البوت، بلا نموذج ذكاء اصطناعي توليدي.
     </footer>
   </div>
 </div>
@@ -352,11 +344,10 @@
     var hash = location.hash.replace(/^#\/?/, "");
     var parts = hash.split("/");
     var name = parts[0] || "catalog";
-    if (!["catalog","market","news","analyst"].includes(name)) name = "catalog";
+    if (!["catalog","briefing","analyst"].includes(name)) name = "catalog";
     setTab(name);
     if (name === "catalog" && !catalogCache.length) loadCatalog();
-    if (name === "market") loadMarket();
-    if (name === "news") loadNews();
+    if (name === "briefing") loadBriefing();
     if (name === "analyst" && parts[1]) loadAnalyst(parts[1]);
   }
   window.addEventListener("hashchange", route);
@@ -473,59 +464,66 @@
   document.getElementById("searchInput").addEventListener("input", function(e){ state.q = e.target.value; renderCatalog(); });
   document.getElementById("sortSel").addEventListener("change", function(e){ state.sort = e.target.value; renderCatalog(); });
 
-  // ------------------------------------------------------------ market
+  // ------------------------------------------------------------ daily briefing
   function moodClass(mood){
     if (mood === "متفائل" || mood === "متفائل بحذر") return "favor";
     if (mood.indexOf("خوف") !== -1) return "caution";
     return "neutral";
   }
 
-  async function loadMarket(){
-    var body = document.getElementById("marketBody");
-    body.innerHTML = '<div class="loading">جارٍ التحميل…</div>';
-    try {
-      var m = await getJSON("/api/market");
-      var cls = moodClass(m.mood || "");
-      body.innerHTML =
-        '<div class="mood-card">' +
-          '<div class="mood-headline"><span class="mood-label '+cls+'">'+m.mood+'</span>' +
-          (m.vix!=null ? '<span class="chip" style="background:var(--paper-sunk);color:var(--ink-soft)">VIX '+m.vix.toFixed(1)+' — '+m.vix_band+'</span>' : '') +
-          '</div>' +
-          '<p class="mood-note">'+(m.note||"")+'</p>' +
-          '<div class="stat-grid">' +
-            '<div class="cell"><span class="n mono ltr">'+fmtUSD(m.spy_price)+'</span><span class="l">SPY الآن</span></div>' +
-            '<div class="cell"><span class="n mono ltr">'+fmtUSD(m.spy_sma50)+'</span><span class="l">SPY متوسط 50 يوم</span></div>' +
-            '<div class="cell"><span class="n mono ltr">'+(m.spy_change_pct==null?"-":(m.spy_change_pct>0?"+":"")+m.spy_change_pct.toFixed(2)+"%")+'</span><span class="l">تغيّر SPY اليوم</span></div>' +
-            '<div class="cell"><span class="n mono ltr">'+(m.vix==null?"-":m.vix.toFixed(1))+'</span><span class="l">مؤشر الخوف VIX</span></div>' +
-          '</div>' +
-          '<p class="method-note">المنهجية: SPY فوق متوسطه الحركي 50 يوماً = اتجاه صاعد؛ VIX &lt;15 هادئ، 15–20 طبيعي، 20–28 متوتر، 28+ خوف مرتفع. الاثنان يُدمَجان بجدول قواعد ثابت — لا نموذج تنبؤي ولا بيانات مشاعر سوق تجارية.</p>' +
-        '</div>';
-    } catch (e) {
-      body.innerHTML = '<div class="empty">تعذّر تحميل حالة السوق.</div>';
-    }
+  function moodCardHTML(m){
+    var cls = moodClass(m.mood || "");
+    return (
+      '<div class="mood-card">' +
+        '<div class="mood-headline"><span class="mood-label '+cls+'">'+m.mood+'</span>' +
+        (m.vix!=null ? '<span class="chip" style="background:var(--paper-sunk);color:var(--ink-soft)">VIX '+m.vix.toFixed(1)+' — '+m.vix_band+'</span>' : '') +
+        '</div>' +
+        '<p class="mood-note">'+(m.note||"")+'</p>' +
+        '<div class="stat-grid">' +
+          '<div class="cell"><span class="n mono ltr">'+fmtUSD(m.spy_price)+'</span><span class="l">SPY الآن</span></div>' +
+          '<div class="cell"><span class="n mono ltr">'+fmtUSD(m.spy_sma50)+'</span><span class="l">SPY متوسط 50 يوم</span></div>' +
+          '<div class="cell"><span class="n mono ltr">'+(m.spy_change_pct==null?"-":(m.spy_change_pct>0?"+":"")+m.spy_change_pct.toFixed(2)+"%")+'</span><span class="l">تغيّر SPY اليوم</span></div>' +
+          '<div class="cell"><span class="n mono ltr">'+(m.vix==null?"-":m.vix.toFixed(1))+'</span><span class="l">مؤشر الخوف VIX</span></div>' +
+        '</div>' +
+        '<p class="method-note">المنهجية: SPY فوق متوسطه الحركي 50 يوماً = اتجاه صاعد؛ VIX &lt;15 هادئ، 15–20 طبيعي، 20–28 متوتر، 28+ خوف مرتفع. الاثنان يُدمَجان بجدول قواعد ثابت — لا نموذج تنبؤي ولا بيانات مشاعر سوق تجارية.</p>' +
+      '</div>'
+    );
   }
 
-  // ------------------------------------------------------------ news
-  async function loadNews(){
-    var list = document.getElementById("newsList");
-    list.innerHTML = '<div class="loading">جارٍ التحميل…</div>';
+  function driversHTML(items){
+    if (!items.length) {
+      return '<div class="empty">لا توجد أخبار متاحة حالياً.</div>';
+    }
+    return '<div class="news-list">' + items.map(function(n){
+      var when = n.published_ts ? new Date(n.published_ts*1000).toLocaleString("ar") : "";
+      return '<a class="news-item" href="'+n.link+'" target="_blank" rel="noopener noreferrer">' +
+        '<div class="news-top"><span class="news-symbol mono ltr">'+n.symbol+'</span><span>'+n.publisher+'</span><span>'+when+'</span></div>' +
+        '<div class="news-title">'+n.title+'</div>' +
+      '</a>';
+    }).join("") + '</div>';
+  }
+
+  function tipsHTML(tips){
+    return '<div class="bullets">' +
+      '<span class="rule-tag">⚙️ نصائح عامة آلية مبنية على قواعد — ليست توصية لسهم أو عقد بعينه</span>' +
+      tips.map(function(t){ return '<div class="bullet">'+t+'</div>'; }).join("") +
+    '</div>';
+  }
+
+  async function loadBriefing(){
+    var body = document.getElementById("briefingBody");
+    body.innerHTML = '<div class="loading">جارٍ التحميل…</div>';
     try {
       var symbols = Array.from(new Set(catalogCache.slice(0,8).map(function(d){return d.symbol;})));
-      var data = await getJSON("/api/news?symbols=" + encodeURIComponent(symbols.join(",")));
-      var items = data.items || [];
-      if (!items.length) {
-        list.innerHTML = '<div class="empty">لا توجد أخبار متاحة حالياً.</div>';
-        return;
-      }
-      list.innerHTML = items.map(function(n){
-        var when = n.published_ts ? new Date(n.published_ts*1000).toLocaleString("ar") : "";
-        return '<a class="news-item" href="'+n.link+'" target="_blank" rel="noopener noreferrer">' +
-          '<div class="news-top"><span class="news-symbol mono ltr">'+n.symbol+'</span><span>'+n.publisher+'</span><span>'+when+'</span></div>' +
-          '<div class="news-title">'+n.title+'</div>' +
-        '</a>';
-      }).join("");
+      var data = await getJSON("/api/briefing?symbols=" + encodeURIComponent(symbols.join(",")));
+      body.innerHTML =
+        moodCardHTML(data.market || {}) +
+        '<h2 class="pagehead" style="margin-top:24px">أبرز محركات السوق اليوم</h2>' +
+        driversHTML(data.news || []) +
+        '<h2 class="pagehead" style="margin-top:24px">نصائح تداول عامة اليوم</h2>' +
+        tipsHTML(data.tips || []);
     } catch (e) {
-      list.innerHTML = '<div class="empty">تعذّر تحميل الأخبار.</div>';
+      body.innerHTML = '<div class="empty">تعذّر تحميل ملخص السوق.</div>';
     }
   }
 

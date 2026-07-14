@@ -252,6 +252,23 @@ def count_open_signals() -> int:
         return conn.execute("SELECT COUNT(*) FROM signals WHERE status='open'").fetchone()[0]
 
 
+def fetch_signals_missing_probability() -> list[sqlite3.Row]:
+    """Options-family signals with no stored `probability` -- mainly old
+    HEAVY signals logged before that type computed POP at all, but also
+    covers any options/leaps row that failed to compute one at the time.
+    Feeds scanner.dashboard_data.backfill_missing_probability(), which
+    tries to recompute it retroactively from the row's own stored fields."""
+    with _db() as conn:
+        return conn.execute(
+            "SELECT * FROM signals WHERE section IN ('options', 'leaps', 'heavy') "
+            "AND probability IS NULL").fetchall()
+
+
+def update_signal_probability(signal_id: int, probability: float) -> None:
+    with _db() as conn:
+        conn.execute("UPDATE signals SET probability=? WHERE id=?", (probability, signal_id))
+
+
 def fetch_signal_by_id(signal_id: int) -> sqlite3.Row | None:
     """A single logged signal by its row id -- the web dashboard's analyst
     page looks a contract up this way (unambiguous, unlike symbol/strike/

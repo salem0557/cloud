@@ -68,6 +68,20 @@ class NewsHandler(_JSONHandler):
         self.write_json({"items": items, "count": len(items)})
 
 
+class BriefingHandler(_JSONHandler):
+    """يجمع حالة السوق + أبرز الأخبار + نصائح تداول عامة برد واحد -- صفحة
+    "ملخص السوق اليومي" بلوحة الويب (حلّت محل صفحتَي حالة السوق والأخبار
+    المنفصلتين)."""
+
+    async def get(self):
+        symbols_param = self.get_query_argument("symbols", "")
+        extra = [s.strip().upper() for s in symbols_param.split(",") if s.strip()][:10]
+        market = await market_module.market_status()
+        news = await market_module.fetch_news(extra)
+        tips = market_module.generate_trading_tips(market)
+        self.write_json({"market": market, "news": news, "tips": tips})
+
+
 class AnalystHandler(_JSONHandler):
     async def get(self):
         id_param = self.get_query_argument("id", None)
@@ -89,6 +103,7 @@ def _build_app() -> tornado.web.Application:
         (r"/api/catalog", CatalogHandler),
         (r"/api/market", MarketHandler),
         (r"/api/news", NewsHandler),
+        (r"/api/briefing", BriefingHandler),
         (r"/api/analyst", AnalystHandler),
         (r"/(.*)", tornado.web.StaticFileHandler,
          {"path": _WEB_DIR, "default_filename": "index.html"}),
