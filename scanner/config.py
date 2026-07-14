@@ -229,19 +229,19 @@ OPTIONS_MIN_ACTIVITY = _int("OPTIONS_MIN_ACTIVITY", 20)   # min OI+volume per co
 # display cap (/options TICKER).
 OPTIONS_TOP_N = _int("OPTIONS_TOP_N", 5)
 
-# OPTIONS_DELTA_MIN/OPTIONS_IV_MAX are now the single, unified delta/IV
+# OPTIONS_DELTA_MIN/OPTIONS_IV_MAX are the single, unified delta/IV
 # thresholds shared by /options, /leaps, and /heavy (merged into one
 # /options command -- see options_module.scan_all). Was 0.40/0.80
-# (general-only) before the merge; /leaps used to have its own stricter
-# LEAPS_DELTA_MIN=0.60/LEAPS_IV_MAX=0.35, and /heavy had no IV/delta
-# filter at all -- all three now apply exactly these two bounds.
-OPTIONS_DELTA_MIN = _float("OPTIONS_DELTA_MIN", 0.35)     # applied to abs(delta)
+# (general-only) before the merge, then loosened to a shared 0.35/0.50,
+# then tightened again to these stricter shared values -- all three types
+# apply exactly these two bounds.
+OPTIONS_DELTA_MIN = _float("OPTIONS_DELTA_MIN", 0.50)     # applied to abs(delta)
 OPTIONS_DELTA_MAX = _float("OPTIONS_DELTA_MAX", 1.0)       # no real upper bound (1.0 = max possible)
 OPTIONS_DTE_MIN = _int("OPTIONS_DTE_MIN", 14)
 OPTIONS_DTE_MAX = _int("OPTIONS_DTE_MAX", 360)
 OPTIONS_VOLUME_MIN = _int("OPTIONS_VOLUME_MIN", 30)
 OPTIONS_OI_MIN = _int("OPTIONS_OI_MIN", 200)
-OPTIONS_IV_MAX = _float("OPTIONS_IV_MAX", 0.50)
+OPTIONS_IV_MAX = _float("OPTIONS_IV_MAX", 0.30)
 OPTIONS_SPREAD_MAX = _float("OPTIONS_SPREAD_MAX", 0.15)   # loosened from 0.10
 # Per-share ask price bound (contract cost = ask * 100), e.g. 0.05$-2.00$
 # means a 5$-200$ contract.

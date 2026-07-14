@@ -10,6 +10,8 @@ import math
 
 from scipy.stats import norm
 
+from . import config
+
 RISK_FREE_RATE = 0.045  # ~ عائد أذون الخزانة الحالي
 
 
@@ -71,6 +73,22 @@ def probability_of_profit(spot: float, breakeven_price: float, days: float,
     d2 = (math.log(spot / breakeven_price) + (RISK_FREE_RATE - 0.5 * iv * iv) * t) \
         / (iv * math.sqrt(t))
     return (norm.cdf(d2) if is_call else norm.cdf(-d2)) * 100
+
+
+def tier_label(pop: float | None) -> str:
+    """تصنيف احتمالية الربح لثلاث فئات: 🥇 ممتاز-نادر (>=OPTIONS_TIER_GOLD)،
+    🥈 جيد جداً (>=OPTIONS_TIER_SILVER)، 🥉 مقبول (أقل من ذلك، حتى حد
+    القبول الأدنى). مشترك بين الأنواع الثلاثة داخل /options الموحّد (عادي/
+    LEAPS/HEAVY) حتى يحملوا نفس نظام الشارات -- موضوعة هنا بدل
+    options_module.py حتى يقدر heavy_module.py يستوردها بلا تبعية دائرية.
+    None (عقد بلا احتمالية محسوبة صالحة) يرجع نص فارغ بدل رمي خطأ."""
+    if pop is None:
+        return ""
+    if pop >= config.OPTIONS_TIER_GOLD:
+        return "🥇 ممتاز - نادر"
+    if pop >= config.OPTIONS_TIER_SILVER:
+        return "🥈 جيد جداً"
+    return "🥉 مقبول"
 
 
 def expected_value(pop_pct: float, avg_profit: float, max_loss_amount: float) -> float:

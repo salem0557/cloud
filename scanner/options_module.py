@@ -59,12 +59,6 @@ def _duration_tag(days: int) -> str:
     return "🗓️ طويل (LEAPS) - أغلى لكن أهدأ"
 
 
-def _tier_label(pop: float) -> str:
-    if pop >= config.OPTIONS_TIER_GOLD:
-        return "🥇 ممتاز - نادر"
-    if pop >= config.OPTIONS_TIER_SILVER:
-        return "🥈 جيد جداً"
-    return "🥉 مقبول"
 
 
 def _passes_filters(c: dict) -> bool:
@@ -367,9 +361,13 @@ def format_any(row: dict) -> str:
 
 def format_leaps_result(row: dict) -> str:
     """جدول نصي (monospace) لعقد LEAPS، مع التقلب الضمني بارزاً (معيار
-    الترتيب) واحتمالية الربح كسياق داعم."""
+    الترتيب) واحتمالية الربح كسياق داعم. تصنيف 🥇/🥈/🥉 بالعنوان موحّد مع
+    النوعين الآخرين (انظر probability_module.tier_label) رغم أن LEAPS لا
+    يستبعد عقداً بسبب احتمالية ربحه المنخفضة (خلافاً للنوع العادي وHEAVY)
+    -- التصنيف هنا معلوماتي فقط."""
     approx = "≈" if row.get("estimated") else ""
-    header = f"🗓️ LEAPS *{row['symbol']}*"
+    tier = pm.tier_label(row["probability_of_profit"])
+    header = f"🗓️ LEAPS *{row['symbol']}*" + (f" — {tier}" if tier else "")
     rows = [
         ("السهم", f"{row['symbol']} ({fmt_price(row['spot'])})"),
         ("تنفيذ (Strike)", f"{row['strike']:.2f}$"),
@@ -391,7 +389,7 @@ def format_result(row: dict) -> str:
     """جدول نصي (monospace) لكل عقد، مع نوع العقد ودرجة الاحتمالية بارزة
     قبله، والمدة والقيمة المتوقعة (EV) ضمن الجدول."""
     approx = "≈" if row.get("estimated") else ""
-    header = f"{TYPE_TAG} *{row['symbol']}* — {_tier_label(row['probability_of_profit'])}"
+    header = f"{TYPE_TAG} *{row['symbol']}* — {pm.tier_label(row['probability_of_profit'])}"
     rows = [
         ("السهم", f"{row['symbol']} ({fmt_price(row['spot'])})"),
         ("تنفيذ (Strike)", f"{row['strike']:.2f}$"),

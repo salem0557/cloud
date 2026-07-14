@@ -15,6 +15,9 @@
 - Spread < HEAVY_SPREAD_MAX (10%).
 - تقلب ضمني (IV) < OPTIONS_IV_MAX ودلتا >= OPTIONS_DELTA_MIN (الحدود
   الموحّدة المشتركة مع النوعين الآخرين).
+- احتمالية الربح (POP، Black-Scholes) >= OPTIONS_MIN_POP -- نفس حد
+  القبول المستخدم بالنوع العادي، حتى يحمل كل عقد HEAVY تصنيف 🥇/🥈/🥉
+  موحّداً معه (انظر probability_module.tier_label).
 
 لتجنّب مئات الطلبات الشبكية لكل سهم عند سحب سلاسل بعيدة المدى (خصوصاً
 الصناديق كثيفة العقود الأسبوعية مثل SPY/QQQ، حيث كل تاريخ استحقاق عبر
@@ -39,7 +42,7 @@ import random
 import time
 from collections.abc import AsyncIterator
 
-from . import config, data, options
+from . import config, data, options, probability_module as pm
 from .utils import fmt_price
 
 log = logging.getLogger(__name__)
@@ -86,7 +89,7 @@ def _passes_filters(c: dict, spot: float) -> bool:
         return False
 
 
-def _row(symbol: str, spot: float, category: str, c: dict) -> dict:
+def _row(symbol: str, spot: float, category: str, c: dict, pop: float, be: float) -> dict:
     return {
         "symbol": symbol, "spot": spot, "category": category,
         "side": "call",
@@ -97,13 +100,18 @@ def _row(symbol: str, spot: float, category: str, c: dict) -> dict:
         "iv": c["iv"], "delta": c["delta"],
         "cost": round(c["premium"] * 100, 2),
         "liquidity": c["volume"] + c["openInterest"],
+        "breakeven": round(be, 2),
+        "probability_of_profit": round(pop, 1),
     }
 
 
 def _contracts_for_symbol(symbol: str, spot: float, category: str) -> tuple[list[dict], int]:
     """(عقود CALL مؤهلة لسهم واحد، عدد العقود المستبعدة لبيانات غير
-    موثوقة). مرتبة محلياً بأعلى سيولة أولاً. Raises options.OptionsFetchError
-    / options.NoNearTermOptions same as options.gather_candidates."""
+    موثوقة). مرتبة محلياً بأعلى سيولة أولاً. عقد يعدّي الفلاتر الهيكلية
+    (_passes_filters) لكن احتمالية ربحه أقل من OPTIONS_MIN_POP يُستبعد هنا
+    أيضاً -- نفس حد القبول المستخدم بالنوع العادي، لتوحيد تصنيف 🥇/🥈/🥉
+    عبر الأنواع الثلاثة. Raises options.OptionsFetchError /
+    options.NoNearTermOptions same as options.gather_candidates."""
     if options._no_options.get(symbol, 0) > time.time() - options.NO_OPTIONS_TTL:
         return [], 0
     today = dt.date.today()
@@ -116,8 +124,15 @@ def _contracts_for_symbol(symbol: str, spot: float, category: str) -> tuple[list
         options._no_options[symbol] = time.time()
         return [], excluded
 
-    results = [_row(symbol, spot, category, c)
-              for c in candidates.get("call", []) if _passes_filters(c, spot)]
+    results = []
+    for c in candidates.get("call", []):
+        if not _passes_filters(c, spot):
+            continue
+        be = pm.breakeven(c["strike"], c["premium"], is_call=True)
+        pop = pm.probability_of_profit(spot, be, c["days"], c["iv"], is_call=True)
+        if pop is None or pop < config.OPTIONS_MIN_POP:
+            continue
+        results.append(_row(symbol, spot, category, c, pop, be))
     results.sort(key=lambda r: -r["liquidity"])
     return results, excluded
 
@@ -159,23 +174,27 @@ async def scan(cancel_event: asyncio.Event | None = None,
 
 
 def format_result(row: dict) -> str:
-    """جدول نصي (monospace) لكل عقد -- وسم الفئة (MEGA/LARGE/ETF) ونوع
-    العقد والمدة بارزة بالعنوان، والسيولة (حجم/عقود مفتوحة) ضمن الجدول
-    لأنها معيار الترتيب هنا بدل احتمالية الربح."""
+    """جدول نصي (monospace) لكل عقد -- وسم الفئة (MEGA/LARGE/ETF)، نوع
+    العقد، وتصنيف احتمالية الربح (🥇/🥈/🥉، موحّد مع النوعين الآخرين) بارزة
+    بالعنوان، والسيولة (حجم/عقود مفتوحة) ضمن الجدول لأنها معيار الترتيب
+    هنا (وليست الاحتمالية، رغم أنها الآن شرط قبول أيضاً)."""
     approx = "≈" if row.get("estimated") else ""
     header = (f"{CATEGORY_TAG[row['category']]} {TYPE_TAG} "
-             f"*{row['symbol']}* — {_duration_tag(row['days'])}")
+             f"*{row['symbol']}* — {pm.tier_label(row['probability_of_profit'])}")
     rows = [
         ("السهم", f"{row['symbol']} ({fmt_price(row['spot'])})"),
         ("تنفيذ (Strike)", f"{row['strike']:.2f}$"),
         ("الانتهاء", f"{row['expiry']} ({row['days']} يوم)"),
+        ("المدة", _duration_tag(row['days'])),
         ("Bid / Ask", f"{approx}{row['bid']:.2f}$ / {approx}{row['ask']:.2f}$"),
         ("تكلفة العقد", f"{approx}{row['cost']:.0f}$"),
+        ("نقطة التعادل", fmt_price(row['breakeven'])),
         ("دلتا", f"{row['delta']:.2f}" if row.get('delta') is not None else "-"),
         ("تقلب ضمني (IV)", f"{row['iv'] * 100:.0f}%" if row.get('iv') is not None else "-"),
         ("الحجم", f"{row['volume']:,}"),
         ("العقود المفتوحة", f"{row['openInterest']:,}"),
         ("السبريد", f"{row['spread_pct'] * 100:.1f}%" if row['spread_pct'] is not None else "-"),
+        ("🎯 احتمالية الربح", f"{row['probability_of_profit']:.0f}%"),
     ]
     label_w = max(len(label) for label, _ in rows)
     table = "\n".join(f"{label.ljust(label_w)} : {value}" for label, value in rows)
