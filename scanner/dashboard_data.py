@@ -105,7 +105,13 @@ def row_to_contract(row) -> dict:
 
 
 def build_catalog(rows) -> list[dict]:
-    return [row_to_contract(r) for r in rows]
+    """يحوّل صفوف signals.db إلى عقود جاهزة، ويستبعد أي عقد بلا احتمالية
+    ربح محسوبة (`tier_key == "unknown"`) -- بطاقة بلا تصنيف ولا نسبة ربح
+    ولا دلتا/IV لا تفيد المستخدم بشيء، وbackfill_missing_probability لا
+    يقدر يصلحها لو كانت من زمن ما قبل تخزين IV أصلاً (انظر توثيقه). أفضل
+    من عرضها فارغة بشرطات "-"."""
+    contracts = [row_to_contract(r) for r in rows]
+    return [c for c in contracts if c["tier_key"] != "unknown"]
 
 
 def backfill_missing_probability() -> int:

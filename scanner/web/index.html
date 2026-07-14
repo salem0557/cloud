@@ -208,6 +208,14 @@
   .method-note{ font-size:11.5px; color:var(--ink-mute); border-top:1px dashed var(--line); padding-top:14px; line-height:1.8; }
 
   /* ---- news page ---- */
+  .news-summary{
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:var(--radius);
+    padding:14px 16px; margin-bottom:16px; display:flex; flex-direction:column; gap:8px;
+  }
+  .news-summary p{ margin:0; font-size:13.5px; line-height:1.9; }
+  .news-group{ margin-bottom:16px; }
+  .news-group-head{ display:flex; align-items:center; gap:10px; margin-bottom:6px; }
+  .news-group-count{ font-size:11.5px; color:var(--ink-mute); }
   .news-list{ display:flex; flex-direction:column; gap:1px; background:var(--line); border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; }
   .news-item{ background:var(--paper-raised); padding:14px 16px; display:flex; flex-direction:column; gap:6px; }
   .news-item:hover{ background:var(--accent-soft); }
@@ -494,13 +502,45 @@
     if (!items.length) {
       return '<div class="empty">لا توجد أخبار متاحة حالياً.</div>';
     }
-    return '<div class="news-list">' + items.map(function(n){
-      var when = n.published_ts ? new Date(n.published_ts*1000).toLocaleString("ar") : "";
-      return '<a class="news-item" href="'+n.link+'" target="_blank" rel="noopener noreferrer">' +
-        '<div class="news-top"><span class="news-symbol mono ltr">'+n.symbol+'</span><span>'+n.publisher+'</span><span>'+when+'</span></div>' +
-        '<div class="news-title">'+n.title+'</div>' +
-      '</a>';
-    }).join("") + '</div>';
+
+    // تجميع/ترتيب قواعدي بحت (لا تلخيص أو صياغة نص جديد -- انظر
+    // rule-tag أدناه): تجميع حسب الرمز، الرموز الأكثر تغطية أولاً، وداخل
+    // كل رمز الأحدث أولاً.
+    var bySymbol = {};
+    items.forEach(function(n){
+      (bySymbol[n.symbol] = bySymbol[n.symbol] || []).push(n);
+    });
+    var symbols = Object.keys(bySymbol).sort(function(a, b){
+      return bySymbol[b].length - bySymbol[a].length;
+    });
+
+    var summary = symbols.map(function(s){
+      return s + ' <span class="mono ltr">(' + bySymbol[s].length + ')</span>';
+    }).join('، ');
+
+    var groups = symbols.map(function(sym){
+      var group = bySymbol[sym];
+      var rows = group.map(function(n){
+        var when = n.published_ts ? new Date(n.published_ts*1000).toLocaleString("ar") : "";
+        return '<a class="news-item" href="'+n.link+'" target="_blank" rel="noopener noreferrer">' +
+          '<div class="news-top"><span>'+n.publisher+'</span><span>'+when+'</span></div>' +
+          '<div class="news-title">'+n.title+'</div>' +
+        '</a>';
+      }).join("");
+      return '<div class="news-group">' +
+        '<div class="news-group-head"><span class="chip cat mono ltr">'+sym+'</span>' +
+        '<span class="news-group-count">'+group.length+' خبر</span></div>' +
+        '<div class="news-list">' + rows + '</div>' +
+      '</div>';
+    }).join("");
+
+    return (
+      '<div class="news-summary">' +
+        '<span class="rule-tag">⚙️ تجميع وترتيب آلي حسب الرمز والأحدث زمنياً — بلا تلخيص أو صياغة نص جديد</span>' +
+        '<p>' + items.length + ' خبر اليوم يغطي ' + symbols.length + ' رمز: ' + summary + '</p>' +
+      '</div>' +
+      groups
+    );
   }
 
   function tipsHTML(tips){
