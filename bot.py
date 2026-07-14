@@ -1,10 +1,12 @@
 """Telegram bot: three fully independent, on-demand scanning modules --
-stocks (reversal-up technical setups, point-scored), options (CALL-only
-screener, Black-Scholes probability + EV; /leaps and /heavy are separate
-CALL-only sub-screeners with their own filters), and crypto (top ~100 coins
-via Binance public data, point-scored). No automatic background scanning:
-every scan runs only when a member sends a command, and stops on its own
-after SESSION_TIMEOUT_SECONDS (15 minutes) or instantly via /stop.
+stocks (reversal-up technical setups, point-scored), options (CALL-only,
+Black-Scholes probability + EV -- /options now merges three tags in one
+unified live stream: general, LEAPS (365+ day), and HEAVY (curated mega/
+large/ETF list), each result badged by kind -- see options_module.scan_all),
+and crypto (top ~100 coins via Binance public data, point-scored). No
+automatic background scanning: every scan runs only when a member sends a
+command, and stops on its own after SESSION_TIMEOUT_SECONDS (15 minutes)
+or instantly via /stop.
 
 The bot is locked to whichever chat ids were already approved before this
 restructure (scanner/state.py's `approved`) -- there is no /approve command
@@ -30,7 +32,7 @@ from telegram import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, Up
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-from scanner import (config, crypto_module, golden_module, heavy_module, market_calendar,
+from scanner import (config, crypto_module, golden_module, market_calendar,
                      options_module, positions_module, review_module, signals_db, stocks_module)
 from scanner.state import State
 from scanner.utils import fmt_price, split_message
@@ -149,7 +151,9 @@ async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, a
     ranking would require scanning everything before sending anything).
 
     `section` tags every result logged to signals.db (stocks/crypto/
-    options/leaps/heavy/golden) -- see _log_row."""
+    options/leaps/heavy/golden) -- overridden per-row by row["kind"] when
+    present (the merged /options scan tags each row with which of the
+    three types -- options/leaps/heavy -- it actually is). See _log_row."""
     cancel_event = asyncio.Event()
     cancel_events[chat_id] = cancel_event
     timed_out = False
@@ -168,7 +172,7 @@ async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, a
         try:
             async for row in scan_fn(cancel_event, stats=stats):
                 await _send_row(app, chat_id, row, format_fn)
-                await _log_row(section, row)
+                await _log_row(row.get("kind", section), row)
                 sent_count += 1
                 if section == "stocks" and golden_module.stock_qualifies_for_golden(row):
                     golden_candidates.append(row)
@@ -222,8 +226,9 @@ async def _run_golden_pass(chat_id: int, golden_candidates: list[dict], app):
     scan-session timeout of its own here either) on just the stocks that
     already qualified: does this exact ticker also have a CALL contract
     passing every /options filter right now? A stock with no qualifying
-    contract is skipped silently -- same as /leaps and /heavy do for an
-    unqualified symbol, not an error, most stocks simply won't have one."""
+    contract is skipped silently -- same as the LEAPS/HEAVY tags within
+    /options do for an unqualified symbol, not an error, most stocks
+    simply won't have one."""
     for stock_row in golden_candidates:
         golden_row = await golden_module.check_confluence(stock_row)
         if golden_row is None:
@@ -300,6 +305,11 @@ async def cmd_stocks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/options بلا وسيط: فحص موحّد يجمع ثلاثة أنواع من عقود CALL بتيار حي
+    واحد -- عادي (كامل OPTIONS_WATCHLIST)، LEAPS (365+ يوم)، وHEAVY (قائمة
+    HEAVY_TICKERS المختارة) -- كل نتيجة تصل بوسم نوعها فور اكتشافها (انظر
+    options_module.scan_all/format_any). /options TICKER يبقى فحص سهم واحد
+    بمعزل عن ذلك (النوع العادي فقط)."""
     if not await require_membership(update):
         return
     chat_id = update.effective_chat.id
@@ -313,44 +323,13 @@ async def cmd_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
                       kind="ticker")
     else:
         await update.message.reply_text(
-            f"📊 بدأ فحص وحدة الأوبشن (Call فقط، {len(config.OPTIONS_WATCHLIST)} سهم)... "
+            f"📊 بدأ فحص الأوبشن الموحّد (Call فقط) — عادي + LEAPS "
+            f"({config.LEAPS_DTE_MIN}+ يوم) + HEAVY (Mega/Large/ETF)، "
+            f"{len(config.OPTIONS_WATCHLIST)} سهم + {len(config.HEAVY_TICKERS)} رمز مختار... "
             f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
         _start_session(chat_id, _run_watchlist_session(
-            chat_id, "📊 نتائج فحص الأوبشن (Call فقط)", options_module.scan,
-            options_module.format_result, context.application, section="options"), kind="watchlist")
-
-
-async def cmd_leaps(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await require_membership(update):
-        return
-    chat_id = update.effective_chat.id
-    if chat_id in sessions:
-        await update.message.reply_text("⏳ توجد جلسة قيد التنفيذ بالفعل — أرسل /stop لإيقافها أولاً.")
-        return
-    await update.message.reply_text(
-        f"🗓️ بدأ فحص عقود LEAPS (CALL، {config.LEAPS_DTE_MIN}+ يوم، أسهم "
-        f"{config.LEAPS_MIN_PRICE:.0f}$-{config.LEAPS_MAX_PRICE:.0f}$، "
-        f"{len(config.OPTIONS_WATCHLIST)} سهم)... "
-        f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
-    _start_session(chat_id, _run_watchlist_session(
-        chat_id, "🗓️ نتائج فحص LEAPS", options_module.scan_leaps,
-        options_module.format_leaps_result, context.application, section="leaps"), kind="watchlist")
-
-
-async def cmd_heavy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await require_membership(update):
-        return
-    chat_id = update.effective_chat.id
-    if chat_id in sessions:
-        await update.message.reply_text("⏳ توجد جلسة قيد التنفيذ بالفعل — أرسل /stop لإيقافها أولاً.")
-        return
-    await update.message.reply_text(
-        f"🏛️ بدأ فحص وحدة Heavy (Call فقط، Mega/Large/ETF، "
-        f"{len(config.HEAVY_TICKERS)} رمز)... "
-        f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
-    _start_session(chat_id, _run_watchlist_session(
-        chat_id, "🏛️ نتائج فحص Heavy", heavy_module.scan,
-        heavy_module.format_result, context.application, section="heavy"), kind="watchlist")
+            chat_id, "📊 نتائج فحص الأوبشن الموحّد (Call فقط)", options_module.scan_all,
+            options_module.format_any, context.application, section="options"), kind="watchlist")
 
 
 async def cmd_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -520,8 +499,8 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cancel_event = cancel_events.get(chat_id)
     if cancel_event is not None:
         cancel_event.set()
-    # Watchlist sessions (stocks/options/leaps/heavy/crypto) check
-    # cancel_event at their own per-symbol checkpoint and
+    # Watchlist sessions (stocks/options [incl. its leaps/heavy tags]/
+    # crypto) check cancel_event at their own per-symbol checkpoint and
     # return gracefully with whatever they already found -- hard-cancelling
     # the task would discard that. A single-symbol ticker lookup has no such
     # checkpoint, so it still needs the hard cancel to actually stop.
@@ -558,10 +537,9 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"آخر نتائج: {results_line}\n\n"
         "الأوامر المتاحة:\n"
         "/stocks — فحص وحدة الأسهم\n"
-        "/options — فحص وحدة الأوبشن (Call فقط)\n"
-        "/options <رمز> — فحص عقود سهم محدد (Call فقط)\n"
-        "/leaps — عقود CALL طويلة الأجل (365+ يوم)\n"
-        "/heavy — عقود Call على أضخم الأسهم والصناديق (Mega/Large/ETF)\n"
+        "/options — فحص أوبشن موحّد (Call فقط): عادي + LEAPS (365+ يوم) + "
+        "HEAVY (Mega/Large/ETF)، كل نتيجة موسومة بنوعها\n"
+        "/options <رمز> — فحص عقود سهم محدد (Call فقط، النوع العادي)\n"
         "/crypto — فحص وحدة الكريبتو\n"
         "/review — مراجعة الإشارات المستحقة (7/30 يوم) وتحديث سجل الأداء\n"
         "/stats — تقرير أداء من السجل التاريخي\n"
@@ -599,9 +577,7 @@ async def _position_monitor_job(context: ContextTypes.DEFAULT_TYPE):
 
 BOT_COMMANDS = [
     BotCommand("stocks", "فحص وحدة الأسهم"),
-    BotCommand("options", "فحص وحدة الأوبشن (Call فقط)، أو /options <رمز> لسهم محدد"),
-    BotCommand("leaps", "عقود CALL طويلة الأجل (365+ يوم)"),
-    BotCommand("heavy", "عقود Call على أضخم الأسهم والصناديق (Mega/Large/ETF)"),
+    BotCommand("options", "فحص أوبشن موحّد (Call فقط): عادي+LEAPS+HEAVY، أو /options <رمز> لسهم محدد"),
     BotCommand("crypto", "فحص وحدة الكريبتو"),
     BotCommand("review", "مراجعة الإشارات المستحقة (7/30 يوم)"),
     BotCommand("stats", "تقرير أداء من السجل التاريخي"),
@@ -709,8 +685,6 @@ def main():
     app.add_error_handler(on_error)
     app.add_handler(CommandHandler("stocks", cmd_stocks))
     app.add_handler(CommandHandler("options", cmd_options))
-    app.add_handler(CommandHandler("leaps", cmd_leaps))
-    app.add_handler(CommandHandler("heavy", cmd_heavy))
     app.add_handler(CommandHandler("crypto", cmd_crypto))
     app.add_handler(CommandHandler("review", cmd_review))
     app.add_handler(CommandHandler("stats", cmd_stats))

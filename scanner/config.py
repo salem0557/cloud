@@ -229,13 +229,19 @@ OPTIONS_MIN_ACTIVITY = _int("OPTIONS_MIN_ACTIVITY", 20)   # min OI+volume per co
 # display cap (/options TICKER).
 OPTIONS_TOP_N = _int("OPTIONS_TOP_N", 5)
 
-OPTIONS_DELTA_MIN = _float("OPTIONS_DELTA_MIN", 0.40)     # applied to abs(delta)
+# OPTIONS_DELTA_MIN/OPTIONS_IV_MAX are now the single, unified delta/IV
+# thresholds shared by /options, /leaps, and /heavy (merged into one
+# /options command -- see options_module.scan_all). Was 0.40/0.80
+# (general-only) before the merge; /leaps used to have its own stricter
+# LEAPS_DELTA_MIN=0.60/LEAPS_IV_MAX=0.35, and /heavy had no IV/delta
+# filter at all -- all three now apply exactly these two bounds.
+OPTIONS_DELTA_MIN = _float("OPTIONS_DELTA_MIN", 0.35)     # applied to abs(delta)
 OPTIONS_DELTA_MAX = _float("OPTIONS_DELTA_MAX", 1.0)       # no real upper bound (1.0 = max possible)
 OPTIONS_DTE_MIN = _int("OPTIONS_DTE_MIN", 14)
 OPTIONS_DTE_MAX = _int("OPTIONS_DTE_MAX", 360)
 OPTIONS_VOLUME_MIN = _int("OPTIONS_VOLUME_MIN", 30)
 OPTIONS_OI_MIN = _int("OPTIONS_OI_MIN", 200)
-OPTIONS_IV_MAX = _float("OPTIONS_IV_MAX", 0.80)   # loosened from 0.60 -- was excluding momentum/news names
+OPTIONS_IV_MAX = _float("OPTIONS_IV_MAX", 0.50)
 OPTIONS_SPREAD_MAX = _float("OPTIONS_SPREAD_MAX", 0.15)   # loosened from 0.10
 # Per-share ask price bound (contract cost = ask * 100), e.g. 0.05$-2.00$
 # means a 5$-200$ contract.
@@ -256,13 +262,13 @@ OPTIONS_TIER_BRONZE = OPTIONS_MIN_POP
 OPTIONS_DURATION_SHORT_MAX = _int("OPTIONS_DURATION_SHORT_MAX", 45)
 OPTIONS_DURATION_MEDIUM_MAX = _int("OPTIONS_DURATION_MEDIUM_MAX", 120)
 
-# --- /leaps: a separate, independent CALL-only screener for long-dated
-# --- deep/near-ITM contracts -- its own filter set, not reusing the
-# --- general OPTIONS_* thresholds above. Ranked by lowest IV (cheapest
-# --- time value relative to the stock's own volatility), not POP. ---
+# --- /leaps: the long-dated deep/near-ITM tag within the merged /options
+# --- command -- shares OPTIONS_DELTA_MIN/OPTIONS_IV_MAX above with the
+# --- general and /heavy tags now; only its DTE floor, stock price range,
+# --- and total contract cost cap below are still its own. Ranked locally
+# --- by lowest IV (cheapest time value relative to the stock's own
+# --- volatility), not POP. ---
 LEAPS_DTE_MIN = _int("LEAPS_DTE_MIN", 365)
-LEAPS_DELTA_MIN = _float("LEAPS_DELTA_MIN", 0.60)   # no upper bound
-LEAPS_IV_MAX = _float("LEAPS_IV_MAX", 0.35)
 LEAPS_MIN_PRICE = _float("LEAPS_MIN_PRICE", 8.0)
 LEAPS_MAX_PRICE = _float("LEAPS_MAX_PRICE", 100.0)
 LEAPS_MAX_COST = _float("LEAPS_MAX_COST", 170.0)   # total contract cost = premium * 100
@@ -357,12 +363,12 @@ _OPTIONS_EXTRA2 = [
 OPTIONS_WATCHLIST = sorted(set(
     _OPTIONS_CORE + _OPTIONS_LARGE_MID_CAP + _OPTIONS_EXTRA + _OPTIONS_EXTRA2))
 
-# --- /heavy: a separate, independent CALL+PUT screener over a small,
-# --- curated list of mega caps / established large caps / broad ETFs --
-# --- its own filter set (wide DTE incl. far LEAPS, tight ±10% strike band,
-# --- cheap premium, liquidity floors), not reusing the general OPTIONS_*
-# --- thresholds above. Ranked by liquidity (volume + open interest), not
-# --- POP -- this is a liquidity/cost screener, not a probability one. ---
+# --- /heavy: the mega/large-cap/ETF tag within the merged /options command
+# --- -- a small, curated ticker list (HEAVY_TICKERS) instead of the
+# --- broader OPTIONS_WATCHLIST, with its own DTE floor, tight ±10% strike
+# --- band, premium cap, and liquidity floors; shares OPTIONS_DELTA_MIN/
+# --- OPTIONS_IV_MAX with the general and /leaps tags now too. Ranked
+# --- locally by liquidity (volume + open interest), not POP. ---
 HEAVY_DTE_MIN = _int("HEAVY_DTE_MIN", 45)             # no upper cap -- every expiry in the chain
 HEAVY_STRIKE_PCT = _float("HEAVY_STRIKE_PCT", 0.10)   # strike within ±10% of spot, no widening
 HEAVY_PREMIUM_MAX = _float("HEAVY_PREMIUM_MAX", 3.00)  # ask <= 3.00$/share (300$/contract)

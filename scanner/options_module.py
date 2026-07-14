@@ -1,28 +1,37 @@
 """وحدة عقود الأوبشن -- CALL فقط (بلا PUT إطلاقاً، مستقلة تماماً عن وحدتَي
 الأسهم والكريبتو).
 
-تفحص OPTIONS_WATCHLIST (قائمة منفصلة عن قائمة وحدة الأسهم، ~500 سهم من
-الأنشط بسوق العقود) بحثاً عن عقود CALL تحقق كل الشروط دفعة واحدة: دلتا بين
-OPTIONS_DELTA_MIN/MAX، أيام حتى الانتهاء بين OPTIONS_DTE_MIN/MAX، سيولة
-(حجم/عقود مفتوحة) كافية، تقلب ضمني أقل من OPTIONS_IV_MAX، سبريد عرض/طلب
-أقل من OPTIONS_SPREAD_MAX، وسعر الطلب ضمن OPTIONS_ASK_MIN..OPTIONS_ASK_MAX
-للسهم الواحد.
+أمر /options الموحّد يجمع ثلاثة أنواع من العقود في تيار نتائج واحد حي --
+عادي (scan، عبر OPTIONS_WATCHLIST كاملة)، LEAPS (scan_leaps، عقود طويلة
+الأجل DTE>=365)، وHEAVY (heavy_module.scan، قائمة HEAVY_TICKERS المختارة)
+-- انظر scan_all() أدناه لآلية الدمج، وformat_any() لعرض كل نتيجة بوسم
+نوعها. الثلاثة يشتركون بنفس حدي الدلتا والتقلب الضمني (OPTIONS_DELTA_MIN/
+OPTIONS_IV_MAX)، لكن لكل نوع قائمته وشروطه الهيكلية الخاصة (DTE، نطاق
+السعر، سقف البريميوم، السيولة).
 
-لكل عقد مؤهل: احتمالية الربح (Probability of Profit، Black-Scholes عبر
-scipy -- N(d2)، انظر probability_module.py)، والقيمة المتوقعة (EV) بناءً
-على الربح المتوقع عند أقرب مقاومة للسهم مقابل أقصى خسارة ممكنة (البريميوم
-المدفوع).
+scan() تفحص OPTIONS_WATCHLIST (قائمة منفصلة عن قائمة وحدة الأسهم، ~500
+سهم من الأنشط بسوق العقود) بحثاً عن عقود CALL تحقق كل الشروط دفعة واحدة:
+دلتا بين OPTIONS_DELTA_MIN/MAX، أيام حتى الانتهاء بين OPTIONS_DTE_MIN/MAX،
+سيولة (حجم/عقود مفتوحة) كافية، تقلب ضمني أقل من OPTIONS_IV_MAX، سبريد
+عرض/طلب أقل من OPTIONS_SPREAD_MAX، وسعر الطلب ضمن
+OPTIONS_ASK_MIN..OPTIONS_ASK_MAX للسهم الواحد.
 
-يدعم فحص القائمة كاملة، وفحص سهم واحد فقط (/options TICKER) بمعزل عن بقية
-القائمة. أي خطأ في جلب أو تقييم عقود سهم واحد لا يوقف بقية الفحص.
+لكل عقد مؤهل (النوع العادي وLEAPS): احتمالية الربح (Probability of
+Profit، Black-Scholes عبر scipy -- N(d2)، انظر probability_module.py)،
+والقيمة المتوقعة (EV، النوع العادي فقط) بناءً على الربح المتوقع عند أقرب
+مقاومة للسهم مقابل أقصى خسارة ممكنة (البريميوم المدفوع).
+
+يدعم فحص القائمة كاملة (الأنواع الثلاثة مدمجة)، وفحص سهم واحد فقط
+(/options TICKER، النوع العادي فقط) بمعزل عن بقية القائمة. أي خطأ في جلب
+أو تقييم عقود سهم واحد لا يوقف بقية الفحص.
 
 scan() وscan_leaps() هي async generators: كل عقد يتحقق شروطه يُرسَل فوراً
-(live) بدل الانتظار حتى نهاية الفحص الكامل. **كلاهما بلا سقف على عدد
-النتائج** -- يمسحان القائمة كاملة (596 سهم) ويُرسلان كل عقد مؤهل، مهما
-كان عدده. قائمة المراقبة تُخلَط عشوائياً في بداية كل فحص فقط لتفادي أي
-ترتيب ثابت بالإرسال. عقود LEAPS للسهم الواحد تُرتَّب محلياً (أقل تقلب
-ضمني أولاً) قبل إرسالها، لكن الترتيب الشامل عبر كل الأسهم غير متاح لنفس
-سبب البث المباشر. `stats` قاموس اختياري يُمرَّر بالمرجع لتجميع عدد العقود
+(live) بدل الانتظار حتى نهاية الفحص الكامل، بلا سقف على عدد النتائج --
+يمسحان القائمة كاملة ويُرسلان كل عقد مؤهل، مهما كان عدده (heavy_module.scan
+كذلك). قائمة المراقبة تُخلَط عشوائياً في بداية كل فحص فقط لتفادي أي ترتيب
+ثابت بالإرسال. عقود LEAPS للسهم الواحد تُرتَّب محلياً (أقل تقلب ضمني
+أولاً) قبل إرسالها، لكن الترتيب الشامل عبر كل الأسهم غير متاح لنفس سبب
+البث المباشر. `stats` قاموس اختياري يُمرَّر بالمرجع لتجميع عدد العقود
 المستبعدة لبيانات غير موثوقة (`stats["excluded_bad_data"]`) عبر كامل
 الفحص، لأن الـ generator لا يستطيع إرجاع قيمة إضافية مع كل yield.
 """
@@ -33,7 +42,7 @@ import random
 import time
 from collections.abc import AsyncIterator
 
-from . import config, data, options, probability_module as pm
+from . import config, data, heavy_module, options, probability_module as pm
 from .indicators import find_nearest_resistance
 from .utils import fmt_price
 
@@ -201,16 +210,18 @@ async def scan(cancel_event: asyncio.Event | None = None,
 
 
 def _passes_leaps_filters(c: dict) -> bool:
-    """فلاتر /leaps الخاصة -- مستقلة تماماً عن _passes_filters العامة أعلاه،
-    لا تشترط سيولة/سبريد معينة، فقط DTE طويل ودلتا وتقلب ضمني وسقف تكلفة
-    العقد الكامل (LEAPS_MAX_COST = بريميوم × 100)."""
+    """فلاتر /leaps الخاصة -- مستقلة عن _passes_filters العامة أعلاه (لا
+    تشترط سيولة/سبريد معينة)، تشترط فقط DTE طويل وسقف تكلفة العقد الكامل
+    (LEAPS_MAX_COST = بريميوم × 100) كشروط خاصة بها، بالإضافة لدلتا وتقلب
+    ضمني موحّدين (OPTIONS_DELTA_MIN/OPTIONS_IV_MAX) مشتركين مع /options
+    العادي و/heavy."""
     try:
         delta = c["delta"]
         iv = c["iv"]
         if delta is None or iv is None:
             return False
-        return (abs(delta) >= config.LEAPS_DELTA_MIN
-                and iv < config.LEAPS_IV_MAX
+        return (abs(delta) >= config.OPTIONS_DELTA_MIN
+                and iv < config.OPTIONS_IV_MAX
                 and c["days"] >= config.LEAPS_DTE_MIN
                 and c["premium"] * 100 <= config.LEAPS_MAX_COST)
     except (KeyError, TypeError):
@@ -252,8 +263,9 @@ async def scan_leaps(cancel_event: asyncio.Event | None = None,
                      stats: dict | None = None) -> AsyncIterator[dict]:
     """يفحص كامل OPTIONS_WATCHLIST (بترتيب عشوائي، بلا خروج مبكر) بحثاً عن
     عقود CALL طويلة الأجل (LEAPS، DTE >= LEAPS_DTE_MIN) على أسهم سعرها بين
-    LEAPS_MIN_PRICE وLEAPS_MAX_PRICE، بدلتا >= LEAPS_DELTA_MIN وتقلب ضمني <
-    LEAPS_IV_MAX. يُرسل (yield) كل عقد مؤهل فور تحققه، حتى نهاية القائمة أو
+    LEAPS_MIN_PRICE وLEAPS_MAX_PRICE، بدلتا >= OPTIONS_DELTA_MIN وتقلب ضمني <
+    OPTIONS_IV_MAX (الحدود الموحّدة المشتركة مع /options العادي و/heavy).
+    يُرسل (yield) كل عقد مؤهل فور تحققه، حتى نهاية القائمة أو
     /stop أو انتهاء الجلسة -- عقود السهم الواحد تُرتَّب محلياً بأقل تقلب
     ضمني أولاً قبل إرسالها، لكن الترتيب الشامل عبر كل الأسهم غير متاح مع
     البث المباشر. `stats["excluded_bad_data"]` يتجمّع بالمرجع."""
@@ -286,6 +298,71 @@ async def scan_leaps(cancel_event: asyncio.Event | None = None,
             stats["excluded_bad_data"] = stats.get("excluded_bad_data", 0) + excluded
             for c in sorted(contracts, key=lambda r: r["iv"]):
                 yield c
+
+
+TYPE_BADGE = {
+    "options": "🔵 عادي",
+    "leaps": "🟣 LEAPS",
+    "heavy": "🟠 HEAVY",
+}
+
+
+async def scan_all(cancel_event: asyncio.Event | None = None,
+                   stats: dict | None = None) -> AsyncIterator[dict]:
+    """الأمر الموحّد /options: يشغّل الأنواع الثلاثة (عادي/leaps/heavy) معاً
+    بالتوازي (concurrent، ليس تتابعياً) عبر طابور مشترك، فتصل كل نتيجة فور
+    اكتشافها الفعلي بغض النظر عن نوعها -- النتائج تتداخل حسب لحظة الاكتشاف
+    وليس مجمّعة بحسب النوع. كل صف يحمل `row["kind"]` = "options"/"leaps"/
+    "heavy" (انظر format_any لعرضه بوسم مناسب، وbot.py's _run_watchlist_session
+    لتسجيله تحت القسم الصحيح في signals.db). `cancel_event` و`stats`
+    (اختياري، `stats["excluded_bad_data"]`) يُمرَّران بالمرجع للثلاثة معاً،
+    فيتوقفون سوياً عند /stop أو انتهاء المهلة، ويتجمّع عدد العقود المستبعدة
+    من الثلاثة في نفس المفتاح."""
+    if stats is None:
+        stats = {}
+    queue: asyncio.Queue = asyncio.Queue()
+    _sentinel = object()
+
+    async def _pump(kind: str, gen: AsyncIterator[dict]):
+        try:
+            async for row in gen:
+                await queue.put(dict(row, kind=kind))
+        except Exception:
+            log.exception("Merged /options stream failed for kind=%s", kind)
+        finally:
+            await queue.put(_sentinel)
+
+    sources = [
+        ("options", scan(cancel_event, stats=stats)),
+        ("leaps", scan_leaps(cancel_event, stats=stats)),
+        ("heavy", heavy_module.scan(cancel_event, stats=stats)),
+    ]
+    tasks = [asyncio.create_task(_pump(kind, gen)) for kind, gen in sources]
+    remaining = len(tasks)
+    try:
+        while remaining > 0:
+            item = await queue.get()
+            if item is _sentinel:
+                remaining -= 1
+                continue
+            yield item
+    finally:
+        for t in tasks:
+            t.cancel()
+
+
+def format_any(row: dict) -> str:
+    """يعرض أي نتيجة من /options الموحّد بوسم النوع (عادي/LEAPS/HEAVY) في
+    أول سطر، ثم يفوّض الجدول نفسه لدالة العرض الخاصة بنوعه."""
+    kind = row.get("kind", "options")
+    badge = TYPE_BADGE.get(kind, TYPE_BADGE["options"])
+    if kind == "leaps":
+        body = format_leaps_result(row)
+    elif kind == "heavy":
+        body = heavy_module.format_result(row)
+    else:
+        body = format_result(row)
+    return f"{badge}\n{body}"
 
 
 def format_leaps_result(row: dict) -> str:

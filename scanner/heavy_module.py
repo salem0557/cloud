@@ -1,7 +1,10 @@
 """وحدة /heavy: فحص عقود CALL فقط (بلا PUT) على قائمة مختارة (HEAVY_TICKERS)
 من أضخم الأسهم والصناديق الأكثر سيولة -- Mega caps، Large caps راسخة،
-وETFs كبرى -- مستقلة تماماً عن /options العامة (قائمة مختلفة، وشروطها
-الخاصة: مدى DTE أوسع بلا سقف أعلى، ونطاق strike أصرم).
+وETFs كبرى. تشكّل هذه الوحدة أحد ثلاثة "أنواع" يجمعها أمر /options الموحّد
+واحداً (انظر options_module.scan_all) -- قائمتها (HEAVY_TICKERS) وشروطها
+الخاصة (مدى DTE أوسع بلا سقف أعلى، نطاق strike أصرم، سقف بريميوم) تبقى
+مستقلة، لكنها تشارك حدود دلتا/تقلب ضمني (OPTIONS_DELTA_MIN/OPTIONS_IV_MAX)
+مع النوعين الآخرين (العادي وLEAPS).
 
 شروط كل عقد (مجتمعة، بلا توسيع):
 - DTE >= HEAVY_DTE_MIN (45 يوم)، بلا سقف أعلى -- يشمل أي LEAPS متوفر
@@ -10,6 +13,8 @@
 - Ask <= HEAVY_PREMIUM_MAX (3.00$).
 - Volume >= HEAVY_VOLUME_MIN و Open Interest >= HEAVY_OI_MIN.
 - Spread < HEAVY_SPREAD_MAX (10%).
+- تقلب ضمني (IV) < OPTIONS_IV_MAX ودلتا >= OPTIONS_DELTA_MIN (الحدود
+  الموحّدة المشتركة مع النوعين الآخرين).
 
 لتجنّب مئات الطلبات الشبكية لكل سهم عند سحب سلاسل بعيدة المدى (خصوصاً
 الصناديق كثيفة العقود الأسبوعية مثل SPY/QQQ، حيث كل تاريخ استحقاق عبر
@@ -63,7 +68,10 @@ def _passes_filters(c: dict, spot: float) -> bool:
         strike = c["strike"]
         ask = c["ask"]
         spread_pct = c["spread_pct"]
-        if strike is None or ask is None or spread_pct is None or spot <= 0:
+        iv = c["iv"]
+        delta = c["delta"]
+        if (strike is None or ask is None or spread_pct is None
+                or iv is None or delta is None or spot <= 0):
             return False
         if abs(strike - spot) / spot > config.HEAVY_STRIKE_PCT:
             return False
@@ -71,7 +79,9 @@ def _passes_filters(c: dict, spot: float) -> bool:
                 and ask <= config.HEAVY_PREMIUM_MAX
                 and c["volume"] >= config.HEAVY_VOLUME_MIN
                 and c["openInterest"] >= config.HEAVY_OI_MIN
-                and spread_pct < config.HEAVY_SPREAD_MAX)
+                and spread_pct < config.HEAVY_SPREAD_MAX
+                and iv < config.OPTIONS_IV_MAX
+                and abs(delta) >= config.OPTIONS_DELTA_MIN)
     except (KeyError, TypeError):
         return False
 
@@ -84,6 +94,7 @@ def _row(symbol: str, spot: float, category: str, c: dict) -> dict:
         "premium": c["premium"], "estimated": c["estimated"],
         "bid": c["bid"], "ask": c["ask"], "spread_pct": c["spread_pct"],
         "volume": c["volume"], "openInterest": c["openInterest"],
+        "iv": c["iv"], "delta": c["delta"],
         "cost": round(c["premium"] * 100, 2),
         "liquidity": c["volume"] + c["openInterest"],
     }
@@ -160,6 +171,8 @@ def format_result(row: dict) -> str:
         ("الانتهاء", f"{row['expiry']} ({row['days']} يوم)"),
         ("Bid / Ask", f"{approx}{row['bid']:.2f}$ / {approx}{row['ask']:.2f}$"),
         ("تكلفة العقد", f"{approx}{row['cost']:.0f}$"),
+        ("دلتا", f"{row['delta']:.2f}" if row.get('delta') is not None else "-"),
+        ("تقلب ضمني (IV)", f"{row['iv'] * 100:.0f}%" if row.get('iv') is not None else "-"),
         ("الحجم", f"{row['volume']:,}"),
         ("العقود المفتوحة", f"{row['openInterest']:,}"),
         ("السبريد", f"{row['spread_pct'] * 100:.1f}%" if row['spread_pct'] is not None else "-"),
