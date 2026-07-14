@@ -33,7 +33,8 @@ from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from scanner import (config, crypto_module, golden_module, market_calendar,
-                     options_module, positions_module, review_module, signals_db, stocks_module)
+                     options_module, positions_module, review_module, signals_db, stocks_module,
+                     webapp)
 from scanner.state import State
 from scanner.utils import fmt_price, split_message
 
@@ -627,6 +628,14 @@ async def post_init(app: Application):
                  len(BOT_COMMANDS))
     except Exception:
         log.exception("Failed to set command menu")
+
+    # The web dashboard runs on its OWN port (DASHBOARD_PORT, distinct from
+    # WEBHOOK_PORT) as a background task inside this same running event
+    # loop -- post_init is the right hook since PTB guarantees a running
+    # loop by the time it fires, for both run_polling() and run_webhook().
+    # A failed/duplicate start here must never take down the Telegram bot
+    # itself -- see webapp.start_dashboard's own idempotency/try-except.
+    asyncio.create_task(webapp.start_dashboard())
 
 
 def _try_run_webhook(app: Application, run_webhook=None, delete_webhook=None) -> bool:

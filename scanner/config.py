@@ -56,6 +56,31 @@ WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET") or None   # optional Telegram 
 WEBHOOK_LISTEN = os.environ.get("WEBHOOK_LISTEN", "0.0.0.0")
 WEBHOOK_PORT = _int("PORT", 8080)   # Railway injects PORT for web-type services
 
+# --- Web dashboard: a read-only browser view of the bot's own scan history
+# --- (catalog/market-status/news/analyst pages -- see scanner/webapp.py).
+# --- Runs as a background task inside the SAME process regardless of
+# --- BOT_MODE, on its OWN port -- deliberately different from WEBHOOK_PORT
+# --- so it never collides with the Telegram webhook listener even if both
+# --- happen to be enabled at once (Railway can map a second public domain
+# --- to this port independently; see README). A bind failure here only
+# --- logs a warning -- it must never take down the Telegram bot itself.
+DASHBOARD_ENABLED = os.environ.get("DASHBOARD_ENABLED", "true").lower() != "false"
+DASHBOARD_LISTEN = os.environ.get("DASHBOARD_LISTEN", "0.0.0.0")
+DASHBOARD_PORT = _int("DASHBOARD_PORT", 8090)
+# Extra tickers always included in /api/news on top of whatever symbols are
+# currently in the catalog, so the news page isn't empty right after a
+# fresh deploy before anyone has run /options yet.
+DASHBOARD_NEWS_SYMBOLS = [s.strip().upper() for s in
+                          os.environ.get("DASHBOARD_NEWS_SYMBOLS", "SPY,QQQ").split(",") if s.strip()]
+# How long a catalog/market-status/news response is cached in memory before
+# the dashboard re-fetches from yfinance/signals.db -- keeps repeated page
+# loads/refreshes from hammering Yahoo Finance.
+DASHBOARD_CACHE_SECONDS = _int("DASHBOARD_CACHE_SECONDS", 600)
+# Catalog freshness window -- only signals logged within this many days are
+# shown (older, colder scan results aren't a useful "current opportunities"
+# read even if the contract hasn't technically expired yet).
+DASHBOARD_CATALOG_MAX_AGE_DAYS = _int("DASHBOARD_CATALOG_MAX_AGE_DAYS", 14)
+
 # --- Access: the bot is locked to whichever chat ids are already present in
 # --- state.approved (see scanner/state.py). There is no /approve command,
 # --- so no new member can ever be added by the bot itself -- membership is

@@ -1,0 +1,595 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<title>لوحة الأوبشن — البوت</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%93%8A%3C/text%3E%3C/svg%3E" />
+<style>
+  :root{
+    --ink:#14181C; --ink-soft:#4B534C; --ink-mute:#767F73;
+    --paper:#ECEFE9; --paper-raised:#F8F9F5; --paper-sunk:#E2E6DD;
+    --line:#D2D8CA; --line-soft:#E4E8DE;
+    --accent:#1F7A5C; --accent-soft:#DCEAE2; --accent-ink:#0F4A36;
+    --gold:#A9782A; --gold-soft:#F1E4C8;
+    --silver:#6C7480; --silver-soft:#E4E7EC;
+    --bronze:#8B5A2B; --bronze-soft:#EEDDCB;
+    --t-options:#2C6E8C; --t-options-soft:#DBE9F0;
+    --t-leaps:#6B5B95; --t-leaps-soft:#E6E1EF;
+    --t-heavy:#B35A22; --t-heavy-soft:#F3E0CF;
+    --warn:#9C4530; --warn-soft:#F2E1D9; --warn-line:#D9BBA9;
+    --favor:#1F7A5C; --favor-soft:#DCEAE2;
+    --caution:#9C4530; --caution-soft:#F2E1D9;
+    --neutral:#8B7A2F; --neutral-soft:#F1E9C8;
+    --radius:3px;
+    color-scheme: light;
+  }
+  :root[data-theme="dark"]{
+    --ink:#E7EAE2; --ink-soft:#B7BEB2; --ink-mute:#818A7C;
+    --paper:#11151A; --paper-raised:#171C21; --paper-sunk:#0D1114;
+    --line:#2A312B; --line-soft:#232A24;
+    --accent:#3EAE83; --accent-soft:#173226; --accent-ink:#8FDBB9;
+    --gold:#D6AA55; --gold-soft:#2E2413;
+    --silver:#9AA2AC; --silver-soft:#20242A;
+    --bronze:#C08653; --bronze-soft:#2B2018;
+    --t-options:#6FA9CC; --t-options-soft:#18262E;
+    --t-leaps:#A796CC; --t-leaps-soft:#241F2E;
+    --t-heavy:#E08A4C; --t-heavy-soft:#2E2013;
+    --warn:#DE8266; --warn-soft:#2A1913; --warn-line:#4A2C21;
+    --favor:#3EAE83; --favor-soft:#173226;
+    --caution:#DE8266; --caution-soft:#2A1913;
+    --neutral:#D6C155; --neutral-soft:#2E2A13;
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --ink:#E7EAE2; --ink-soft:#B7BEB2; --ink-mute:#818A7C;
+      --paper:#11151A; --paper-raised:#171C21; --paper-sunk:#0D1114;
+      --line:#2A312B; --line-soft:#232A24;
+      --accent:#3EAE83; --accent-soft:#173226; --accent-ink:#8FDBB9;
+      --gold:#D6AA55; --gold-soft:#2E2413;
+      --silver:#9AA2AC; --silver-soft:#20242A;
+      --bronze:#C08653; --bronze-soft:#2B2018;
+      --t-options:#6FA9CC; --t-options-soft:#18262E;
+      --t-leaps:#A796CC; --t-leaps-soft:#241F2E;
+      --t-heavy:#E08A4C; --t-heavy-soft:#2E2013;
+      --warn:#DE8266; --warn-soft:#2A1913; --warn-line:#4A2C21;
+      --favor:#3EAE83; --favor-soft:#173226;
+      --caution:#DE8266; --caution-soft:#2A1913;
+      --neutral:#D6C155; --neutral-soft:#2E2A13;
+      color-scheme: dark;
+    }
+  }
+
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; padding:0; }
+  body{
+    background:var(--paper); color:var(--ink);
+    font-family:"Segoe UI","Tahoma","Dubai","Geeza Pro",system-ui,sans-serif;
+    direction:rtl; -webkit-font-smoothing:antialiased; line-height:1.55;
+  }
+  .ltr{ direction:ltr; unicode-bidi:isolate; font-variant-numeric:tabular-nums; }
+  .mono{ font-family:ui-monospace,"SF Mono","Cascadia Mono","Consolas","Menlo",monospace; font-variant-numeric:tabular-nums; }
+  a{ color:inherit; text-decoration:none; }
+  button{ font-family:inherit; }
+  ::selection{ background:var(--accent-soft); }
+
+  .shell{ max-width:1180px; margin:0 auto; padding:0 20px 64px; }
+
+  header.topbar{
+    position:sticky; top:0; z-index:30;
+    background:color-mix(in srgb, var(--paper) 90%, transparent);
+    backdrop-filter:blur(10px); border-bottom:1px solid var(--line);
+  }
+  .topbar-inner{
+    max-width:1180px; margin:0 auto; padding:13px 20px 0;
+    display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;
+  }
+  .brand{ display:flex; align-items:center; gap:9px; }
+  .brand-mark{ width:9px; height:9px; border-radius:2px; background:var(--accent); transform:rotate(45deg); flex:none; }
+  .brand h1{ font-size:16px; font-weight:700; margin:0; letter-spacing:-.01em; }
+  .topbar-meta{ display:flex; align-items:center; gap:12px; }
+  .updated{ font-size:11.5px; color:var(--ink-mute); }
+  .updated b{ color:var(--ink-soft); font-weight:600; }
+  .btn-refresh{
+    display:flex; align-items:center; gap:6px; background:var(--paper-raised); color:var(--ink);
+    border:1px solid var(--line); border-radius:var(--radius); padding:6px 12px;
+    font-size:12px; font-weight:600; cursor:pointer;
+  }
+  .btn-refresh:hover{ border-color:var(--accent); background:var(--accent-soft); }
+  .btn-refresh svg{ width:12px; height:12px; transition:transform .4s ease; }
+  .btn-refresh.spin svg{ transform:rotate(360deg); }
+  button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible{
+    outline:2px solid var(--accent); outline-offset:2px;
+  }
+
+  nav.tabs{
+    max-width:1180px; margin:10px auto 0; padding:0 20px;
+    display:flex; gap:4px; overflow-x:auto;
+  }
+  nav.tabs a{
+    display:flex; align-items:center; gap:7px; padding:9px 14px;
+    font-size:13px; font-weight:600; color:var(--ink-mute);
+    border-bottom:2px solid transparent; white-space:nowrap;
+  }
+  nav.tabs a.active{ color:var(--ink); border-bottom-color:var(--accent); }
+  nav.tabs a:hover{ color:var(--ink); }
+
+  .disclaimer{
+    margin:18px 0; padding:12px 16px; background:var(--warn-soft); border:1px solid var(--warn-line);
+    border-radius:var(--radius); display:flex; gap:11px; align-items:flex-start;
+    font-size:12.5px; color:var(--ink-soft); line-height:1.65;
+  }
+  .disclaimer svg{ flex:none; width:16px; height:16px; margin-top:2px; color:var(--warn); }
+  .disclaimer strong{ color:var(--ink); }
+
+  .page{ display:none; }
+  .page.active{ display:block; }
+
+  h2.pagehead{ font-size:18px; font-weight:700; margin:0 0 4px; letter-spacing:-.01em; }
+  p.pagesub{ font-size:12.5px; color:var(--ink-mute); margin:0 0 18px; }
+
+  /* ---- catalog ---- */
+  .summary{
+    display:grid; grid-template-columns:repeat(5,1fr); gap:1px; background:var(--line);
+    border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; margin-bottom:18px;
+  }
+  .summary .cell{ background:var(--paper-raised); padding:12px 15px; display:flex; flex-direction:column; gap:3px; }
+  .summary .cell .n{ font-size:21px; font-weight:700; letter-spacing:-.01em; }
+  .summary .cell .l{ font-size:10.5px; color:var(--ink-mute); }
+  .summary .cell.gold .n{ color:var(--gold); }
+  .summary .cell.silver .n{ color:var(--silver); }
+  .summary .cell.bronze .n{ color:var(--bronze); }
+  @media (max-width:760px){ .summary{ grid-template-columns:repeat(2,1fr); } }
+
+  .controls{ position:sticky; top:96px; z-index:20; background:var(--paper); padding:10px 0 13px; border-bottom:1px solid var(--line-soft); margin-bottom:16px; }
+  .controls-row{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .pillgroup{ display:flex; gap:6px; flex-wrap:wrap; }
+  .pill{
+    border:1px solid var(--line); background:var(--paper-raised); color:var(--ink-soft);
+    border-radius:20px; padding:6px 13px; font-size:12.5px; font-weight:600; cursor:pointer;
+    display:flex; align-items:center; gap:6px;
+  }
+  .pill:hover{ border-color:var(--ink-mute); }
+  .pill.active{ background:var(--ink); color:var(--paper); border-color:var(--ink); }
+  .pill .dot{ width:7px; height:7px; border-radius:50%; flex:none; }
+  .search-wrap{ position:relative; flex:1 1 220px; min-width:180px; }
+  .search-wrap input{ width:100%; padding:8px 34px 8px 12px; border-radius:var(--radius); border:1px solid var(--line); background:var(--paper-raised); color:var(--ink); font-size:13px; }
+  .search-wrap svg{ position:absolute; inset-inline-end:10px; top:50%; transform:translateY(-50%); width:14px; height:14px; color:var(--ink-mute); pointer-events:none; }
+  select.sortsel{ padding:8px 12px; border-radius:var(--radius); border:1px solid var(--line); background:var(--paper-raised); color:var(--ink); font-size:12.5px; font-weight:600; cursor:pointer; }
+  .resultcount{ font-size:12px; color:var(--ink-mute); margin-inline-start:auto; }
+
+  .grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); gap:12px; }
+  .empty, .loading{ grid-column:1/-1; text-align:center; padding:60px 20px; color:var(--ink-mute); font-size:13.5px; }
+
+  .card{
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:var(--radius);
+    padding:15px 16px 14px; display:flex; flex-direction:column; gap:11px; cursor:pointer;
+    transition:border-color .15s ease;
+  }
+  .card:hover{ border-color:var(--accent); }
+  .card-head{ display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
+  .card-id-col{ display:flex; flex-direction:column; gap:1px; min-width:0; }
+  .ticker{ font-size:18px; font-weight:700; letter-spacing:-.01em; }
+  .company{ font-size:11.5px; color:var(--ink-mute); }
+  .tierbadge{ flex:none; display:flex; align-items:center; gap:5px; padding:4px 9px; border-radius:20px; font-size:12px; font-weight:700; }
+  .tierbadge.gold{ background:var(--gold-soft); color:var(--gold); }
+  .tierbadge.silver{ background:var(--silver-soft); color:var(--silver); }
+  .tierbadge.bronze{ background:var(--bronze-soft); color:var(--bronze); }
+  .chiprow{ display:flex; gap:6px; flex-wrap:wrap; }
+  .chip{ font-size:11px; font-weight:700; padding:3px 9px; border-radius:3px; display:flex; align-items:center; gap:5px; }
+  .chip .dot{ width:6px; height:6px; border-radius:50%; flex:none; }
+  .chip.type-options{ background:var(--t-options-soft); color:var(--t-options); }
+  .chip.type-leaps{ background:var(--t-leaps-soft); color:var(--t-leaps); }
+  .chip.type-heavy{ background:var(--t-heavy-soft); color:var(--t-heavy); }
+  .chip.call{ background:var(--accent-soft); color:var(--accent-ink); }
+  .chip.cat{ background:var(--paper-sunk); color:var(--ink-soft); }
+  .popline{ display:flex; align-items:baseline; gap:8px; padding:9px 11px; background:var(--paper-sunk); border-radius:var(--radius); }
+  .popline .num{ font-size:26px; font-weight:700; line-height:1; }
+  .popline .num.gold{ color:var(--gold); } .popline .num.silver{ color:var(--silver); } .popline .num.bronze{ color:var(--bronze); }
+  .popline .lbl{ font-size:11.5px; color:var(--ink-mute); }
+  .fieldgrid{ display:grid; grid-template-columns:1fr 1fr; border-top:1px solid var(--line-soft); }
+  .field{ padding:7px 0; display:flex; justify-content:space-between; align-items:baseline; border-bottom:1px solid var(--line-soft); font-size:12.5px; }
+  .field:nth-child(odd){ padding-inline-end:10px; } .field:nth-child(even){ padding-inline-start:10px; border-inline-start:1px solid var(--line-soft); }
+  .field .k{ color:var(--ink-mute); } .field .v{ font-weight:600; }
+  .card-foot{ display:flex; align-items:center; justify-content:space-between; font-size:11.5px; color:var(--ink-mute); }
+  .goto-analyst{ color:var(--accent-ink); font-weight:700; font-size:11.5px; display:flex; align-items:center; gap:4px; }
+
+  /* ---- market page ---- */
+  .mood-card{ background:var(--paper-raised); border:1px solid var(--line); border-radius:var(--radius); padding:26px; display:flex; flex-direction:column; gap:16px; margin-bottom:18px; }
+  .mood-headline{ display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; }
+  .mood-label{ font-size:30px; font-weight:700; letter-spacing:-.01em; }
+  .mood-label.favor{ color:var(--favor); } .mood-label.caution{ color:var(--caution); } .mood-label.neutral{ color:var(--neutral); }
+  .mood-note{ font-size:13.5px; color:var(--ink-soft); line-height:1.8; max-width:65ch; }
+  .stat-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; }
+  .stat-grid .cell{ background:var(--paper-sunk); padding:13px 15px; display:flex; flex-direction:column; gap:3px; }
+  .stat-grid .cell .n{ font-size:19px; font-weight:700; }
+  .stat-grid .cell .l{ font-size:10.5px; color:var(--ink-mute); }
+  .method-note{ font-size:11.5px; color:var(--ink-mute); border-top:1px dashed var(--line); padding-top:14px; line-height:1.8; }
+
+  /* ---- news page ---- */
+  .news-list{ display:flex; flex-direction:column; gap:1px; background:var(--line); border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; }
+  .news-item{ background:var(--paper-raised); padding:14px 16px; display:flex; flex-direction:column; gap:6px; }
+  .news-item:hover{ background:var(--accent-soft); }
+  .news-top{ display:flex; align-items:center; gap:8px; font-size:11px; color:var(--ink-mute); }
+  .news-title{ font-size:14px; font-weight:600; line-height:1.5; }
+  .news-symbol{ font-size:11px; font-weight:700; padding:2px 7px; border-radius:3px; background:var(--paper-sunk); color:var(--ink-soft); }
+
+  /* ---- analyst page ---- */
+  .analyst-empty{ text-align:center; padding:70px 20px; color:var(--ink-mute); font-size:13.5px; }
+  .analyst-head{ display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+  .verdict{ display:inline-flex; align-items:center; gap:8px; padding:8px 16px; border-radius:20px; font-size:14px; font-weight:700; }
+  .verdict.favorable{ background:var(--favor-soft); color:var(--favor); }
+  .verdict.caution{ background:var(--caution-soft); color:var(--caution); }
+  .verdict.neutral{ background:var(--neutral-soft); color:var(--neutral); }
+  .analyst-grid{ display:grid; grid-template-columns:1.1fr 1.4fr; gap:16px; align-items:start; }
+  @media (max-width:820px){ .analyst-grid{ grid-template-columns:1fr; } }
+  .bullets{ display:flex; flex-direction:column; gap:12px; background:var(--paper-raised); border:1px solid var(--line); border-radius:var(--radius); padding:18px 20px; }
+  .bullets .bullet{ font-size:13.5px; line-height:1.8; padding-inline-start:18px; position:relative; }
+  .bullets .bullet::before{ content:"›"; position:absolute; inset-inline-start:0; color:var(--accent); font-weight:700; }
+  .rule-tag{ display:inline-flex; align-items:center; gap:6px; font-size:11px; color:var(--ink-mute); border:1px dashed var(--line); border-radius:20px; padding:4px 11px; margin-bottom:10px; }
+
+  footer.page-foot{ margin-top:36px; padding-top:18px; border-top:1px solid var(--line); font-size:11.5px; color:var(--ink-mute); line-height:1.8; }
+</style>
+</head>
+<body>
+<div class="root">
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <h1>لوحة الأوبشن — عادي · LEAPS · HEAVY</h1>
+      </div>
+      <div class="topbar-meta">
+        <span class="updated">آخر تحديث: <b class="ltr" id="updatedAt">—</b></span>
+        <button class="btn-refresh" id="refreshBtn" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>
+          تحديث
+        </button>
+      </div>
+    </div>
+    <nav class="tabs" id="tabs">
+      <a href="#/catalog" data-tab="catalog">📇 كتالوج العقود</a>
+      <a href="#/market" data-tab="market">🌡️ حالة السوق</a>
+      <a href="#/news" data-tab="news">📰 الأخبار</a>
+      <a href="#/analyst" data-tab="analyst">🧭 المحلل الذكي</a>
+    </nav>
+  </header>
+
+  <div class="shell">
+    <div class="disclaimer">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.7 3.86a2 2 0 0 0-3.4 0Z"/></svg>
+      <div><strong>تحذير مخاطر التداول:</strong> عقود الأوبشن تنطوي على مخاطر عالية. كل الأرقام والآراء بهذه الصفحة تقديرات إحصائية أو تحليل آلي مبني على قواعد، وليست ضماناً أو توصية مالية مباشرة.</div>
+    </div>
+
+    <!-- ===== catalog ===== -->
+    <section class="page" id="page-catalog">
+      <h2 class="pagehead">كتالوج العقود</h2>
+      <p class="pagesub">كل عقد سجّله البوت فعلياً في آخر <span id="catalogWindow" class="ltr">—</span> يوماً عبر <span class="mono ltr">/options</span> ولم ينتهِ بعد — اضغط أي بطاقة لرأي المحلل الذكي.</p>
+      <div class="summary" id="summary"></div>
+      <div class="controls">
+        <div class="controls-row">
+          <div class="pillgroup" id="typeFilters"></div>
+          <div class="pillgroup" id="tierFilters"></div>
+          <div class="search-wrap">
+            <input type="text" id="searchInput" placeholder="ابحث برمز السهم…" />
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+          </div>
+          <select class="sortsel" id="sortSel">
+            <option value="pop-desc">الأعلى احتمالية ربح</option>
+            <option value="cost-asc">الأقل تكلفة</option>
+            <option value="expiry-asc">الأقرب انتهاءً</option>
+            <option value="recent-desc">الأحدث تسجيلاً</option>
+          </select>
+          <span class="resultcount" id="resultCount"></span>
+        </div>
+      </div>
+      <div class="grid" id="grid"><div class="loading">جارٍ التحميل…</div></div>
+    </section>
+
+    <!-- ===== market ===== -->
+    <section class="page" id="page-market">
+      <h2 class="pagehead">حالة السوق العام</h2>
+      <p class="pagesub">قراءة آلية مبنية على قواعد ثابتة (اتجاه SPY مقابل متوسطه الحركي 50 يوماً، ومستوى مؤشر الخوف VIX) — وليست مؤشر Fear & Greed تجاري.</p>
+      <div id="marketBody"><div class="loading">جارٍ التحميل…</div></div>
+    </section>
+
+    <!-- ===== news ===== -->
+    <section class="page" id="page-news">
+      <h2 class="pagehead">أخبار الأسواق</h2>
+      <p class="pagesub">مجمّعة من yfinance لمؤشرَي السوق العام ولأبرز رموز الكتالوج الحالي.</p>
+      <div class="news-list" id="newsList"><div class="loading">جارٍ التحميل…</div></div>
+    </section>
+
+    <!-- ===== analyst ===== -->
+    <section class="page" id="page-analyst">
+      <h2 class="pagehead">المحلل الذكي</h2>
+      <p class="pagesub">تحليل آلي مبني على قواعد من أرقام العقد نفسه + حالة السوق العام.</p>
+      <div id="analystBody">
+        <div class="analyst-empty">اضغط أي عقد من 📇 كتالوج العقود لرؤية رأي المحلل هنا.</div>
+      </div>
+    </section>
+
+    <footer class="page-foot">
+      البيانات مسجَّلة فعلياً من جلسات <span class="mono ltr">/options</span> السابقة (قاعدة <span class="mono ltr">signals.db</span>) — الطزاجة تعتمد على آخر مرة شغّل فيها أحد الأعضاء الفحص، وليست فحصاً حياً يبدأ عند فتح الصفحة. حالة السوق والمحلل الذكي كلاهما منطق قواعد ثابتة من نفس أرقام البوت، بلا نموذج ذكاء اصطناعي توليدي.
+    </footer>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  var TYPE_META = {
+    options:{ label:"عادي", color:"var(--t-options)", cls:"type-options" },
+    leaps:{ label:"LEAPS", color:"var(--t-leaps)", cls:"type-leaps" },
+    heavy:{ label:"HEAVY", color:"var(--t-heavy)", cls:"type-heavy" }
+  };
+
+  var state = { type:"all", tier:"all", q:"", sort:"pop-desc" };
+  var catalogCache = [];
+
+  function fmtUSD(n){ return n==null ? "-" : "$" + Number(n).toLocaleString("en-US", {maximumFractionDigits:2}); }
+  function fmtPct(n, d){ return n==null ? "-" : Number(n).toFixed(d==null?0:d) + "%"; }
+
+  async function getJSON(url){
+    var res = await fetch(url);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return res.json();
+  }
+
+  // ------------------------------------------------------------ tabs/router
+  function setTab(name){
+    document.querySelectorAll("nav.tabs a").forEach(function(a){
+      a.classList.toggle("active", a.getAttribute("data-tab") === name);
+    });
+    document.querySelectorAll(".page").forEach(function(p){
+      p.classList.toggle("active", p.id === "page-" + name);
+    });
+  }
+
+  function route(){
+    var hash = location.hash.replace(/^#\/?/, "");
+    var parts = hash.split("/");
+    var name = parts[0] || "catalog";
+    if (!["catalog","market","news","analyst"].includes(name)) name = "catalog";
+    setTab(name);
+    if (name === "catalog" && !catalogCache.length) loadCatalog();
+    if (name === "market") loadMarket();
+    if (name === "news") loadNews();
+    if (name === "analyst" && parts[1]) loadAnalyst(parts[1]);
+  }
+  window.addEventListener("hashchange", route);
+
+  // ------------------------------------------------------------ catalog
+  function renderFilters(){
+    var typeWrap = document.getElementById("typeFilters");
+    var types = [["all","الكل",null]].concat(Object.keys(TYPE_META).map(function(k){return [k,TYPE_META[k].label,TYPE_META[k].color];}));
+    typeWrap.innerHTML = types.map(function(t){
+      var active = state.type===t[0] ? " active" : "";
+      var dot = t[2] ? '<span class="dot" style="background:'+t[2]+'"></span>' : "";
+      return '<button type="button" class="pill'+active+'" data-type="'+t[0]+'">'+dot+t[1]+'</button>';
+    }).join("");
+    typeWrap.querySelectorAll(".pill").forEach(function(btn){
+      btn.addEventListener("click", function(){ state.type = btn.getAttribute("data-type"); renderCatalog(); });
+    });
+
+    var tierWrap = document.getElementById("tierFilters");
+    var tiers = [["all","الكل"],["gold","🥇 ممتاز"],["silver","🥈 جيد جداً"],["bronze","🥉 مقبول"]];
+    tierWrap.innerHTML = tiers.map(function(t){
+      var active = state.tier===t[0] ? " active" : "";
+      return '<button type="button" class="pill'+active+'" data-tier="'+t[0]+'">'+t[1]+'</button>';
+    }).join("");
+    tierWrap.querySelectorAll(".pill").forEach(function(btn){
+      btn.addEventListener("click", function(){ state.tier = btn.getAttribute("data-tier"); renderCatalog(); });
+    });
+  }
+
+  function renderSummary(list){
+    var avgPop = list.length ? Math.round(list.reduce(function(a,d){return a+(d.pop||0);},0)/list.length) : 0;
+    var gold = list.filter(function(d){return d.tier_key==="gold";}).length;
+    var silver = list.filter(function(d){return d.tier_key==="silver";}).length;
+    var bronze = list.filter(function(d){return d.tier_key==="bronze";}).length;
+    var cells = [
+      [list.length, "إجمالي المعروض", ""], [avgPop+"%", "متوسط احتمالية الربح", ""],
+      [gold, "🥇 ممتاز", "gold"], [silver, "🥈 جيد جداً", "silver"], [bronze, "🥉 مقبول", "bronze"]
+    ];
+    document.getElementById("summary").innerHTML = cells.map(function(c){
+      return '<div class="cell'+(c[2]?" "+c[2]:"")+'"><span class="n mono">'+c[0]+'</span><span class="l">'+c[1]+'</span></div>';
+    }).join("");
+  }
+
+  function cardHTML(d){
+    var tm = TYPE_META[d.kind] || {label:d.kind, color:"var(--ink-mute)", cls:""};
+    var catChip = d.category_label ? '<span class="chip cat">'+d.category_label+'</span>' : "";
+    return (
+      '<article class="card" data-id="'+d.id+'">' +
+        '<div class="card-head">' +
+          '<div class="card-id-col">' +
+            '<span class="ticker mono ltr">'+d.symbol+'</span>' +
+            '<span class="company">سُجِّل '+(d.logged_at||"")+'</span>' +
+          '</div>' +
+          '<span class="tierbadge '+d.tier_key+'">'+(d.tier_label||"-")+'</span>' +
+        '</div>' +
+        '<div class="chiprow">' +
+          '<span class="chip '+tm.cls+'"><span class="dot" style="background:'+tm.color+'"></span>'+tm.label+'</span>' +
+          '<span class="chip call">🟢 CALL</span>' + catChip +
+        '</div>' +
+        '<div class="popline"><span class="num mono '+d.tier_key+'">'+fmtPct(d.pop)+'</span><span class="lbl">🎯 احتمالية الربح</span></div>' +
+        '<div class="fieldgrid">' +
+          '<div class="field"><span class="k">السعر الحالي</span><span class="v mono ltr">'+fmtUSD(d.spot)+'</span></div>' +
+          '<div class="field"><span class="k">تنفيذ (Strike)</span><span class="v mono ltr">'+fmtUSD(d.strike)+'</span></div>' +
+          '<div class="field"><span class="k">الانتهاء</span><span class="v mono ltr">'+(d.expiry||"-")+'</span></div>' +
+          '<div class="field"><span class="k">أيام متبقية</span><span class="v mono ltr">'+(d.days==null?"-":d.days)+'</span></div>' +
+          '<div class="field"><span class="k">تكلفة العقد</span><span class="v mono ltr">'+fmtUSD(d.cost)+'</span></div>' +
+          '<div class="field"><span class="k">نقطة التعادل</span><span class="v mono ltr">'+fmtUSD(d.breakeven)+'</span></div>' +
+          '<div class="field"><span class="k">دلتا</span><span class="v mono ltr">'+(d.delta==null?"-":d.delta.toFixed(2))+'</span></div>' +
+          '<div class="field"><span class="k">تقلب ضمني (IV)</span><span class="v mono ltr">'+(d.iv==null?"-":Math.round(d.iv*100)+"%")+'</span></div>' +
+        '</div>' +
+        '<div class="card-foot"><span>'+(d.dur_label||"")+'</span><span class="goto-analyst">رأي المحلل ←</span></div>' +
+      '</article>'
+    );
+  }
+
+  function renderCatalog(){
+    renderFilters();
+    var q = state.q.trim().toLowerCase();
+    var list = catalogCache.filter(function(d){
+      if (state.type !== "all" && d.kind !== state.type) return false;
+      if (state.tier !== "all" && d.tier_key !== state.tier) return false;
+      if (q && d.symbol.toLowerCase().indexOf(q) === -1) return false;
+      return true;
+    });
+    list.sort(function(a,b){
+      switch(state.sort){
+        case "cost-asc": return (a.cost||0) - (b.cost||0);
+        case "expiry-asc": return (a.days||9999) - (b.days||9999);
+        case "recent-desc": return (b.logged_ts||0) - (a.logged_ts||0);
+        default: return (b.pop||0) - (a.pop||0);
+      }
+    });
+    renderSummary(list);
+    var grid = document.getElementById("grid");
+    grid.innerHTML = list.length ? list.map(cardHTML).join("")
+      : '<div class="empty">لا توجد عقود مطابقة — إما لا تطابق الفلاتر، أو لم يُشغَّل <span class="mono ltr">/options</span> بعد خلال نافذة الطزاجة الحالية.</div>';
+    grid.querySelectorAll(".card").forEach(function(el){
+      el.addEventListener("click", function(){ location.hash = "#/analyst/" + el.getAttribute("data-id"); });
+    });
+    document.getElementById("resultCount").textContent = "عرض " + list.length + " من " + catalogCache.length;
+  }
+
+  async function loadCatalog(){
+    document.getElementById("grid").innerHTML = '<div class="loading">جارٍ التحميل…</div>';
+    try {
+      var data = await getJSON("/api/catalog");
+      catalogCache = data.contracts || [];
+      document.getElementById("catalogWindow").textContent = data.max_age_days;
+      renderCatalog();
+    } catch (e) {
+      document.getElementById("grid").innerHTML = '<div class="empty">تعذّر تحميل الكتالوج. حاول تحديث الصفحة.</div>';
+    }
+  }
+
+  document.getElementById("searchInput").addEventListener("input", function(e){ state.q = e.target.value; renderCatalog(); });
+  document.getElementById("sortSel").addEventListener("change", function(e){ state.sort = e.target.value; renderCatalog(); });
+
+  // ------------------------------------------------------------ market
+  function moodClass(mood){
+    if (mood === "متفائل" || mood === "متفائل بحذر") return "favor";
+    if (mood.indexOf("خوف") !== -1) return "caution";
+    return "neutral";
+  }
+
+  async function loadMarket(){
+    var body = document.getElementById("marketBody");
+    body.innerHTML = '<div class="loading">جارٍ التحميل…</div>';
+    try {
+      var m = await getJSON("/api/market");
+      var cls = moodClass(m.mood || "");
+      body.innerHTML =
+        '<div class="mood-card">' +
+          '<div class="mood-headline"><span class="mood-label '+cls+'">'+m.mood+'</span>' +
+          (m.vix!=null ? '<span class="chip" style="background:var(--paper-sunk);color:var(--ink-soft)">VIX '+m.vix.toFixed(1)+' — '+m.vix_band+'</span>' : '') +
+          '</div>' +
+          '<p class="mood-note">'+(m.note||"")+'</p>' +
+          '<div class="stat-grid">' +
+            '<div class="cell"><span class="n mono ltr">'+fmtUSD(m.spy_price)+'</span><span class="l">SPY الآن</span></div>' +
+            '<div class="cell"><span class="n mono ltr">'+fmtUSD(m.spy_sma50)+'</span><span class="l">SPY متوسط 50 يوم</span></div>' +
+            '<div class="cell"><span class="n mono ltr">'+(m.spy_change_pct==null?"-":(m.spy_change_pct>0?"+":"")+m.spy_change_pct.toFixed(2)+"%")+'</span><span class="l">تغيّر SPY اليوم</span></div>' +
+            '<div class="cell"><span class="n mono ltr">'+(m.vix==null?"-":m.vix.toFixed(1))+'</span><span class="l">مؤشر الخوف VIX</span></div>' +
+          '</div>' +
+          '<p class="method-note">المنهجية: SPY فوق متوسطه الحركي 50 يوماً = اتجاه صاعد؛ VIX &lt;15 هادئ، 15–20 طبيعي، 20–28 متوتر، 28+ خوف مرتفع. الاثنان يُدمَجان بجدول قواعد ثابت — لا نموذج تنبؤي ولا بيانات مشاعر سوق تجارية.</p>' +
+        '</div>';
+    } catch (e) {
+      body.innerHTML = '<div class="empty">تعذّر تحميل حالة السوق.</div>';
+    }
+  }
+
+  // ------------------------------------------------------------ news
+  async function loadNews(){
+    var list = document.getElementById("newsList");
+    list.innerHTML = '<div class="loading">جارٍ التحميل…</div>';
+    try {
+      var symbols = Array.from(new Set(catalogCache.slice(0,8).map(function(d){return d.symbol;})));
+      var data = await getJSON("/api/news?symbols=" + encodeURIComponent(symbols.join(",")));
+      var items = data.items || [];
+      if (!items.length) {
+        list.innerHTML = '<div class="empty">لا توجد أخبار متاحة حالياً.</div>';
+        return;
+      }
+      list.innerHTML = items.map(function(n){
+        var when = n.published_ts ? new Date(n.published_ts*1000).toLocaleString("ar") : "";
+        return '<a class="news-item" href="'+n.link+'" target="_blank" rel="noopener noreferrer">' +
+          '<div class="news-top"><span class="news-symbol mono ltr">'+n.symbol+'</span><span>'+n.publisher+'</span><span>'+when+'</span></div>' +
+          '<div class="news-title">'+n.title+'</div>' +
+        '</a>';
+      }).join("");
+    } catch (e) {
+      list.innerHTML = '<div class="empty">تعذّر تحميل الأخبار.</div>';
+    }
+  }
+
+  // ------------------------------------------------------------ analyst
+  var VERDICT_LABEL = { favorable:"favorable", neutral:"neutral", caution:"caution" };
+
+  async function loadAnalyst(id){
+    var body = document.getElementById("analystBody");
+    body.innerHTML = '<div class="loading">جارٍ التحميل…</div>';
+    try {
+      var data = await getJSON("/api/analyst?id=" + encodeURIComponent(id));
+      if (data.error) {
+        body.innerHTML = '<div class="analyst-empty">لم يُعثر على هذا العقد (ربما انتهى أو حُذف من نافذة الطزاجة).</div>';
+        return;
+      }
+      var c = data.contract, op = data.opinion;
+      var tm = TYPE_META[c.kind] || {label:c.kind, color:"var(--ink-mute)", cls:""};
+      body.innerHTML =
+        '<div class="analyst-head">' +
+          '<div>' +
+            '<span class="ticker mono ltr" style="font-size:24px">'+c.symbol+'</span> ' +
+            '<span class="chip '+tm.cls+'" style="margin-inline-start:8px"><span class="dot" style="background:'+tm.color+'"></span>'+tm.label+'</span>' +
+          '</div>' +
+          '<span class="verdict '+op.verdict_key+'">'+op.verdict_label+'</span>' +
+        '</div>' +
+        '<div class="analyst-grid">' +
+          '<div class="fieldgrid" style="background:var(--paper-raised);border:1px solid var(--line);border-radius:var(--radius);padding:6px 16px">' +
+            '<div class="field"><span class="k">Strike</span><span class="v mono ltr">'+fmtUSD(c.strike)+'</span></div>' +
+            '<div class="field"><span class="k">الانتهاء</span><span class="v mono ltr">'+c.expiry+'</span></div>' +
+            '<div class="field"><span class="k">تكلفة العقد</span><span class="v mono ltr">'+fmtUSD(c.cost)+'</span></div>' +
+            '<div class="field"><span class="k">نقطة التعادل</span><span class="v mono ltr">'+fmtUSD(c.breakeven)+'</span></div>' +
+            '<div class="field"><span class="k">🎯 احتمالية الربح</span><span class="v mono ltr">'+fmtPct(c.pop)+'</span></div>' +
+            '<div class="field"><span class="k">التصنيف</span><span class="v">'+(c.tier_label||"-")+'</span></div>' +
+          '</div>' +
+          '<div class="bullets">' +
+            '<span class="rule-tag">⚙️ تحليل آلي مبني على قواعد — بلا ذكاء اصطناعي توليدي</span>' +
+            op.bullets.map(function(b){ return '<div class="bullet">'+b+'</div>'; }).join("") +
+          '</div>' +
+        '</div>';
+    } catch (e) {
+      body.innerHTML = '<div class="analyst-empty">تعذّر تحميل التحليل.</div>';
+    }
+  }
+
+  // ------------------------------------------------------------ refresh/init
+  function setUpdatedAt(){
+    var now = new Date();
+    var pad = function(n){ return String(n).padStart(2,"0"); };
+    document.getElementById("updatedAt").textContent =
+      now.getFullYear()+"-"+pad(now.getMonth()+1)+"-"+pad(now.getDate())+" "+pad(now.getHours())+":"+pad(now.getMinutes());
+  }
+
+  document.getElementById("refreshBtn").addEventListener("click", function(){
+    var btn = this;
+    btn.classList.add("spin");
+    setTimeout(function(){ btn.classList.remove("spin"); }, 420);
+    setUpdatedAt();
+    catalogCache = [];
+    route();
+  });
+
+  setUpdatedAt();
+  route();
+})();
+</script>
+</body>
+</html>

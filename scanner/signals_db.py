@@ -252,6 +252,35 @@ def count_open_signals() -> int:
         return conn.execute("SELECT COUNT(*) FROM signals WHERE status='open'").fetchone()[0]
 
 
+def fetch_signal_by_id(signal_id: int) -> sqlite3.Row | None:
+    """A single logged signal by its row id -- the web dashboard's analyst
+    page looks a contract up this way (unambiguous, unlike symbol/strike/
+    expiry which could theoretically collide across sections)."""
+    with _db() as conn:
+        return conn.execute("SELECT * FROM signals WHERE id=?", (signal_id,)).fetchone()
+
+
+def fetch_catalog_signals(max_age_days: int, limit: int = 300) -> list[sqlite3.Row]:
+    """Recent options-family signals (options/leaps/heavy) for the web
+    dashboard's catalog page -- newest first, capped at `max_age_days` old
+    and excluding contracts that have already expired (expiry is an ISO
+    date string, so a plain lexicographic >= comparison against today
+    works). Excludes 'golden' on purpose -- its filters_matched column
+    holds the stock's matched filter list, not a tier/category, so it
+    doesn't fit this shape (see scanner/dashboard_data.py)."""
+    cutoff_ts = time.time() - max_age_days * 86400
+    today = dt.date.today().isoformat()
+    with _db() as conn:
+        return conn.execute(
+            """SELECT * FROM signals
+               WHERE section IN ('options', 'leaps', 'heavy')
+                 AND ts >= ?
+                 AND expiry >= ?
+               ORDER BY ts DESC
+               LIMIT ?""",
+            (cutoff_ts, today, limit)).fetchall()
+
+
 # ------------------------------------------------------------- positions
 
 def find_open_position(chat_id: int, symbol: str, strike: float, expiry: str) -> sqlite3.Row | None:
