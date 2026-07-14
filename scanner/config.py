@@ -369,7 +369,6 @@ HEAVY_PREMIUM_MAX = _float("HEAVY_PREMIUM_MAX", 3.00)  # ask <= 3.00$/share (300
 HEAVY_VOLUME_MIN = _int("HEAVY_VOLUME_MIN", 50)
 HEAVY_OI_MIN = _int("HEAVY_OI_MIN", 300)
 HEAVY_SPREAD_MAX = _float("HEAVY_SPREAD_MAX", 0.10)
-HEAVY_TOP_N = _int("HEAVY_TOP_N", 5)
 # Cap on Yahoo per-expiry requests IF the CBOE single-request provider
 # (tried first for this module -- see heavy_module.py) fails; generous
 # since HEAVY_DTE_MIN already drops near-term expiries before they count

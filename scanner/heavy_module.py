@@ -19,12 +19,13 @@ Yahoo يكلّف طلب شبكة مستقل)، يُفضَّل مزوّد CBOE أ
 
 سهم بلا أي عقد يحقق الشروط مجتمعة يُتجاوز بصمت (لا رسالة خطأ لكل سهم).
 
-scan() هي async generator: كل عقد يتحقق شروطه يُرسَل فوراً (live)، ويتوقف
-الفحص تلقائياً بعد HEAVY_TOP_N نتيجة. القائمة تُخلَط عشوائياً في بداية كل
-فحص لنفس سبب العدالة المستخدم في بقية الوحدات. الترتيب المطلوب هو "الأعلى
-سيولة أولاً" (volume + openInterest) -- يُطبَّق محلياً داخل عقود السهم
-الواحد فقط قبل إرسالها، لأن الترتيب الشامل عبر كل القائمة يتطلب مسحها
-كاملة قبل الإرسال (نفس مبدأ /leaps مع IV).
+scan() هي async generator: كل عقد يتحقق شروطه يُرسَل فوراً (live)، بلا سقف
+على عدد النتائج -- يمسح HEAVY_TICKERS كاملة حتى نهاية القائمة أو /stop أو
+انتهاء الجلسة. القائمة تُخلَط عشوائياً في بداية كل فحص لتفادي أي ترتيب
+ثابت بالإرسال. الترتيب المطلوب هو "الأعلى سيولة أولاً" (volume +
+openInterest) -- يُطبَّق محلياً داخل عقود السهم الواحد فقط قبل إرسالها،
+لأن الترتيب الشامل عبر كل القائمة يتطلب مسحها كاملة قبل الإرسال (نفس مبدأ
+/leaps مع IV).
 """
 import asyncio
 import datetime as dt
@@ -112,19 +113,16 @@ def _contracts_for_symbol(symbol: str, spot: float, category: str) -> tuple[list
 
 async def scan(cancel_event: asyncio.Event | None = None,
                stats: dict | None = None) -> AsyncIterator[dict]:
-    """يفحص HEAVY_TICKERS (بترتيب عشوائي) ويُرسل (yield) كل عقد مؤهل فور
-    تحققه، حتى HEAVY_TOP_N عقد أو نهاية القائمة أو /stop أو انتهاء الجلسة.
+    """يفحص كامل HEAVY_TICKERS (بترتيب عشوائي، بلا خروج مبكر) ويُرسل (yield)
+    كل عقد مؤهل فور تحققه، حتى نهاية القائمة أو /stop أو انتهاء الجلسة.
     `stats["excluded_bad_data"]` يتجمّع بالمرجع."""
     if stats is None:
         stats = {}
     watchlist = list(config.HEAVY_TICKERS)
     random.shuffle(watchlist)
-    sent = 0
     batches = data.make_batches(watchlist)
     for batch in batches:
         if cancel_event is not None and cancel_event.is_set():
-            return
-        if sent >= config.HEAVY_TOP_N:
             return
         try:
             frames = await asyncio.to_thread(data.fetch_batch, batch, "1d", "1mo")
@@ -133,8 +131,6 @@ async def scan(cancel_event: asyncio.Event | None = None,
             continue
         for symbol, df in frames.items():
             if cancel_event is not None and cancel_event.is_set():
-                return
-            if sent >= config.HEAVY_TOP_N:
                 return
             try:
                 spot = float(df["Close"].iloc[-1])
@@ -148,10 +144,7 @@ async def scan(cancel_event: asyncio.Event | None = None,
                 continue
             stats["excluded_bad_data"] = stats.get("excluded_bad_data", 0) + excluded
             for c in contracts:
-                if sent >= config.HEAVY_TOP_N:
-                    return
                 yield c
-                sent += 1
 
 
 def format_result(row: dict) -> str:

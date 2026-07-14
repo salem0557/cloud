@@ -166,8 +166,8 @@ async def scan(cancel_event: asyncio.Event | None = None,
                stats: dict | None = None) -> AsyncIterator[dict]:
     """يفحص كامل أسهم OPTIONS_WATCHLIST (بترتيب عشوائي، بلا خروج مبكر) ويُرسل
     (yield) كل عقد مؤهل فور تحققه، حتى نهاية القائمة أو /stop أو انتهاء
-    الجلسة -- مثل /leaps تماماً (بلا سقف)، خلافاً لـ/heavy اللي لا يزال
-    يتوقف عند أول HEAVY_TOP_N نتيجة. `stats["excluded_bad_data"]` يتجمّع
+    الجلسة -- مثل /leaps و/heavy تماماً، الثلاثة الآن بلا سقف نتائج (يتوقف
+    عندها فقط /crypto عند أول 5). `stats["excluded_bad_data"]` يتجمّع
     بالمرجع (عدد العقود المستبعدة أثناء الفحص لبيانات غير موثوقة -- انظر
     options.py's _sanity_check)."""
     if stats is None:
