@@ -98,6 +98,16 @@ class AnalystHandler(_JSONHandler):
         self.write_json({"contract": contract, "opinion": opinion})
 
 
+class _NoCacheStaticFileHandler(tornado.web.StaticFileHandler):
+    """يمنع المتصفح من تخزين index.html/JS مؤقتاً -- بدون هذا، متصفح فتح
+    اللوحة مرة يستمر يعرض نسخة قديمة من الصفحة نفسها حتى بعد نشر تحديث
+    جديد للبوت، إلى أن يعمل المستخدم تحديث إجباري يدوي (Ctrl+Shift+R).
+    بهذا التغيير كل تحميل عادي للصفحة يجيب أحدث نسخة تلقائياً."""
+
+    def set_extra_headers(self, path):
+        self.set_header("Cache-Control", "no-cache, no-store, must-revalidate")
+
+
 def _build_app() -> tornado.web.Application:
     return tornado.web.Application([
         (r"/api/catalog", CatalogHandler),
@@ -105,7 +115,7 @@ def _build_app() -> tornado.web.Application:
         (r"/api/news", NewsHandler),
         (r"/api/briefing", BriefingHandler),
         (r"/api/analyst", AnalystHandler),
-        (r"/(.*)", tornado.web.StaticFileHandler,
+        (r"/(.*)", _NoCacheStaticFileHandler,
          {"path": _WEB_DIR, "default_filename": "index.html"}),
     ])
 
