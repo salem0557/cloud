@@ -581,16 +581,11 @@ WHALE_TICKERS = HEAVY_TICKERS   # same curated mega/large/ETF list -- see its ow
 
 # Classification thresholds (today's volume / open interest) -- cumulative,
 # not exclusive bands: a ratio of 12 is "whale" (the highest one it clears).
+# Every tier alerts (ratio > WHALE_RATIO_NOTABLE is the only floor) -- there
+# is deliberately no minimum OI/volume/flow/DTE filter on top anymore (had
+# one; removed on request). A very small-OI contract can swing this ratio
+# wildly, so expect noisier alerts on illiquid names -- that tradeoff is
+# intentional here, not an oversight.
 WHALE_RATIO_NOTABLE = _float("WHALE_RATIO_NOTABLE", 3.0)
 WHALE_RATIO_UNUSUAL = _float("WHALE_RATIO_UNUSUAL", 5.0)
 WHALE_RATIO_WHALE = _float("WHALE_RATIO_WHALE", 10.0)
-# Only NOTABLE never actually surfaces an alert -- see the filters below,
-# which require ratio >= WHALE_RATIO_UNUSUAL. It's classified for
-# completeness/possible future use, not silently dropped from the code.
-
-# Signal-quality filters (ALL must hold before an alert is sent):
-WHALE_MIN_OI = _int("WHALE_MIN_OI", 50)              # below this, the ratio itself is noise
-WHALE_MIN_VOLUME = _int("WHALE_MIN_VOLUME", 500)     # today's contract volume floor
-WHALE_MIN_FLOW_USD = _float("WHALE_MIN_FLOW_USD", 100_000.0)  # volume * premium * 100
-WHALE_DTE_MIN = _int("WHALE_DTE_MIN", 14)    # excludes same-week contracts (speculative noise)
-WHALE_DTE_MAX = _int("WHALE_DTE_MAX", 365)

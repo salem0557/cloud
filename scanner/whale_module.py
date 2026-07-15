@@ -1,7 +1,10 @@
 """كاشف النشاط الشاذ (whale): يرصد بصمات صفقات CALL ضخمة محتملة من نسبة
 حجم اليوم إلى العقود المفتوحة (Vol/OI) عبر قائمة WHALE_TICKERS (نفس
 HEAVY_TICKERS)، من نفس مصدري yfinance/CBOE الحاليين -- بلا أي اشتراك
-بيانات مدفوع.
+بيانات مدفوع. الشرط الوحيد للتنبيه هو التصنيف نفسه (نسبة >
+WHALE_RATIO_NOTABLE) -- لا يوجد حد أدنى للحجم أو العقود المفتوحة أو قيمة
+التدفق أو مدى DTE (أُزيلت كلها بطلب صريح)، فتوقّع تنبيهات أكثر على أسهم
+قليلة السيولة حيث نسبة صغيرة الأرقام تتقلب بسهولة.
 
 CALL فقط، مطابقة لبقية البوت الذي لا يدعم PUT إطلاقاً (انظر options.py) --
 "نشاط شاذ" هنا يعني رهاناً صعودياً محتملاً دائماً، وليس مقارنة مع الجهة
@@ -34,9 +37,9 @@ TIER_LABEL = {
 
 
 def _classify(ratio: float) -> str | None:
-    """التصنيف تراكمي (نسبة 12 تصنَّف "حوت"، أعلى تصنيف تحققه فقط) --
-    "ملحوظ" مصنَّف هنا لاكتماله لكنه لا يُنبَّه عليه أبداً فعلياً، انظر
-    _contracts_for_symbol (يشترط >= WHALE_RATIO_UNUSUAL)."""
+    """التصنيف تراكمي (نسبة 12 تصنَّف "حوت"، أعلى تصنيف تحققه فقط). None
+    (نسبة <= WHALE_RATIO_NOTABLE) هو الاستبعاد الوحيد -- لا يوجد أي شرط
+    آخر (حجم/عقود مفتوحة/تدفق/DTE) فوق هذا، أُزيلت كلها بطلب صريح."""
     if ratio > config.WHALE_RATIO_WHALE:
         return "whale"
     if ratio > config.WHALE_RATIO_UNUSUAL:
@@ -61,21 +64,27 @@ def _row(symbol: str, spot: float, c: dict, ratio: float, tier: str, flow_usd: f
     }
 
 
+_FETCH_WINDOW_DAYS = 365 * 5   # generous fetch ceiling -- no DTE floor/cap filters this anymore
+
+
 def _contracts_for_symbol(symbol: str, spot: float) -> list[dict]:
-    """(عقود CALL شاذة لسهم واحد) -- تجتمع فيها كل فلاتر تنقية الإشارة معاً
-    (ratio، حجم، قيمة تدفق، DTE). عقد يعدّي التصنيف لكن ما يجتمع مع بقية
-    الفلاتر يُستبعد بصمت. مرتبة بأعلى نسبة Vol/OI أولاً. تستخدم نفس
-    options.gather_candidates الخام (بلا فلاتر IV/دلتا/POP -- هذي وحدة
-    كشف حجم شاذ، وليست ترتيب "أفضل عقد")، بنفس أسلوب heavy_module (CBOE
-    أولاً لسلسلة كاملة بطلب واحد)."""
+    """(عقود CALL شاذة لسهم واحد) -- الشرط الوحيد هو التصنيف نفسه (نسبة
+    Vol/OI > WHALE_RATIO_NOTABLE)؛ لا يوجد أي حد أدنى إضافي للحجم أو
+    العقود المفتوحة أو قيمة التدفق أو مدى DTE (أُزيلت كلها بطلب صريح --
+    توقّع تنبيهات أكثر ضجيجاً على الأسهم قليلة السيولة، هذا مقصود). مرتبة
+    بأعلى نسبة Vol/OI أولاً. تستخدم نفس options.gather_candidates الخام
+    (بلا فلاتر IV/دلتا/POP -- هذي وحدة كشف حجم شاذ، وليست ترتيب "أفضل
+    عقد")، بنفس أسلوب heavy_module (CBOE أولاً لسلسلة كاملة بطلب واحد).
+    عقد بعقود مفتوحة صفرية وحجم اليوم فوق الصفر يُعامَل كنسبة "لا نهائية"
+    (تفسيره: كل الاهتمام فتح اليوم -- إشارة قوية بحد ذاتها)."""
     if options._no_options.get(symbol, 0) > time.time() - options.NO_OPTIONS_TTL:
         return []
     today = dt.date.today()
-    cutoff = today + dt.timedelta(days=config.WHALE_DTE_MAX)
+    cutoff = today + dt.timedelta(days=_FETCH_WINDOW_DAYS)
     try:
         candidates, _excluded = options.gather_candidates(
             symbol, spot, today, cutoff,
-            max_expiries=config.HEAVY_MAX_EXPIRIES, min_days=config.WHALE_DTE_MIN,
+            max_expiries=config.HEAVY_MAX_EXPIRIES,
             providers=(options._cboe_candidates, options._yahoo_candidates))
     except (options.OptionsFetchError, options.NoNearTermOptions):
         return []
@@ -86,17 +95,16 @@ def _contracts_for_symbol(symbol: str, spot: float) -> list[dict]:
     results = []
     for c in candidates.get("call", []):
         oi = c["openInterest"]
-        if oi < config.WHALE_MIN_OI:
-            continue
-        ratio = c["volume"] / oi
+        if oi == 0:
+            if c["volume"] == 0:
+                continue
+            ratio = float("inf")
+        else:
+            ratio = c["volume"] / oi
         tier = _classify(ratio)
-        if tier not in ("unusual", "whale"):
-            continue
-        if c["volume"] < config.WHALE_MIN_VOLUME:
+        if tier is None:
             continue
         flow_usd = c["volume"] * c["premium"] * 100
-        if flow_usd < config.WHALE_MIN_FLOW_USD:
-            continue
         results.append(_row(symbol, spot, c, ratio, tier, flow_usd))
     results.sort(key=lambda r: -r["ratio"])
     return results
