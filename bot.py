@@ -34,7 +34,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 
 from scanner import (config, crypto_module, dashboard_data, golden_module, market_calendar,
                      options_module, positions_module, review_module, signals_db, stocks_module,
-                     webapp)
+                     webapp, whale_module)
 from scanner.state import State
 from scanner.utils import fmt_price, split_message
 
@@ -576,6 +576,28 @@ async def _position_monitor_job(context: ContextTypes.DEFAULT_TYPE):
         await _send(context.application, alert["chat_id"], alert["message"])
 
 
+async def _whale_scan_job(context: ContextTypes.DEFAULT_TYPE):
+    """يعمل كل WHALE_SCAN_INTERVAL_SECONDS (ساعة افتراضياً)، ساعات السوق
+    فقط -- نفس نمط _position_monitor_job بالضبط. لا يوجد أمر /whales
+    يدوي عمداً (طلب صريح): كل عقد شاذ جديد (لم يُسجَّل اليوم من قبل --
+    log_signal's UNIQUE constraint تمنع التكرار) يُدفع فوراً كرسالة لكل
+    عضو معتمد حالياً، بدل انتظار أحد يشغّل أمراً."""
+    if not market_calendar.market_is_open():
+        return
+    try:
+        async for row in whale_module.scan():
+            is_new = await asyncio.to_thread(signals_db.log_signal, "whale", row)
+            if not is_new:
+                continue
+            text = whale_module.format_alert(row)
+            for chat_id_str in list(state.approved):
+                chat_id = int(chat_id_str)
+                if eligible(chat_id):
+                    await _send(context.application, chat_id, text)
+    except Exception:
+        log.exception("Whale scan job failed")
+
+
 BOT_COMMANDS = [
     BotCommand("stocks", "فحص وحدة الأسهم"),
     BotCommand("options", "فحص أوبشن موحّد (Call فقط): عادي+LEAPS+HEAVY، أو /options <رمز> لسهم محدد"),
@@ -707,10 +729,15 @@ def main():
     # JobQueue job on the same Application, not tied to how updates arrive.
     app.job_queue.run_repeating(_position_monitor_job,
                                 interval=config.POSITION_MONITOR_INTERVAL_SECONDS, first=60)
+    # Whale detector: a standalone recurring push job, not a manual command --
+    # staggered first-run (120s vs the position monitor's 60s) so both heavy
+    # jobs don't fire in the same instant on a cold start.
+    app.job_queue.run_repeating(_whale_scan_job,
+                                interval=config.WHALE_SCAN_INTERVAL_SECONDS, first=120)
 
     if config.BOT_MODE != "polling" and _try_run_webhook(app):
         return
-    log.info("Bot starting (polling, manual commands only + hourly position monitor)")
+    log.info("Bot starting (polling, manual commands only + hourly position monitor + whale scan)")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 

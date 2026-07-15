@@ -554,3 +554,43 @@ POSITION_MONITOR_INTERVAL_SECONDS = _int("POSITION_MONITOR_INTERVAL_SECONDS", 36
 # rarer than an ordinary /stocks hit.
 # =====================================================================
 GOLDEN_STOCKS_FILTERS_REQUIRED = _int("GOLDEN_STOCKS_FILTERS_REQUIRED", 3)   # out of 4
+# A golden stock with a whale-backed CALL detected on it within this many
+# days gets the upgraded "⭐⭐⭐ تعافي بدعم حوت" header instead of the plain
+# "⭐ إشارة ذهبية" one -- see golden_module.check_confluence.
+GOLDEN_WHALE_LOOKBACK_DAYS = _int("GOLDEN_WHALE_LOOKBACK_DAYS", 7)
+
+# =====================================================================
+# Whale detector (scanner/whale_module.py) -- flags a likely large CALL
+# trade from a plain Vol/OI (today's volume vs open interest) ratio spike,
+# from the same free yfinance/CBOE chain data everything else here uses
+# (no paid order-flow subscription). CALL only, same as the rest of this
+# bot -- no PUT support anywhere, so this can only ever read as a bullish
+# signal, never compared against a PUT side.
+#
+# Purely a background job (bot.py's job_queue, same pattern as the hourly
+# position monitor) -- there is no manual /whales command. It runs on its
+# own schedule for as long as the bot process is up, and pushes a Telegram
+# message straight to every currently-eligible member the moment it finds
+# something new (deduplicated per contract per calendar day via
+# signals_db.log_signal's own UNIQUE constraint -- a contract that's still
+# anomalous next hour simply doesn't re-insert, so it doesn't re-alert
+# until a new calendar day).
+# =====================================================================
+WHALE_SCAN_INTERVAL_SECONDS = _int("WHALE_SCAN_INTERVAL_SECONDS", 3600)   # hourly, market hours only
+WHALE_TICKERS = HEAVY_TICKERS   # same curated mega/large/ETF list -- see its own comment above
+
+# Classification thresholds (today's volume / open interest) -- cumulative,
+# not exclusive bands: a ratio of 12 is "whale" (the highest one it clears).
+WHALE_RATIO_NOTABLE = _float("WHALE_RATIO_NOTABLE", 3.0)
+WHALE_RATIO_UNUSUAL = _float("WHALE_RATIO_UNUSUAL", 5.0)
+WHALE_RATIO_WHALE = _float("WHALE_RATIO_WHALE", 10.0)
+# Only NOTABLE never actually surfaces an alert -- see the filters below,
+# which require ratio >= WHALE_RATIO_UNUSUAL. It's classified for
+# completeness/possible future use, not silently dropped from the code.
+
+# Signal-quality filters (ALL must hold before an alert is sent):
+WHALE_MIN_OI = _int("WHALE_MIN_OI", 50)              # below this, the ratio itself is noise
+WHALE_MIN_VOLUME = _int("WHALE_MIN_VOLUME", 500)     # today's contract volume floor
+WHALE_MIN_FLOW_USD = _float("WHALE_MIN_FLOW_USD", 100_000.0)  # volume * premium * 100
+WHALE_DTE_MIN = _int("WHALE_DTE_MIN", 14)    # excludes same-week contracts (speculative noise)
+WHALE_DTE_MAX = _int("WHALE_DTE_MAX", 365)
