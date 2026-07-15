@@ -589,3 +589,11 @@ WHALE_TICKERS = HEAVY_TICKERS   # same curated mega/large/ETF list -- see its ow
 WHALE_RATIO_NOTABLE = _float("WHALE_RATIO_NOTABLE", 3.0)
 WHALE_RATIO_UNUSUAL = _float("WHALE_RATIO_UNUSUAL", 5.0)
 WHALE_RATIO_WHALE = _float("WHALE_RATIO_WHALE", 10.0)
+
+# With no quality filter left above (see the comment block above), removing
+# the volume noise floor would otherwise flood the chat -- a hard cap on
+# how many alerts one scan cycle can ever send, highest ratio first across
+# the WHOLE run (not per symbol). Requires collecting every qualifying
+# contract before sending any (see whale_module.scan) -- fine here since
+# this is a background job, not a live user-facing streamed session.
+WHALE_MAX_ALERTS_PER_RUN = _int("WHALE_MAX_ALERTS_PER_RUN", 15)

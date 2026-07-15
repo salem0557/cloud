@@ -4,7 +4,9 @@ HEAVY_TICKERS)، من نفس مصدري yfinance/CBOE الحاليين -- بلا
 بيانات مدفوع. الشرط الوحيد للتنبيه هو التصنيف نفسه (نسبة >
 WHALE_RATIO_NOTABLE) -- لا يوجد حد أدنى للحجم أو العقود المفتوحة أو قيمة
 التدفق أو مدى DTE (أُزيلت كلها بطلب صريح)، فتوقّع تنبيهات أكثر على أسهم
-قليلة السيولة حيث نسبة صغيرة الأرقام تتقلب بسهولة.
+قليلة السيولة حيث نسبة صغيرة الأرقام تتقلب بسهولة. سقف WHALE_MAX_ALERTS_PER_RUN
+(15 افتراضياً، أعلى النسب فقط) هو الحارس الوحيد ضد إغراق المحادثة بعد
+حذف تلك الفلاتر -- انظر scan().
 
 CALL فقط، مطابقة لبقية البوت الذي لا يدعم PUT إطلاقاً (انظر options.py) --
 "نشاط شاذ" هنا يعني رهاناً صعودياً محتملاً دائماً، وليس مقارنة مع الجهة
@@ -111,12 +113,17 @@ def _contracts_for_symbol(symbol: str, spot: float) -> list[dict]:
 
 
 async def scan() -> AsyncIterator[dict]:
-    """async generator تمسح WHALE_TICKERS كاملة (ترتيب عشوائي) وتُرسل
-    (yield) كل عقد شاذ مؤهل فوراً. لا يوجد cancel_event/مهلة جلسة هنا
-    عمداً -- هذي ليست جلسة يدوية يشغّلها عضو، بل تشغيلة واحدة يستدعيها
-    bot.py's job الدوري وتنتهي من تلقاء نفسها."""
+    """async generator تمسح WHALE_TICKERS كاملة (ترتيب عشوائي)، تجمع كل
+    عقد شاذ مؤهل، ثم تُرسل (yield) أعلى WHALE_MAX_ALERTS_PER_RUN منها فقط
+    بنسبة Vol/OI (أعلى النسب أولاً عبر كامل التشغيلة، وليس لكل سهم على
+    حدة) -- سقف صارم بديل عن فلاتر الجودة المحذوفة (انظر _contracts_for_symbol)
+    لمنع إغراق المحادثة. يتطلب تجميع النتائج قبل أي إرسال (بخلاف بقية
+    الوحدات اللي تبث فوراً) -- مقبول هنا لأن هذي ليست جلسة تيليجرام حية
+    ينتظرها عضو، بل تشغيلة خلفية واحدة يستدعيها bot.py's job الدوري.
+    لا يوجد cancel_event/مهلة جلسة هنا عمداً لنفس السبب."""
     watchlist = list(config.WHALE_TICKERS)
     random.shuffle(watchlist)
+    all_results: list[dict] = []
     for batch in data.make_batches(watchlist):
         try:
             frames = await asyncio.to_thread(data.fetch_batch, batch, "1d", "1mo")
@@ -134,8 +141,11 @@ async def scan() -> AsyncIterator[dict]:
             except Exception:
                 log.exception("Whale evaluation failed for %s", symbol)
                 continue
-            for c in contracts:
-                yield c
+            all_results.extend(contracts)
+
+    all_results.sort(key=lambda r: -r["ratio"])
+    for c in all_results[:config.WHALE_MAX_ALERTS_PER_RUN]:
+        yield c
 
 
 def format_alert(row: dict) -> str:
