@@ -579,6 +579,19 @@ async def _position_monitor_job(context: ContextTypes.DEFAULT_TYPE):
 _whale_scan_lock = asyncio.Lock()
 
 
+def _broadcast_recipients() -> set[int]:
+    """كل chat_id يستحق تنبيهاً جماعياً (كالحيتان) الآن -- كل أعضاء
+    state.approved المؤهلين حالياً (بلا منتهي الاشتراك) بالإضافة إلى
+    ADMIN_CHAT_ID صراحة، لأن الأدمن مؤهل عبر is_admin() بمعزل تام عن
+    state.approved وقد لا يكون مُدرَجاً فيه إطلاقاً -- الاعتماد على
+    مفاتيح state.approved وحدها (كما كان سابقاً) يُسقط الأدمن من كل بث
+    جماعي إن لم يكن عضواً "معتمداً" بالمعنى التقليدي."""
+    recipients = {int(cid) for cid in state.approved if eligible(int(cid))}
+    if config.ADMIN_CHAT_ID:
+        recipients.add(config.ADMIN_CHAT_ID)
+    return recipients
+
+
 async def _run_whale_scan(app) -> int:
     """مسحة حيتان واحدة كاملة -- تبث كل عقد شاذ جديد (لم يُسجَّل اليوم من
     قبل، log_signal's UNIQUE constraint تمنع التكرار) لكل عضو معتمد
@@ -597,10 +610,8 @@ async def _run_whale_scan(app) -> int:
             if not is_new:
                 continue
             text = whale_module.format_alert(row)
-            for chat_id_str in list(state.approved):
-                chat_id = int(chat_id_str)
-                if eligible(chat_id):
-                    await _send(app, chat_id, text)
+            for chat_id in _broadcast_recipients():
+                await _send(app, chat_id, text)
             sent += 1
         return sent
 
