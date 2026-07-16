@@ -567,14 +567,14 @@ GOLDEN_WHALE_LOOKBACK_DAYS = _int("GOLDEN_WHALE_LOOKBACK_DAYS", 7)
 # bot -- no PUT support anywhere, so this can only ever read as a bullish
 # signal, never compared against a PUT side.
 #
-# Purely a background job (bot.py's job_queue, same pattern as the hourly
-# position monitor) -- there is no manual /whales command. It runs on its
-# own schedule for as long as the bot process is up, and pushes a Telegram
-# message straight to every currently-eligible member the moment it finds
-# something new (deduplicated per contract per calendar day via
-# signals_db.log_signal's own UNIQUE constraint -- a contract that's still
-# anomalous next hour simply doesn't re-insert, so it doesn't re-alert
-# until a new calendar day).
+# Runs automatically on its own schedule (bot.py's job_queue, same pattern
+# as the hourly position monitor) for as long as the bot process is up, OR
+# on demand via the /whales command -- either path pushes a Telegram
+# message straight to every currently-eligible member (not just whoever
+# ran the command) the moment it finds something new, deduplicated per
+# contract per calendar day via signals_db.log_signal's own UNIQUE
+# constraint (a contract that's still anomalous next hour simply doesn't
+# re-insert, so it doesn't re-alert until a new calendar day).
 # =====================================================================
 WHALE_SCAN_INTERVAL_SECONDS = _int("WHALE_SCAN_INTERVAL_SECONDS", 3600)   # hourly, market hours only
 WHALE_TICKERS = HEAVY_TICKERS   # same curated mega/large/ETF list -- see its own comment above

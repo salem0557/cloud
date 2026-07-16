@@ -576,15 +576,22 @@ async def _position_monitor_job(context: ContextTypes.DEFAULT_TYPE):
         await _send(context.application, alert["chat_id"], alert["message"])
 
 
-async def _whale_scan_job(context: ContextTypes.DEFAULT_TYPE):
-    """يعمل كل WHALE_SCAN_INTERVAL_SECONDS (ساعة افتراضياً)، ساعات السوق
-    فقط -- نفس نمط _position_monitor_job بالضبط. لا يوجد أمر /whales
-    يدوي عمداً (طلب صريح): كل عقد شاذ جديد (لم يُسجَّل اليوم من قبل --
-    log_signal's UNIQUE constraint تمنع التكرار) يُدفع فوراً كرسالة لكل
-    عضو معتمد حالياً، بدل انتظار أحد يشغّل أمراً."""
-    if not market_calendar.market_is_open():
-        return
-    try:
+_whale_scan_lock = asyncio.Lock()
+
+
+async def _run_whale_scan(app) -> int:
+    """مسحة حيتان واحدة كاملة -- تبث كل عقد شاذ جديد (لم يُسجَّل اليوم من
+    قبل، log_signal's UNIQUE constraint تمنع التكرار) لكل عضو معتمد
+    حالياً، بغض النظر عمّن/ما الذي استدعى المسحة. يرجع عدد التنبيهات
+    الفعلية المُرسلة. مشتركة بين الوظيفة التلقائية الساعية
+    (_whale_scan_job) والأمر اليدوي (/whales، cmd_whales) -- قفل واحد
+    (_whale_scan_lock) يمنع تشغيلتين متزامنتين، لأن المسح يأخذ دقائق عبر
+    WHALE_TICKERS كاملة. يرجع -1 فوراً بلا أي عمل لو فيه تشغيلة شغّالة
+    بالفعل (الاستدعاء المسؤول عن الرسالة للمستخدم عن هذه الحالة)."""
+    if _whale_scan_lock.locked():
+        return -1
+    async with _whale_scan_lock:
+        sent = 0
         async for row in whale_module.scan():
             is_new = await asyncio.to_thread(signals_db.log_signal, "whale", row)
             if not is_new:
@@ -593,15 +600,55 @@ async def _whale_scan_job(context: ContextTypes.DEFAULT_TYPE):
             for chat_id_str in list(state.approved):
                 chat_id = int(chat_id_str)
                 if eligible(chat_id):
-                    await _send(context.application, chat_id, text)
+                    await _send(app, chat_id, text)
+            sent += 1
+        return sent
+
+
+async def _whale_scan_job(context: ContextTypes.DEFAULT_TYPE):
+    """يعمل كل WHALE_SCAN_INTERVAL_SECONDS (ساعة افتراضياً)، ساعات السوق
+    فقط -- نفس نمط _position_monitor_job بالضبط."""
+    if not market_calendar.market_is_open():
+        return
+    try:
+        await _run_whale_scan(context.application)
     except Exception:
         log.exception("Whale scan job failed")
+
+
+async def cmd_whales(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/whales: تشغيلة فورية يدوية، لا تنتظر الدورة التلقائية الساعية ولا
+    تشترط ساعات السوق (عكس _whale_scan_job -- هذا الأمر مخصَّص للتجربة
+    الفورية). أي عضو مؤهل يقدر يشغّلها، لكن النتائج تُبث لكل الأعضاء
+    المعتمدين حالياً بالضبط مثل الوظيفة التلقائية، وليس فقط لمن كتب
+    الأمر."""
+    if not await require_membership(update):
+        return
+    if _whale_scan_lock.locked():
+        await update.message.reply_text("⏳ فيه مسحة حيتان شغّالة بالفعل -- انتظر تكتمل.")
+        return
+    await update.message.reply_text(
+        f"🐋 بدأ مسح كاشف النشاط الشاذ يدوياً ({len(config.WHALE_TICKERS)} رمز)... "
+        "النتائج (لو وُجدت) تُبث لكل الأعضاء المعتمدين حالياً.")
+    try:
+        sent = await _run_whale_scan(context.application)
+    except Exception:
+        log.exception("Manual whale scan failed")
+        await update.message.reply_text("⚠️ حدث خطأ غير متوقع أثناء المسح.")
+        return
+    if sent == -1:
+        await update.message.reply_text("⏳ فيه مسحة حيتان شغّالة بالفعل -- انتظر تكتمل.")
+    elif sent == 0:
+        await update.message.reply_text(f"🐋 اكتمل المسح — لا توجد عقود شاذة الآن (نسبة Vol/OI > {config.WHALE_RATIO_NOTABLE:.0f}).")
+    else:
+        await update.message.reply_text(f"🐋 اكتمل المسح — أُرسل {sent} تنبيه لكل الأعضاء المعتمدين.")
 
 
 BOT_COMMANDS = [
     BotCommand("stocks", "فحص وحدة الأسهم"),
     BotCommand("options", "فحص أوبشن موحّد (Call فقط): عادي+LEAPS+HEAVY، أو /options <رمز> لسهم محدد"),
     BotCommand("crypto", "فحص وحدة الكريبتو"),
+    BotCommand("whales", "مسح كاشف النشاط الشاذ فورياً -- النتائج تُبث لكل الأعضاء المعتمدين"),
     BotCommand("review", "مراجعة الإشارات المستحقة (7/30 يوم)"),
     BotCommand("stats", "تقرير أداء من السجل التاريخي"),
     BotCommand("track", "متابعة مركز: /track TICKER STRIKE EXPIRY PRICE TYPE"),
@@ -718,6 +765,7 @@ def main():
     app.add_handler(CommandHandler("stocks", cmd_stocks))
     app.add_handler(CommandHandler("options", cmd_options))
     app.add_handler(CommandHandler("crypto", cmd_crypto))
+    app.add_handler(CommandHandler("whales", cmd_whales))
     app.add_handler(CommandHandler("review", cmd_review))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("track", cmd_track))
