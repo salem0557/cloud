@@ -33,8 +33,8 @@ from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from scanner import (config, crypto_module, dashboard_data, golden_module, market_calendar,
-                     options_module, positions_module, review_module, signals_db, stocks_module,
-                     webapp)
+                     new_options_module, options_module, positions_module, review_module,
+                     signals_db, stocks_module, webapp)
 from scanner.state import State
 from scanner.utils import fmt_price, split_message
 
@@ -290,6 +290,20 @@ def _session_minutes() -> int:
 
 # --------------------------------------------------------------- commands
 
+async def _send_market_status_line(chat_id: int, app):
+    """سطر حالة السوق (Massive.com) يُرسَل كمتابعة بعد رسالة "بدأ الفحص" --
+    بدون انتظار (fire-and-forget عبر asyncio.create_task عند الاستدعاء)
+    حتى لا يؤخّر رد الإقرار الفوري لو كان قيد المعدّل مشغولاً بحلقة رصد
+    الإدراج الخلفية. يُرسل بصمت بلا شيء لو تعذّر الجلب."""
+    try:
+        line = await new_options_module.market_status_line()
+    except Exception:
+        log.exception("Market status line fetch failed")
+        return
+    if line:
+        await _send(app, chat_id, line)
+
+
 async def cmd_stocks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_membership(update):
         return
@@ -300,6 +314,7 @@ async def cmd_stocks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"📈 بدأ فحص وحدة الأسهم ({len(config.STOCKS_WATCHLIST)} سهم)... "
         f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
+    asyncio.create_task(_send_market_status_line(chat_id, context.application))
     _start_session(chat_id, _run_watchlist_session(
         chat_id, "📈 نتائج فحص الأسهم", stocks_module.scan, stocks_module.format_result,
         context.application, section="stocks"), kind="watchlist")
@@ -328,6 +343,7 @@ async def cmd_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"({config.LEAPS_DTE_MIN}+ يوم) + HEAVY (Mega/Large/ETF)، "
             f"{len(config.OPTIONS_WATCHLIST)} سهم + {len(config.HEAVY_TICKERS)} رمز مختار... "
             f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
+        asyncio.create_task(_send_market_status_line(chat_id, context.application))
         _start_session(chat_id, _run_watchlist_session(
             chat_id, "📊 نتائج فحص الأوبشن الموحّد (Call فقط)", options_module.scan_all,
             options_module.format_any, context.application, section="options"), kind="watchlist")
@@ -343,6 +359,7 @@ async def cmd_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"🪙 بدأ فحص وحدة الكريبتو ({len(config.CRYPTO_WATCHLIST)} عملة)... "
         f"حتى {_session_minutes()} دقيقة أو /stop للإيقاف الفوري.")
+    asyncio.create_task(_send_market_status_line(chat_id, context.application))
     _start_session(chat_id, _run_watchlist_session(
         chat_id, "🪙 نتائج فحص الكريبتو", crypto_module.scan, crypto_module.format_result,
         context.application, section="crypto"), kind="watchlist")
@@ -576,6 +593,35 @@ async def _position_monitor_job(context: ContextTypes.DEFAULT_TYPE):
         await _send(context.application, alert["chat_id"], alert["message"])
 
 
+def _broadcast_recipients() -> set[int]:
+    """كل chat_id يستحق تنبيهاً جماعياً (كإدراج عقد جديد) الآن -- كل
+    أعضاء state.approved المؤهلين حالياً بالإضافة إلى ADMIN_CHAT_ID
+    صراحة، لأن الأدمن مؤهل عبر is_admin() بمعزل تام عن state.approved
+    وقد لا يكون مُدرَجاً فيه إطلاقاً."""
+    recipients = {int(cid) for cid in state.approved if eligible(int(cid))}
+    if config.ADMIN_CHAT_ID:
+        recipients.add(config.ADMIN_CHAT_ID)
+    return recipients
+
+
+async def _new_listing_watch_task(app: Application):
+    """حلقة خلفية دائمة (تُبدأ مرة واحدة من post_init، بنفس نمط
+    webapp.start_dashboard) تلتف حول new_options_module.watch_new_listings
+    وتبث كل عقد إدراج جديد مؤهل لكل الأعضاء المعتمدين حالياً. فشل غير
+    متوقّع يُسجَّل ولا يُعاد تشغيل الحلقة تلقائياً (نفس تعامل webapp) --
+    مهمة خلفية اختيارية، فشلها لا يجب أن يزعج البوت الأساسي."""
+    try:
+        async for row in new_options_module.watch_new_listings():
+            is_new = await asyncio.to_thread(signals_db.log_signal, "options", row)
+            if not is_new:
+                continue
+            text = new_options_module.format_new_listing_alert(row)
+            for chat_id in _broadcast_recipients():
+                await _send(app, chat_id, text)
+    except Exception:
+        log.exception("New-listing watch task failed")
+
+
 BOT_COMMANDS = [
     BotCommand("stocks", "فحص وحدة الأسهم"),
     BotCommand("options", "فحص أوبشن موحّد (Call فقط): عادي+LEAPS+HEAVY، أو /options <رمز> لسهم محدد"),
@@ -636,6 +682,12 @@ async def post_init(app: Application):
     # A failed/duplicate start here must never take down the Telegram bot
     # itself -- see webapp.start_dashboard's own idempotency/try-except.
     asyncio.create_task(webapp.start_dashboard())
+
+    # Perpetual background loop (not a periodic job_queue tick -- it never
+    # stops iterating, paced internally by Massive's own rate limit) for
+    # the new-options-listing watch. No-ops safely if MASSIVE_API_KEY isn't
+    # set (see new_options_module.watch_new_listings).
+    asyncio.create_task(_new_listing_watch_task(app))
 
 
 def _try_run_webhook(app: Application, run_webhook=None, delete_webhook=None) -> bool:

@@ -554,3 +554,33 @@ POSITION_MONITOR_INTERVAL_SECONDS = _int("POSITION_MONITOR_INTERVAL_SECONDS", 36
 # rarer than an ordinary /stocks hit.
 # =====================================================================
 GOLDEN_STOCKS_FILTERS_REQUIRED = _int("GOLDEN_STOCKS_FILTERS_REQUIRED", 3)   # out of 4
+
+# =====================================================================
+# Massive.com integration (scanner/new_options_module.py) -- api.massive.com,
+# a free-tier market-data API (5 requests/minute, delayed data) used for two
+# independent things sharing one rate-limited client:
+#
+# 1) New-options-listing watch: a perpetual background loop (no manual
+#    command) over NEW_LISTING_WATCHLIST, calling Massive's contracts
+#    reference endpoint just to check "does this symbol have any listed
+#    options contracts right now" (cheap: limit=1, no pricing data needed
+#    from Massive at all). A false -> true transition means a listing just
+#    appeared; the actual contract this alerts on is then evaluated through
+#    this bot's OWN existing yfinance/CBOE + Black-Scholes pipeline
+#    (options_module._contracts_for_symbol, same OPTIONS_ASK_MAX/
+#    OPTIONS_MIN_POP bar as /options) rather than burning more of Massive's
+#    5/min budget on pricing -- Massive is only ever asked "does it exist".
+#
+# 2) Market status/holidays: fetched once per manual session start
+#    (/stocks, /options, /crypto) as a quick informational follow-up line --
+#    never blocks the session itself, silently omitted if the request fails
+#    or MASSIVE_API_KEY isn't set.
+#
+# The whole feature no-ops (background loop logs a warning and returns
+# immediately; the status line is just never sent) if MASSIVE_API_KEY isn't
+# configured -- never a hard requirement to run the bot.
+# =====================================================================
+MASSIVE_API_KEY = os.environ.get("MASSIVE_API_KEY") or None
+MASSIVE_BASE_URL = os.environ.get("MASSIVE_BASE_URL", "https://api.massive.com")
+MASSIVE_RATE_LIMIT_PER_MINUTE = _int("MASSIVE_RATE_LIMIT_PER_MINUTE", 5)   # free tier
+NEW_LISTING_WATCHLIST = HEAVY_TICKERS   # same curated mega/large/ETF list -- see its own comment above

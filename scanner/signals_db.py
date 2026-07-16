@@ -90,6 +90,19 @@ _POSITIONS_INDEXES = [
 ]
 _ALERT_COLUMNS = {"alerted_stoploss", "alerted_profit", "alerted_timestop", "alerted_theta"}
 
+# scanner/new_options_module.py's Massive.com-backed new-listing watch:
+# remembers whether each symbol had any options contracts listed the last
+# time it was checked, so it can detect a false -> true transition ("a
+# listing just appeared") instead of alerting on every symbol that already
+# has options on the very first check ever made.
+_LISTING_STATE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS option_listing_state (
+    symbol TEXT PRIMARY KEY,
+    has_contracts INTEGER NOT NULL,
+    checked_ts REAL NOT NULL
+)
+"""
+
 
 @contextmanager
 def _db():
@@ -112,6 +125,7 @@ def init_db() -> None:
         conn.execute(_POSITIONS_SCHEMA)
         for stmt in _POSITIONS_INDEXES:
             conn.execute(stmt)
+        conn.execute(_LISTING_STATE_SCHEMA)
 
 
 def _row_fields(section: str, row: dict) -> dict:
@@ -275,6 +289,28 @@ def fetch_signal_by_id(signal_id: int) -> sqlite3.Row | None:
     expiry which could theoretically collide across sections)."""
     with _db() as conn:
         return conn.execute("SELECT * FROM signals WHERE id=?", (signal_id,)).fetchone()
+
+
+def get_listing_state(symbol: str) -> bool | None:
+    """None = never checked before (the caller must NOT treat this as a
+    transition -- see new_options_module.py). Otherwise whether `symbol`
+    had any options contracts listed the last time it was checked."""
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT has_contracts FROM option_listing_state WHERE symbol=?",
+            (symbol,)).fetchone()
+        return bool(row["has_contracts"]) if row is not None else None
+
+
+def set_listing_state(symbol: str, has_contracts: bool, ts: float | None = None) -> None:
+    ts = ts if ts is not None else time.time()
+    with _db() as conn:
+        conn.execute(
+            """INSERT INTO option_listing_state (symbol, has_contracts, checked_ts)
+               VALUES (?, ?, ?)
+               ON CONFLICT(symbol) DO UPDATE SET has_contracts=excluded.has_contracts,
+                                                  checked_ts=excluded.checked_ts""",
+            (symbol, int(has_contracts), ts))
 
 
 def fetch_catalog_signals(max_age_days: int, limit: int = 300) -> list[sqlite3.Row]:
