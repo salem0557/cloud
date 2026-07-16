@@ -604,6 +604,20 @@ def _broadcast_recipients() -> set[int]:
     return recipients
 
 
+async def _log_and_broadcast_signal(app, row: dict) -> bool:
+    """يسجّل صفاً واحداً (إدراج جديد أو ارتداد) بـsignals.db ويبثّه لكل
+    الأعضاء المعتمدين فقط لو كان جديداً فعلاً (log_signal's UNIQUE
+    constraint يمنع التكرار بنفس اليوم). يرجع True لو أُرسل تنبيه فعلاً
+    -- أساس مشترك بين الحلقة الخلفية الدائمة والأمر اليدوي /newoptions."""
+    is_new = await asyncio.to_thread(signals_db.log_signal, "options", row)
+    if not is_new:
+        return False
+    text = new_options_module.format_alert(row)
+    for chat_id in _broadcast_recipients():
+        await _send(app, chat_id, text)
+    return True
+
+
 async def _new_listing_watch_task(app: Application):
     """حلقة خلفية دائمة (تُبدأ مرة واحدة من post_init، بنفس نمط
     webapp.start_dashboard) تلتف حول new_options_module.watch_options_signals
@@ -613,20 +627,54 @@ async def _new_listing_watch_task(app: Application):
     يزعج البوت الأساسي."""
     try:
         async for row in new_options_module.watch_options_signals():
-            is_new = await asyncio.to_thread(signals_db.log_signal, "options", row)
-            if not is_new:
-                continue
-            text = new_options_module.format_alert(row)
-            for chat_id in _broadcast_recipients():
-                await _send(app, chat_id, text)
+            await _log_and_broadcast_signal(app, row)
     except Exception:
         log.exception("New-listing watch task failed")
+
+
+_options_scan_lock = asyncio.Lock()
+
+
+async def cmd_newoptions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/newoptions: تشغيلة يدوية فورية لمسحة واحدة كاملة (وليست حلقة
+    أبدية) عبر new_options_module.scan_once -- للتجربة الفورية بدل انتظار
+    الحلقة الخلفية الدائمة. أي عضو مؤهل يقدر يشغّلها، لكن النتائج تُبث
+    لكل الأعضاء المعتمدين حالياً، وليس فقط لمن كتب الأمر. قفل مستقل
+    (_options_scan_lock) يمنع تشغيلتين يدويتين متزامنتين فقط -- لا
+    يتنافس مع الحلقة الخلفية الدائمة (المسحتان تتشاركان نفس قيد المعدّل
+    العالمي في new_options_module، فتبقيان آمنتين حتى لو تداخلتا)."""
+    if not await require_membership(update):
+        return
+    if not config.MASSIVE_API_KEY:
+        await update.message.reply_text("⚠️ ميزة Massive.com غير مفعّلة (MASSIVE_API_KEY غير مضبوط).")
+        return
+    if _options_scan_lock.locked():
+        await update.message.reply_text("⏳ فيه مسحة شغّالة بالفعل -- انتظر تكتمل.")
+        return
+    await update.message.reply_text(
+        f"🔎 بدأ فحص إدراج/ارتداد يدوي ({len(config.NEW_LISTING_WATCHLIST)} رمز، بالتمهل "
+        f"حسب حد Massive)... قد يأخذ عدة دقائق. النتائج (لو وُجدت) تُبث لكل الأعضاء المعتمدين.")
+    try:
+        async with _options_scan_lock:
+            sent = 0
+            async for row in new_options_module.scan_once():
+                if await _log_and_broadcast_signal(context.application, row):
+                    sent += 1
+    except Exception:
+        log.exception("Manual options scan failed")
+        await update.message.reply_text("⚠️ حدث خطأ غير متوقع أثناء الفحص.")
+        return
+    if sent == 0:
+        await update.message.reply_text("🔎 اكتمل الفحص — لا إدراجات جديدة أو عقود مرتدة الآن.")
+    else:
+        await update.message.reply_text(f"🔎 اكتمل الفحص — أُرسل {sent} تنبيه لكل الأعضاء المعتمدين.")
 
 
 BOT_COMMANDS = [
     BotCommand("stocks", "فحص وحدة الأسهم"),
     BotCommand("options", "فحص أوبشن موحّد (Call فقط): عادي+LEAPS+HEAVY، أو /options <رمز> لسهم محدد"),
     BotCommand("crypto", "فحص وحدة الكريبتو"),
+    BotCommand("newoptions", "فحص فوري لإدراج عقود جديدة/عقود رخيصة ترتد (Massive.com) -- النتائج تُبث للجميع"),
     BotCommand("review", "مراجعة الإشارات المستحقة (7/30 يوم)"),
     BotCommand("stats", "تقرير أداء من السجل التاريخي"),
     BotCommand("track", "متابعة مركز: /track TICKER STRIKE EXPIRY PRICE TYPE"),
@@ -749,6 +797,7 @@ def main():
     app.add_handler(CommandHandler("stocks", cmd_stocks))
     app.add_handler(CommandHandler("options", cmd_options))
     app.add_handler(CommandHandler("crypto", cmd_crypto))
+    app.add_handler(CommandHandler("newoptions", cmd_newoptions))
     app.add_handler(CommandHandler("review", cmd_review))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("track", cmd_track))

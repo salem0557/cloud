@@ -180,42 +180,50 @@ async def _bounce_candidates(symbol: str, contracts: list[dict]) -> list[dict]:
     return rows
 
 
+async def scan_once() -> AsyncIterator[dict]:
+    """تمسح NEW_LISTING_WATCHLIST مرة واحدة فقط (وليست حلقة أبدية) --
+    تُرسل (yield) كل عقد إدراج جديد أو عقد رخيص يرتد فور رصده، كل صف
+    مُعلَّم بـ"alert_kind" ("new_listing" | "bounce") ليختار format_alert
+    العنوان المناسب. فشل مؤقت على رمز واحد لا يوقف المسح عن بقية القائمة.
+    الأساس المشترك بين الحلقة الخلفية الدائمة (watch_options_signals)
+    وأي تشغيلة يدوية فورية (bot.py's /newoptions) -- بلا تكرار منطق."""
+    for symbol in config.NEW_LISTING_WATCHLIST:
+        try:
+            contracts = await _fetch_chain_snapshot(symbol)
+        except Exception:
+            log.exception("Chain snapshot fetch failed for %s", symbol)
+            continue
+        if contracts is None:
+            continue
+        has_now = bool(contracts)
+
+        try:
+            is_new_listing = await _check_new_listing(symbol, has_now)
+        except Exception:
+            log.exception("New-listing check failed for %s", symbol)
+            is_new_listing = False
+        if is_new_listing:
+            row = await _evaluate_new_listing(symbol)
+            if row is not None:
+                yield {**row, "alert_kind": "new_listing"}
+
+        if not has_now:
+            continue
+        for row in await _bounce_candidates(symbol, contracts):
+            yield {**row, "alert_kind": "bounce"}
+
+
 async def watch_options_signals() -> AsyncIterator[dict]:
-    """حلقة خلفية دائمة (لا تتوقف طالما البوت شغّال) تمسح
-    NEW_LISTING_WATCHLIST بترتيبها بالتمهل (فاصل زمني محكوم بقيد المعدّل
-    العالمي، طلب Massive واحد فقط لكل سهم كل دورة)، وتُرسل (yield) كل
-    عقد إدراج جديد أو عقد رخيص يرتد فور رصده -- كل صف مُعلَّم بـ
-    "alert_kind" ("new_listing" | "bounce") ليختار format_alert العنوان
-    المناسب. فشل مؤقت على رمز واحد لا يوقف الحلقة عن بقية القائمة. تنتهي
-    فوراً بصمت (بعد تحذير واحد) لو MASSIVE_API_KEY غير مضبوط."""
+    """حلقة خلفية دائمة (لا تتوقف طالما البوت شغّال) تعيد scan_once باستمرار
+    بترتيبها بالتمهل (فاصل زمني محكوم بقيد المعدّل العالمي، طلب Massive
+    واحد فقط لكل سهم كل دورة). تنتهي فوراً بصمت (بعد تحذير واحد) لو
+    MASSIVE_API_KEY غير مضبوط."""
     if not config.MASSIVE_API_KEY:
         log.warning("MASSIVE_API_KEY not set -- options signal watch disabled")
         return
     while True:
-        for symbol in config.NEW_LISTING_WATCHLIST:
-            try:
-                contracts = await _fetch_chain_snapshot(symbol)
-            except Exception:
-                log.exception("Chain snapshot fetch failed for %s", symbol)
-                continue
-            if contracts is None:
-                continue
-            has_now = bool(contracts)
-
-            try:
-                is_new_listing = await _check_new_listing(symbol, has_now)
-            except Exception:
-                log.exception("New-listing check failed for %s", symbol)
-                is_new_listing = False
-            if is_new_listing:
-                row = await _evaluate_new_listing(symbol)
-                if row is not None:
-                    yield {**row, "alert_kind": "new_listing"}
-
-            if not has_now:
-                continue
-            for row in await _bounce_candidates(symbol, contracts):
-                yield {**row, "alert_kind": "bounce"}
+        async for row in scan_once():
+            yield row
 
 
 def format_alert(row: dict) -> str:
