@@ -557,19 +557,27 @@ GOLDEN_STOCKS_FILTERS_REQUIRED = _int("GOLDEN_STOCKS_FILTERS_REQUIRED", 3)   # o
 
 # =====================================================================
 # Massive.com integration (scanner/new_options_module.py) -- api.massive.com,
-# a free-tier market-data API (5 requests/minute, delayed data) used for two
-# independent things sharing one rate-limited client:
+# a free-tier market-data API (5 requests/minute, delayed data) used for
+# three things sharing one rate-limited client:
 #
-# 1) New-options-listing watch: a perpetual background loop (no manual
-#    command) over NEW_LISTING_WATCHLIST, calling Massive's contracts
-#    reference endpoint just to check "does this symbol have any listed
-#    options contracts right now" (cheap: limit=1, no pricing data needed
-#    from Massive at all). A false -> true transition means a listing just
-#    appeared; the actual contract this alerts on is then evaluated through
-#    this bot's OWN existing yfinance/CBOE + Black-Scholes pipeline
-#    (options_module._contracts_for_symbol, same OPTIONS_ASK_MAX/
-#    OPTIONS_MIN_POP bar as /options) rather than burning more of Massive's
-#    5/min budget on pricing -- Massive is only ever asked "does it exist".
+# 1) New-options-listing watch + cheap-contract-bouncing watch: ONE
+#    perpetual background loop (no manual command) over
+#    NEW_LISTING_WATCHLIST that spends exactly ONE Massive request per
+#    symbol per cycle (the Options Chain Snapshot endpoint -- the whole
+#    contract list for that symbol in one reply) and serves BOTH signals
+#    from that single response instead of doubling the request budget:
+#      - existence: a false -> true transition since the last check means
+#        a listing just appeared; the actual alerted contract is then
+#        evaluated through this bot's OWN existing yfinance/CBOE +
+#        Black-Scholes pipeline (options_module._contracts_for_symbol,
+#        same OPTIONS_ASK_MAX/OPTIONS_MIN_POP bar as /options) rather than
+#        spending more of Massive's budget on pricing.
+#      - bounce: any CALL in that same snapshot reply that's still cheap
+#        (premium <= OPTIONS_ASK_MAX) AND moved up meaningfully today
+#        (day.change_percent, already in the same reply -- no extra
+#        request) clears BOUNCE_MIN_DAY_CHANGE_PCT -- POP is computed the
+#        same Black-Scholes way, spot price comes from yfinance (free),
+#        not Massive.
 #
 # 2) Market status/holidays: fetched once per manual session start
 #    (/stocks, /options, /crypto) as a quick informational follow-up line --
@@ -584,3 +592,7 @@ MASSIVE_API_KEY = os.environ.get("MASSIVE_API_KEY") or None
 MASSIVE_BASE_URL = os.environ.get("MASSIVE_BASE_URL", "https://api.massive.com")
 MASSIVE_RATE_LIMIT_PER_MINUTE = _int("MASSIVE_RATE_LIMIT_PER_MINUTE", 5)   # free tier
 NEW_LISTING_WATCHLIST = HEAVY_TICKERS   # same curated mega/large/ETF list -- see its own comment above
+# A cheap contract's day-over-day % move needed to count as "bouncing"
+# (e.g. 8.0 = +8% today) -- on top of the existing OPTIONS_ASK_MAX (still
+# cheap) and OPTIONS_MIN_POP (real Black-Scholes odds) bars.
+BOUNCE_MIN_DAY_CHANGE_PCT = _float("BOUNCE_MIN_DAY_CHANGE_PCT", 8.0)

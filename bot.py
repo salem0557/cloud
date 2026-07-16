@@ -606,16 +606,17 @@ def _broadcast_recipients() -> set[int]:
 
 async def _new_listing_watch_task(app: Application):
     """حلقة خلفية دائمة (تُبدأ مرة واحدة من post_init، بنفس نمط
-    webapp.start_dashboard) تلتف حول new_options_module.watch_new_listings
-    وتبث كل عقد إدراج جديد مؤهل لكل الأعضاء المعتمدين حالياً. فشل غير
-    متوقّع يُسجَّل ولا يُعاد تشغيل الحلقة تلقائياً (نفس تعامل webapp) --
-    مهمة خلفية اختيارية، فشلها لا يجب أن يزعج البوت الأساسي."""
+    webapp.start_dashboard) تلتف حول new_options_module.watch_options_signals
+    (إدراج جديد + عقود رخيصة ترتد معاً) وتبث كل عقد مؤهل لكل الأعضاء
+    المعتمدين حالياً. فشل غير متوقّع يُسجَّل ولا يُعاد تشغيل الحلقة
+    تلقائياً (نفس تعامل webapp) -- مهمة خلفية اختيارية، فشلها لا يجب أن
+    يزعج البوت الأساسي."""
     try:
-        async for row in new_options_module.watch_new_listings():
+        async for row in new_options_module.watch_options_signals():
             is_new = await asyncio.to_thread(signals_db.log_signal, "options", row)
             if not is_new:
                 continue
-            text = new_options_module.format_new_listing_alert(row)
+            text = new_options_module.format_alert(row)
             for chat_id in _broadcast_recipients():
                 await _send(app, chat_id, text)
     except Exception:
@@ -686,7 +687,7 @@ async def post_init(app: Application):
     # Perpetual background loop (not a periodic job_queue tick -- it never
     # stops iterating, paced internally by Massive's own rate limit) for
     # the new-options-listing watch. No-ops safely if MASSIVE_API_KEY isn't
-    # set (see new_options_module.watch_new_listings).
+    # set (see new_options_module.watch_options_signals).
     asyncio.create_task(_new_listing_watch_task(app))
 
 

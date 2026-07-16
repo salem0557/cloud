@@ -1,17 +1,24 @@
 """تكامل Massive.com (api.massive.com) -- مزوّد بيانات سوق مجاني بحد 5
-طلبات/دقيقة على الطبقة المجانية (بيانات متأخرة)، يُستخدم لميزتين
-مستقلتين تماماً تشتركان بعميل واحد مقيَّد المعدّل (_rate_limited_get):
+طلبات/دقيقة على الطبقة المجانية (بيانات متأخرة)، يُستخدم لثلاث ميزات
+تشترك بعميل واحد مقيَّد المعدّل (_rate_limited_get):
 
-1) رصد إدراج عقود CALL جديدة (watch_new_listings): مهمة خلفية دائمة
-   (بلا أمر يدوي، تبدأ من bot.py's post_init وتعمل طالما البوت شغّال)
-   تمسح NEW_LISTING_WATCHLIST بالتمهل -- طلب واحد فقط لكل سهم كل دورة
-   (GET /v3/reference/options/contracts?underlying_ticker=X&limit=1) فقط
-   للتحقق "هل عند هذا السهم أي عقد مُدرَج الآن؟"، بلا أي بيانات تسعير من
-   Massive إطلاقاً. سهم كان بلا عقود آخر فحص وصار عنده عقود الآن = إدراج
-   جديد -- عندها تُقيَّم عقوده الفعلية بخط أنابيب البوت الحالي تماماً
-   (yfinance/CBOE + probability_module عبر options_module._contracts_for_symbol،
-   بنفس فلاتر /options العامة: OPTIONS_ASK_MAX 200$/عقد وOPTIONS_MIN_POP
-   45% فأعلى) بدل استهلاك المزيد من حصة Massive الضئيلة على التسعير.
+1) رصد إدراج عقود CALL جديدة + عقود رخيصة ترتد (watch_options_signals):
+   مهمة خلفية دائمة (بلا أمر يدوي، تبدأ من bot.py's post_init) تمسح
+   NEW_LISTING_WATCHLIST بالتمهل -- **طلب Massive واحد فقط لكل سهم كل
+   دورة** (GET /v3/snapshot/options/{symbol}، سلسلة العقود كاملة بردّ
+   واحد) يخدم غرضين معاً بدل مضاعفة الاستهلاك:
+     - الوجود: سهم كان بلا عقود آخر فحص وصار عنده عقود الآن = إدراج
+       جديد 🎉 -- عندها يُقيَّم العقد الفعلي بخط أنابيب البوت الحالي
+       تماماً (yfinance/CBOE + probability_module عبر
+       options_module._contracts_for_symbol، بنفس فلاتر /options
+       العامة) بدل استهلاك المزيد من حصة Massive على التسعير.
+     - الارتداد: من نفس الرد، أي عقد CALL لسعره حالياً ضمن سقف
+       OPTIONS_ASK_MAX (رخيص) وتغيّره اليومي (day.change_percent، من
+       نفس الرد -- بلا طلب إضافي) إيجابي بوضوح (>= BOUNCE_MIN_DAY_CHANGE_PCT)
+       يُعتبر "عقد كان رخيصاً وبدأ يرتد اليوم" 📈 -- يُحسَب POP له عبر
+       probability_module بنفس المنطق (سعر السهم يُجلب من yfinance
+       مجاناً، لا من Massive).
+   فشل مؤقت على رمز واحد لا يوقف الحلقة عن بقية القائمة.
 
 2) حالة السوق والعطلات (market_status_line): تُستدعى مرة واحدة عند بدء
    أي جلسة يدوية (/stocks، /options، /crypto) كسطر معلوماتي يُرسَل بعد
@@ -30,7 +37,7 @@ from collections.abc import AsyncIterator
 
 import requests
 
-from . import config, data, options, options_module, signals_db
+from . import config, data, options, options_module, probability_module as pm, signals_db
 
 log = logging.getLogger(__name__)
 
@@ -66,25 +73,23 @@ async def _rate_limited_get(path: str, params: dict) -> dict | list | None:
 
 # ------------------------------------------------------ new-listing watch
 
-async def has_options_contracts(symbol: str) -> bool | None:
-    """None = الطلب فشل (يُعاد المحاولة بالدورة التالية بلا لمس الحالة
-    المخزَّنة). خلاف ذلك: هل عند هذا السهم عقد مُدرَج واحد على الأقل
-    الآن -- limit=1 يكفي، لا حاجة لأكثر من عقد واحد للتحقق من الوجود."""
-    payload = await _rate_limited_get(
-        "/v3/reference/options/contracts", {"underlying_ticker": symbol, "limit": 1})
+async def _fetch_chain_snapshot(symbol: str) -> list[dict] | None:
+    """None = الطلب فشل (يُعاد المحاولة بالدورة التالية بلا لمس أي حالة
+    مخزَّنة). خلاف ذلك، قائمة كل عقود السهم الحالية (فارغة لو بلا عقود
+    إطلاقاً) -- ردّ واحد يخدم كلاً من فحص الإدراج الجديد وكشف الارتداد
+    معاً، طلب Massive واحد فقط لكل سهم لكل دورة."""
+    payload = await _rate_limited_get(f"/v3/snapshot/options/{symbol}", {})
     if not isinstance(payload, dict):
         return None
-    return bool(payload.get("results"))
+    results = payload.get("results")
+    return results if isinstance(results, list) else []
 
 
-async def _check_new_listing(symbol: str) -> bool:
+async def _check_new_listing(symbol: str, has_now: bool) -> bool:
     """True فقط لو تحقق انتقال صريح من "بلا عقود" إلى "عنده عقود" منذ
     آخر فحص مخزَّن -- أول فحص لأي سهم إطلاقاً (had_before is None) لا
     يُعتبر إدراجاً جديداً أبداً، وإلا لأنبّه على كل سهم عنده عقود أصلاً
     فور أول تشغيلة."""
-    has_now = await has_options_contracts(symbol)
-    if has_now is None:
-        return False
     had_before = await asyncio.to_thread(signals_db.get_listing_state, symbol)
     await asyncio.to_thread(signals_db.set_listing_state, symbol, has_now)
     return had_before is False and has_now
@@ -111,32 +116,113 @@ async def _evaluate_new_listing(symbol: str) -> dict | None:
     return contracts[0] if contracts else None
 
 
-async def watch_new_listings() -> AsyncIterator[dict]:
+def _row_from_snapshot_contract(symbol: str, spot: float, contract: dict) -> dict | None:
+    """يبني صفاً بنفس شكل صفوف options_module (نفس الحقول اللي يحتاجها
+    format_result) من عقد واحد داخل رد Option Chain Snapshot -- None لو
+    العقد PUT، أو حقل أساسي ناقص، أو لا يعدّي شرطي "رخيص + يرتد اليوم"
+    (سعر <= OPTIONS_ASK_MAX وتغيّر يومي >= BOUNCE_MIN_DAY_CHANGE_PCT)، أو
+    لم يحسب POP >= OPTIONS_MIN_POP فعلياً."""
+    details = contract.get("details") or {}
+    if details.get("contract_type") != "call":
+        return None
+    strike = details.get("strike_price")
+    expiry = details.get("expiration_date")
+    day = contract.get("day") or {}
+    premium = day.get("close")
+    change_pct = day.get("change_percent")
+    iv = contract.get("implied_volatility")
+    if strike is None or expiry is None or premium is None or change_pct is None or iv is None:
+        return None
+    if premium <= 0 or premium > config.OPTIONS_ASK_MAX:
+        return None
+    if change_pct < config.BOUNCE_MIN_DAY_CHANGE_PCT:
+        return None
+    try:
+        days = (dt.date.fromisoformat(expiry) - dt.date.today()).days
+    except ValueError:
+        return None
+    if days <= 0:
+        return None
+
+    be = pm.breakeven(strike, premium, is_call=True)
+    pop = pm.probability_of_profit(spot, be, days, iv, is_call=True)
+    if pop is None or pop < config.OPTIONS_MIN_POP:
+        return None
+    avg_profit = pm.expected_profit(spot * 1.10, strike, premium, days, iv, is_call=True)
+    ev = pm.expected_value(pop, avg_profit, pm.max_loss(premium)) if avg_profit is not None else None
+
+    return {
+        "symbol": symbol, "spot": spot, "side": "call",
+        "strike": strike, "expiry": expiry, "days": days,
+        "premium": premium, "estimated": False,
+        "delta": (contract.get("greeks") or {}).get("delta"), "iv": iv,
+        "cost": round(premium * 100, 2),
+        "breakeven": round(be, 2),
+        "probability_of_profit": round(pop, 1),
+        "expected_value": round(ev, 2) if ev is not None else None,
+        "day_change_pct": change_pct,
+    }
+
+
+async def _bounce_candidates(symbol: str, contracts: list[dict]) -> list[dict]:
+    """أسهم بلا سعر حالي (فشل جلب yfinance) تُتجاوز بصمت لهذه الدورة --
+    ليست شرط وجود، فقط تعذّر مؤقت."""
+    try:
+        frames = await asyncio.to_thread(data.fetch_batch, [symbol], "1d", "1mo")
+        df = frames.get(symbol)
+        if df is None or df.empty:
+            return []
+        spot = float(df["Close"].iloc[-1])
+    except Exception:
+        return []
+    rows = [r for c in contracts if (r := _row_from_snapshot_contract(symbol, spot, c)) is not None]
+    rows.sort(key=lambda r: -r["day_change_pct"])
+    return rows
+
+
+async def watch_options_signals() -> AsyncIterator[dict]:
     """حلقة خلفية دائمة (لا تتوقف طالما البوت شغّال) تمسح
     NEW_LISTING_WATCHLIST بترتيبها بالتمهل (فاصل زمني محكوم بقيد المعدّل
-    العالمي)، وتُرسل (yield) كل عقد إدراج جديد مؤهل فور رصده. فشل مؤقت
-    على رمز واحد (شبكة، بيانات غير موثوقة) لا يوقف الحلقة عن بقية
-    القائمة -- تتجاوزه وتكمل. تنتهي فوراً بصمت (بعد تحذير واحد) لو
-    MASSIVE_API_KEY غير مضبوط."""
+    العالمي، طلب Massive واحد فقط لكل سهم كل دورة)، وتُرسل (yield) كل
+    عقد إدراج جديد أو عقد رخيص يرتد فور رصده -- كل صف مُعلَّم بـ
+    "alert_kind" ("new_listing" | "bounce") ليختار format_alert العنوان
+    المناسب. فشل مؤقت على رمز واحد لا يوقف الحلقة عن بقية القائمة. تنتهي
+    فوراً بصمت (بعد تحذير واحد) لو MASSIVE_API_KEY غير مضبوط."""
     if not config.MASSIVE_API_KEY:
-        log.warning("MASSIVE_API_KEY not set -- new-listing watch disabled")
+        log.warning("MASSIVE_API_KEY not set -- options signal watch disabled")
         return
     while True:
         for symbol in config.NEW_LISTING_WATCHLIST:
             try:
-                is_new = await _check_new_listing(symbol)
+                contracts = await _fetch_chain_snapshot(symbol)
+            except Exception:
+                log.exception("Chain snapshot fetch failed for %s", symbol)
+                continue
+            if contracts is None:
+                continue
+            has_now = bool(contracts)
+
+            try:
+                is_new_listing = await _check_new_listing(symbol, has_now)
             except Exception:
                 log.exception("New-listing check failed for %s", symbol)
+                is_new_listing = False
+            if is_new_listing:
+                row = await _evaluate_new_listing(symbol)
+                if row is not None:
+                    yield {**row, "alert_kind": "new_listing"}
+
+            if not has_now:
                 continue
-            if not is_new:
-                continue
-            row = await _evaluate_new_listing(symbol)
-            if row is not None:
-                yield row
+            for row in await _bounce_candidates(symbol, contracts):
+                yield {**row, "alert_kind": "bounce"}
 
 
-def format_new_listing_alert(row: dict) -> str:
-    header = f"🎉 عقود جديدة أُدرجت — *{row['symbol']}*"
+def format_alert(row: dict) -> str:
+    if row.get("alert_kind") == "bounce":
+        header = f"📈 عقد رخيص يرتد — *{row['symbol']}* (+{row['day_change_pct']:.0f}% اليوم)"
+    else:
+        header = f"🎉 عقود جديدة أُدرجت — *{row['symbol']}*"
     body = options_module.format_result(row)
     return f"{header}\n{body}"
 
