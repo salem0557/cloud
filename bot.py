@@ -34,7 +34,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 
 from scanner import (config, crypto_module, dashboard_data, golden_module, market_calendar,
                      options_module, positions_module, review_module, signals_db, stocks_module,
-                     webapp, whale_module)
+                     webapp)
 from scanner.state import State
 from scanner.utils import fmt_price, split_message
 
@@ -576,90 +576,10 @@ async def _position_monitor_job(context: ContextTypes.DEFAULT_TYPE):
         await _send(context.application, alert["chat_id"], alert["message"])
 
 
-_whale_scan_lock = asyncio.Lock()
-
-
-def _broadcast_recipients() -> set[int]:
-    """كل chat_id يستحق تنبيهاً جماعياً (كالحيتان) الآن -- كل أعضاء
-    state.approved المؤهلين حالياً (بلا منتهي الاشتراك) بالإضافة إلى
-    ADMIN_CHAT_ID صراحة، لأن الأدمن مؤهل عبر is_admin() بمعزل تام عن
-    state.approved وقد لا يكون مُدرَجاً فيه إطلاقاً -- الاعتماد على
-    مفاتيح state.approved وحدها (كما كان سابقاً) يُسقط الأدمن من كل بث
-    جماعي إن لم يكن عضواً "معتمداً" بالمعنى التقليدي."""
-    recipients = {int(cid) for cid in state.approved if eligible(int(cid))}
-    if config.ADMIN_CHAT_ID:
-        recipients.add(config.ADMIN_CHAT_ID)
-    return recipients
-
-
-async def _run_whale_scan(app) -> int:
-    """مسحة حيتان واحدة كاملة -- تبث كل عقد شاذ جديد (لم يُسجَّل اليوم من
-    قبل، log_signal's UNIQUE constraint تمنع التكرار) لكل عضو معتمد
-    حالياً، بغض النظر عمّن/ما الذي استدعى المسحة. يرجع عدد التنبيهات
-    الفعلية المُرسلة. مشتركة بين الوظيفة التلقائية الساعية
-    (_whale_scan_job) والأمر اليدوي (/whales، cmd_whales) -- قفل واحد
-    (_whale_scan_lock) يمنع تشغيلتين متزامنتين، لأن المسح يأخذ دقائق عبر
-    WHALE_TICKERS كاملة. يرجع -1 فوراً بلا أي عمل لو فيه تشغيلة شغّالة
-    بالفعل (الاستدعاء المسؤول عن الرسالة للمستخدم عن هذه الحالة)."""
-    if _whale_scan_lock.locked():
-        return -1
-    async with _whale_scan_lock:
-        sent = 0
-        async for row in whale_module.scan():
-            is_new = await asyncio.to_thread(signals_db.log_signal, "whale", row)
-            if not is_new:
-                continue
-            text = whale_module.format_alert(row)
-            for chat_id in _broadcast_recipients():
-                await _send(app, chat_id, text)
-            sent += 1
-        return sent
-
-
-async def _whale_scan_job(context: ContextTypes.DEFAULT_TYPE):
-    """يعمل كل WHALE_SCAN_INTERVAL_SECONDS (ساعة افتراضياً)، ساعات السوق
-    فقط -- نفس نمط _position_monitor_job بالضبط."""
-    if not market_calendar.market_is_open():
-        return
-    try:
-        await _run_whale_scan(context.application)
-    except Exception:
-        log.exception("Whale scan job failed")
-
-
-async def cmd_whales(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/whales: تشغيلة فورية يدوية، لا تنتظر الدورة التلقائية الساعية ولا
-    تشترط ساعات السوق (عكس _whale_scan_job -- هذا الأمر مخصَّص للتجربة
-    الفورية). أي عضو مؤهل يقدر يشغّلها، لكن النتائج تُبث لكل الأعضاء
-    المعتمدين حالياً بالضبط مثل الوظيفة التلقائية، وليس فقط لمن كتب
-    الأمر."""
-    if not await require_membership(update):
-        return
-    if _whale_scan_lock.locked():
-        await update.message.reply_text("⏳ فيه مسحة حيتان شغّالة بالفعل -- انتظر تكتمل.")
-        return
-    await update.message.reply_text(
-        f"🐋 بدأ مسح كاشف النشاط الشاذ يدوياً ({len(config.WHALE_TICKERS)} رمز)... "
-        "النتائج (لو وُجدت) تُبث لكل الأعضاء المعتمدين حالياً.")
-    try:
-        sent = await _run_whale_scan(context.application)
-    except Exception:
-        log.exception("Manual whale scan failed")
-        await update.message.reply_text("⚠️ حدث خطأ غير متوقع أثناء المسح.")
-        return
-    if sent == -1:
-        await update.message.reply_text("⏳ فيه مسحة حيتان شغّالة بالفعل -- انتظر تكتمل.")
-    elif sent == 0:
-        await update.message.reply_text(f"🐋 اكتمل المسح — لا توجد عقود شاذة الآن (نسبة Vol/OI > {config.WHALE_RATIO_NOTABLE:.0f}).")
-    else:
-        await update.message.reply_text(f"🐋 اكتمل المسح — أُرسل {sent} تنبيه لكل الأعضاء المعتمدين.")
-
-
 BOT_COMMANDS = [
     BotCommand("stocks", "فحص وحدة الأسهم"),
     BotCommand("options", "فحص أوبشن موحّد (Call فقط): عادي+LEAPS+HEAVY، أو /options <رمز> لسهم محدد"),
     BotCommand("crypto", "فحص وحدة الكريبتو"),
-    BotCommand("whales", "مسح كاشف النشاط الشاذ فورياً -- النتائج تُبث لكل الأعضاء المعتمدين"),
     BotCommand("review", "مراجعة الإشارات المستحقة (7/30 يوم)"),
     BotCommand("stats", "تقرير أداء من السجل التاريخي"),
     BotCommand("track", "متابعة مركز: /track TICKER STRIKE EXPIRY PRICE TYPE"),
@@ -776,7 +696,6 @@ def main():
     app.add_handler(CommandHandler("stocks", cmd_stocks))
     app.add_handler(CommandHandler("options", cmd_options))
     app.add_handler(CommandHandler("crypto", cmd_crypto))
-    app.add_handler(CommandHandler("whales", cmd_whales))
     app.add_handler(CommandHandler("review", cmd_review))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("track", cmd_track))
@@ -788,15 +707,10 @@ def main():
     # JobQueue job on the same Application, not tied to how updates arrive.
     app.job_queue.run_repeating(_position_monitor_job,
                                 interval=config.POSITION_MONITOR_INTERVAL_SECONDS, first=60)
-    # Whale detector: a standalone recurring push job, not a manual command --
-    # staggered first-run (120s vs the position monitor's 60s) so both heavy
-    # jobs don't fire in the same instant on a cold start.
-    app.job_queue.run_repeating(_whale_scan_job,
-                                interval=config.WHALE_SCAN_INTERVAL_SECONDS, first=120)
 
     if config.BOT_MODE != "polling" and _try_run_webhook(app):
         return
-    log.info("Bot starting (polling, manual commands only + hourly position monitor + whale scan)")
+    log.info("Bot starting (polling, manual commands only + hourly position monitor)")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 

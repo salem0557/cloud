@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS signals (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts REAL NOT NULL,                    -- unix time the signal was logged
     signal_date TEXT NOT NULL,           -- ts's calendar date (ISO), for same-day dedup
-    section TEXT NOT NULL,               -- stocks | crypto | options | leaps | heavy | golden | whale
+    section TEXT NOT NULL,               -- stocks | crypto | options | leaps | heavy | golden
     symbol TEXT NOT NULL,
     signal_type TEXT NOT NULL,           -- buy (stocks/crypto) | call (options family)
     underlying_price REAL,               -- spot/price at signal time
@@ -117,24 +117,10 @@ def init_db() -> None:
 def _row_fields(section: str, row: dict) -> dict:
     """Maps a module's result-row dict onto the signals table's columns.
     stocks_module/crypto_module rows share one shape; options_module/
-    heavy_module (and later golden) rows share another; whale_module rows
-    are option-shaped (strike/expiry/premium) but carry a Vol/OI ratio
-    instead of a probability-of-profit, so they get their own branch --
-    kept in one place so a new module only ever needs one branch here, not
-    changes scattered through bot.py."""
+    heavy_module (and later golden) rows share another -- kept in one
+    place so a new module only ever needs one branch here, not changes
+    scattered through bot.py."""
     is_options_family = section in ("options", "leaps", "heavy", "golden")
-
-    if section == "whale":
-        return {
-            "underlying_price": row.get("spot"),
-            "signal_type": row.get("side", "call"),
-            "contract_price": row.get("premium"),
-            "strike": row.get("strike") or 0.0,
-            "expiry": row.get("expiry") or "",
-            "probability": row.get("ratio"),   # Vol/OI ratio, not a POP percentage
-            "conditions": f"ratio={row.get('ratio')}x, dte={row.get('days')}",
-            "filters_matched": row.get("tier", ""),   # unusual | whale
-        }
 
     if is_options_family:
         probability = row.get("probability_of_profit")
@@ -289,19 +275,6 @@ def fetch_signal_by_id(signal_id: int) -> sqlite3.Row | None:
     expiry which could theoretically collide across sections)."""
     with _db() as conn:
         return conn.execute("SELECT * FROM signals WHERE id=?", (signal_id,)).fetchone()
-
-
-def recent_whale_call(symbol: str, days: int) -> bool:
-    """Whether whale_module logged an anomalous CALL on this symbol within
-    the last `days` -- feeds golden_module's "⭐⭐⭐ تعافي بدعم حوت" upgrade.
-    Every whale row is CALL-side already (no PUT support anywhere in this
-    bot), so no signal_type filter is needed here."""
-    cutoff_ts = time.time() - days * 86400
-    with _db() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM signals WHERE section='whale' AND symbol=? AND ts>=? LIMIT 1",
-            (symbol, cutoff_ts)).fetchone()
-        return row is not None
 
 
 def fetch_catalog_signals(max_age_days: int, limit: int = 300) -> list[sqlite3.Row]:

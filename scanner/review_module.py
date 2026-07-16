@@ -18,12 +18,11 @@ from . import signals_db as db
 log = logging.getLogger(__name__)
 
 _STOCK_CRYPTO_SECTIONS = ("stocks", "crypto")
-_OPTIONS_FAMILY_SECTIONS = ("options", "leaps", "heavy", "golden", "whale")
+_OPTIONS_FAMILY_SECTIONS = ("options", "leaps", "heavy", "golden")
 
 SECTION_LABELS_AR = {
     "stocks": "📈 الأسهم", "crypto": "🪙 الكريبتو", "options": "📊 الأوبشن",
     "leaps": "🗓️ LEAPS", "heavy": "🏛️ Heavy", "golden": "⭐ الذهبية",
-    "whale": "🐋 الحيتان",
 }
 FILTER_LABELS_AR = {
     "bollinger": "بولينجر السفلي", "rsi": "RSI تشبع بيعي",
@@ -31,7 +30,6 @@ FILTER_LABELS_AR = {
 }
 TIER_LABELS_AR = {"gold": "🥇 ممتاز", "silver": "🥈 جيد جداً", "bronze": "🥉 مقبول"}
 CATEGORY_LABELS_AR = {"mega": "🏛️ MEGA", "large": "🏢 LARGE", "etf": "📦 ETF"}
-WHALE_TIER_LABELS_AR = {"unusual": "🟠 شاذ", "whale": "🐋 حوت شبه مؤكد"}
 
 
 # --------------------------------------------------------------- /review
@@ -196,7 +194,7 @@ async def compute_stats() -> dict:
     rows = await asyncio.to_thread(db.fetch_reviewed_signals)
     stats: dict = {
         "total_reviewed": len(rows),
-        "by_section": {}, "by_filter": {}, "by_tier": {}, "by_category": {}, "by_whale_tier": {},
+        "by_section": {}, "by_filter": {}, "by_tier": {}, "by_category": {},
         "avg_move": {}, "avg_premium_move": {}, "best_combos": [],
     }
     if not rows:
@@ -255,12 +253,6 @@ async def compute_stats() -> dict:
                 outcome = r[f"outcome_{window}d"]
                 if outcome is not None:
                     _tally(stats["by_category"][filters_matched], window, outcome)
-        elif section == "whale" and filters_matched:
-            stats["by_whale_tier"].setdefault(filters_matched, _new_bucket())
-            for window in (7, 30):
-                outcome = r[f"outcome_{window}d"]
-                if outcome is not None:
-                    _tally(stats["by_whale_tier"][filters_matched], window, outcome)
 
     for (key, window), values in move_accum.items():
         avg = sum(values) / len(values)
@@ -316,12 +308,6 @@ def format_stats_report(stats: dict) -> str:
         lines += ["", "*نسبة الإصابة حسب الفئة (Heavy):*"]
         for c, windows in stats["by_category"].items():
             label = CATEGORY_LABELS_AR.get(c, c)
-            lines.append(f"{label} — 7ي: {_rate_str(windows[7])} · 30ي: {_rate_str(windows[30])}")
-
-    if stats["by_whale_tier"]:
-        lines += ["", "*نسبة الإصابة حسب تصنيف الحوت:*"]
-        for t, windows in stats["by_whale_tier"].items():
-            label = WHALE_TIER_LABELS_AR.get(t, t)
             lines.append(f"{label} — 7ي: {_rate_str(windows[7])} · 30ي: {_rate_str(windows[30])}")
 
     if stats["avg_move"]:

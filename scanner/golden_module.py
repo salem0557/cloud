@@ -4,9 +4,7 @@
 فقط) بنفس فلاتر /options العامة تماماً (options_module._contracts_for_symbol).
 لو وُجد عقد CALL مؤهل، تُرسَل رسالة "⭐ إشارة ذهبية" واحدة تجمع تفاصيل السهم
 والعقد معاً، وتُسجَّل بـsignals.db تحت قسم مستقل "golden" حتى يتتبع /stats
-أداءها بمعزل عن /stocks و/options العاديين. لو رصد whale_module (وظيفة
-خلفية مستقلة، انظره) كول شاذاً على نفس السهم خلال GOLDEN_WHALE_LOOKBACK_DAYS
-الماضية، يُستبدل العنوان بـ"⭐⭐⭐ تعافي بدعم حوت" الأقوى.
+أداءها بمعزل عن /stocks و/options العاديين.
 
 مستقل تماماً عن جلسة /options العامة: لا يمس OPTIONS_WATCHLIST ولا يبدأ
 جلسة/مهلة منفصلة -- مجرد فحص إضافي يُشغَّل بعد جلسة /stocks نفسها (على كل
@@ -16,7 +14,7 @@
 import asyncio
 import logging
 
-from . import config, options_module, signals_db as db, stocks_module
+from . import config, options_module, stocks_module
 
 log = logging.getLogger(__name__)
 
@@ -48,26 +46,18 @@ async def check_confluence(stock_row: dict) -> dict | None:
     golden["stock_matched"] = stock_row.get("matched", [])
     golden["stock_explanation"] = stock_row.get("explanation", "")
     golden["stock_probability"] = stock_row.get("probability_of_profit")
-    golden["whale_backed"] = await asyncio.to_thread(
-        db.recent_whale_call, symbol, config.GOLDEN_WHALE_LOOKBACK_DAYS)
     return golden
 
 
 def format_golden_result(row: dict) -> str:
     """السهم أولاً (الفلاتر المتحققة) ثم جدول العقد الكامل بنفس شكل
     options_module.format_result -- رسالة واحدة، وليس رسالتين منفصلتين،
-    لأن الفكرة كلها هي التقاء الإشارتين معاً. سهم ذهبي عليه أيضاً كول شاذ
-    رصده whale_module خلال GOLDEN_WHALE_LOOKBACK_DAYS الماضية يحصل على
-    عنوان مطوّر (⭐⭐⭐) بدل العادي (⭐) -- انظر check_confluence's
-    whale_backed."""
+    لأن الفكرة كلها هي التقاء الإشارتين معاً."""
     stock_filters_ar = "، ".join(
         stocks_module.FILTER_NAMES.get(f, f) for f in row.get("stock_matched", []))
     stock_line = f"📈 السهم: {stock_filters_ar}"
     if row.get("stock_explanation"):
         stock_line += f" — {row['stock_explanation']}"
-    if row.get("whale_backed"):
-        header = f"⭐⭐⭐ *تعافي بدعم حوت* — {row['symbol']}"
-    else:
-        header = f"⭐ *إشارة ذهبية* — {row['symbol']}"
+    header = f"⭐ *إشارة ذهبية* — {row['symbol']}"
     option_table = options_module.format_result(row)
     return f"{header}\n{stock_line}\n\n{option_table}"
