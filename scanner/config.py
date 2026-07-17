@@ -112,6 +112,30 @@ CHEAP_OPTION_DEFAULT_MAX = _float("CHEAP_OPTION_DEFAULT_MAX", 50.0)  # $ per con
 CHEAP_OPTIONS_PACE_SECONDS = _float("CHEAP_OPTIONS_PACE_SECONDS", 0.3)  # between symbols
 CHEAP_OPTIONS_PROGRESS_EVERY = _int("CHEAP_OPTIONS_PROGRESS_EVERY", 150)  # symbols per status edit
 
+# --- /bottomcalls: عقود CALL على أسهم في منطقة قاع اعتادت الارتداد ---
+# شروط العقد: كول فقط، بريميوم <= BOTTOM_MAX_PREMIUM دولار للسهم الواحد،
+# ITM أو ATM (تنفيذ <= السعر الحالي * (1 + BOTTOM_ATM_TOLERANCE))،
+# وانتهاء بين BOTTOM_MIN_DTE و BOTTOM_MAX_DTE يوماً.
+BOTTOM_MAX_PREMIUM = _float("BOTTOM_MAX_PREMIUM", 3.0)   # $ لكل سهم (عقد <= 300$)
+BOTTOM_MIN_DTE = _int("BOTTOM_MIN_DTE", 30)
+BOTTOM_MAX_DTE = _int("BOTTOM_MAX_DTE", 365)
+BOTTOM_ATM_TOLERANCE = _float("BOTTOM_ATM_TOLERANCE", 0.02)  # ±2% حول السعر = ATM
+BOTTOM_MAX_EXPIRIES = _int("BOTTOM_MAX_EXPIRIES", 12)    # طلبات سلسلة/سهم (مسار Yahoo)
+BOTTOM_MAX_SYMBOLS = _int("BOTTOM_MAX_SYMBOLS", 40)      # أفضل المرشحين الذين تُجلب عقودهم
+BOTTOM_CONTRACTS_PER_SYMBOL = _int("BOTTOM_CONTRACTS_PER_SYMBOL", 3)
+BOTTOM_PACE_SECONDS = _float("BOTTOM_PACE_SECONDS", 0.5)   # بين جلب عقود سهم وآخر
+BOTTOM_PROGRESS_EVERY = _int("BOTTOM_PROGRESS_EVERY", 10)  # دفعات بين تحديثات الحالة
+
+# شروط "منطقة القاع" والارتداد التاريخي (انظر scanner/rebound.py)
+DIP_RSI = _float("DIP_RSI", 35.0)                  # RSI يومي يعتبر منطقة قاع
+DIP_NEAR_LOW_PCT = _float("DIP_NEAR_LOW_PCT", 0.10)  # أو ضمن 10% فوق قاع 52 أسبوع
+REBOUND_HISTORY_PERIOD = os.environ.get("REBOUND_HISTORY_PERIOD", "2y")
+REBOUND_HORIZON_DAYS = _int("REBOUND_HORIZON_DAYS", 30)   # نافذة قياس الارتداد (جلسات)
+REBOUND_MIN_GAIN = _float("REBOUND_MIN_GAIN", 0.08)       # ارتداد >= 8% يعتبر نجاحاً
+REBOUND_MIN_EPISODES = _int("REBOUND_MIN_EPISODES", 3)    # أقل عدد مرات تاريخية
+REBOUND_MIN_RATE = _float("REBOUND_MIN_RATE", 0.60)       # أقل نسبة نجاح مطلوبة
+REBOUND_EPISODE_GAP = _int("REBOUND_EPISODE_GAP", 10)     # جلسات فاصلة بين المرات
+
 # --- Alerting ---
 FILTERS_REQUIRED = _int("FILTERS_REQUIRED", 3)     # minimum matched filters (out of 4)
 ALERT_MEMORY_HOURS = _int("ALERT_MEMORY_HOURS", 24)  # identical alert not resent unless

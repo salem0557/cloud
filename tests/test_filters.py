@@ -30,7 +30,9 @@ class TestFilters(unittest.TestCase):
         self.assertFalse(passes_filters(make_contract(open_interest=10), self.cfg))
 
     def test_wide_spread_rejected(self):
-        self.assertFalse(passes_filters(make_contract(bid=1.00, ask=1.50), self.cfg))
+        # ask=1.50 puts the spread exactly at the 40% cap (0.50/1.25), which
+        # the inclusive <= ceiling accepts; use a spread clearly above it.
+        self.assertFalse(passes_filters(make_contract(bid=1.00, ask=1.60), self.cfg))
 
     def test_iv_out_of_range_rejected(self):
         self.assertFalse(passes_filters(make_contract(iv=0.05), self.cfg))

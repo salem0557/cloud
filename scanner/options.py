@@ -208,9 +208,11 @@ def select_best_call(contracts: list[dict]) -> tuple[dict | None, bool]:
     return None, False
 
 
-def _yahoo_candidates(symbol, spot, today, cutoff):
+def _yahoo_candidates(symbol, spot, today, cutoff, max_expiries=None):
     """Provider 1. Returns (candidates, has_options); raises OptionsFetchError
     or NoNearTermOptions (listed options exist, just none within `cutoff`)."""
+    if max_expiries is None:
+        max_expiries = config.OPTIONS_MAX_EXPIRIES
     ticker = yf.Ticker(symbol)
     expiries = _expiries_with_retry(ticker, symbol)
     if not expiries:
@@ -224,7 +226,11 @@ def _yahoo_candidates(symbol, spot, today, cutoff):
             continue
         if today <= exp_date <= cutoff:
             upcoming.append((exp, (exp_date - today).days))
-    upcoming = upcoming[:config.OPTIONS_MAX_EXPIRIES]
+    if len(upcoming) > max_expiries:
+        # عينة موزعة على كامل النافذة بدل أول N فقط، حتى لا تلتهم العقود
+        # الأسبوعية القريبة كل الحصة وتحجب تواريخ الانتهاء البعيدة.
+        step = (len(upcoming) - 1) / (max_expiries - 1)
+        upcoming = [upcoming[round(i * step)] for i in range(max_expiries)]
 
     # Expiries exist (checked above) but none fall in our near-term window —
     # e.g. a stock that only lists monthly options further out than
@@ -255,7 +261,7 @@ def _yahoo_candidates(symbol, spot, today, cutoff):
     return candidates, True
 
 
-def _cboe_candidates(symbol, spot, today, cutoff):
+def _cboe_candidates(symbol, spot, today, cutoff, max_expiries=None):
     """Provider 2 (fallback): whole chain in one keyless request from CBOE."""
     try:
         resp = requests.get(CBOE_URL.format(symbol=symbol.upper()), timeout=20,
@@ -305,7 +311,8 @@ def _cboe_candidates(symbol, spot, today, cutoff):
     return candidates, True
 
 
-def _gather_candidates(symbol: str, spot: float, today, cutoff) -> dict | None:
+def _gather_candidates(symbol: str, spot: float, today, cutoff,
+                       max_expiries=None, prefer_cboe=False) -> dict | None:
     """Try both providers in turn; returns the first successful near-term
     candidates dict, or None if both cleanly confirm the symbol has no
     listed options at all.
@@ -316,13 +323,17 @@ def _gather_candidates(symbol: str, spot: float, today, cutoff) -> dict | None:
     all", so the caller can word the resulting message accurately instead of
     claiming a stock with options simply doesn't have any.
     """
-    providers = (_yahoo_candidates, _cboe_candidates)
+    # لنافذة طويلة (سنة كاملة في /bottomcalls) يُفضَّل CBOE أولاً: طلب واحد
+    # يجلب كل السلسلة بدل عشرات طلبات Yahoo (طلب لكل تاريخ انتهاء).
+    providers = ((_cboe_candidates, _yahoo_candidates) if prefer_cboe
+                 else (_yahoo_candidates, _cboe_candidates))
     last_error = None
     failures = 0
     near_term_misses = 0
     for provider in providers:
         try:
-            candidates, has_options = provider(symbol, spot, today, cutoff)
+            candidates, has_options = provider(symbol, spot, today, cutoff,
+                                               max_expiries=max_expiries)
         except NoNearTermOptions:
             near_term_misses += 1
             continue
@@ -364,6 +375,47 @@ def find_cheap_contracts(symbol: str, spot: float, max_premium: float) -> dict[s
     cheap.sort(key=lambda c: (-c["openInterest"], c["ask"]))
     out["call"] = cheap[:config.OPTIONS_TOP_N]
     return out
+
+
+def bottom_call_matches(c: dict, spot: float, max_premium: float,
+                        min_days: int, max_days: int, atm_tol: float) -> bool:
+    """شروط عقد استراتيجية القاع: كول بريميومه <= max_premium للسهم الواحد،
+    ITM أو ATM (تنفيذ <= السعر * (1 + atm_tol))، وانتهاء ضمن
+    [min_days, max_days]. دالة نقية لتسهيل اختبارها."""
+    return (min_days <= c["days"] <= max_days
+            and c["premium"] <= max_premium
+            and c["strike"] <= spot * (1 + atm_tol))
+
+
+def moneyness_label(strike: float, spot: float, atm_tol: float) -> str:
+    """ITM إذا كان التنفيذ تحت السعر بأكثر من هامش ATM، وإلا ATM (العقود
+    الأعلى من ذلك مرفوضة أصلاً في bottom_call_matches)."""
+    return "ITM" if strike <= spot * (1 - atm_tol) else "ATM"
+
+
+def find_bottom_calls(symbol: str, spot: float, max_premium: float) -> list[dict]:
+    """عقود CALL لاستراتيجية "القاع والارتداد" (/bottomcalls): ITM أو ATM،
+    بريميوم <= max_premium للسهم الواحد، وانتهاء بين BOTTOM_MIN_DTE
+    و BOTTOM_MAX_DTE يوماً. مرتبة بالأعلى سيولة (open interest) ثم الأرخص،
+    وبحد أقصى BOTTOM_CONTRACTS_PER_SYMBOL عقداً."""
+    if _no_options.get(symbol, 0) > time.time() - NO_OPTIONS_TTL:
+        return []
+
+    today = dt.date.today()
+    cutoff = today + dt.timedelta(days=config.BOTTOM_MAX_DTE)
+    candidates = _gather_candidates(symbol, spot, today, cutoff,
+                                    max_expiries=config.BOTTOM_MAX_EXPIRIES,
+                                    prefer_cboe=True)
+    if candidates is None:
+        _no_options[symbol] = time.time()
+        return []
+
+    picks = [c for c in candidates["call"]
+             if bottom_call_matches(c, spot, max_premium,
+                                    config.BOTTOM_MIN_DTE, config.BOTTOM_MAX_DTE,
+                                    config.BOTTOM_ATM_TOLERANCE)]
+    picks.sort(key=lambda c: (-c["openInterest"], c["ask"]))
+    return picks[:config.BOTTOM_CONTRACTS_PER_SYMBOL]
 
 
 def best_options(symbol: str, spot: float) -> dict:
