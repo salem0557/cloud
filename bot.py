@@ -655,14 +655,43 @@ async def _new_listing_watch_task(app: Application):
 _options_scan_lock = asyncio.Lock()
 
 
+async def _run_newoptions_scan(chat_id: int, app: Application):
+    """الجسم الفعلي للمسحة اليدوية -- يعمل كمهمة خلفية منفصلة (asyncio.
+    create_task من cmd_newoptions)، وليس مباشرة داخل الـhandler: هذا
+    البوت لا يفعّل concurrent_updates، فتحديثات Telegram تُعالَج واحداً
+    تلو الآخر افتراضياً -- لو انتظر الـhandler المسحة (ساعات عند 744
+    رمز) مباشرة، البوت **كامل** كان بيتجمّد عن أي أمر آخر من أي عضو
+    (بما فيه /stop) طول تلك المدة. تحرير القفل مضمون عبر finally حتى لو
+    فشلت المسحة بخطأ غير متوقع."""
+    try:
+        sent = 0
+        async for row in new_options_module.scan_once():
+            if await _log_and_broadcast_signal(app, row):
+                sent += 1
+    except Exception:
+        log.exception("Manual options scan failed")
+        await _send(app, chat_id, "⚠️ حدث خطأ غير متوقع أثناء الفحص.")
+        return
+    finally:
+        _options_scan_lock.release()
+    if sent == 0:
+        await _send(app, chat_id, "🔎 اكتمل الفحص — لا إدراجات جديدة أو عقود مرتدة الآن.")
+    else:
+        await _send(app, chat_id, f"🔎 اكتمل الفحص — أُرسل {sent} تنبيه لكل الأعضاء المعتمدين.")
+
+
 async def cmd_newoptions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/newoptions: تشغيلة يدوية فورية لمسحة واحدة كاملة (وليست حلقة
-    أبدية) عبر new_options_module.scan_once -- للتجربة الفورية بدل انتظار
-    الحلقة الخلفية الدائمة. أي عضو مؤهل يقدر يشغّلها، لكن النتائج تُبث
-    لكل الأعضاء المعتمدين حالياً، وليس فقط لمن كتب الأمر. قفل مستقل
-    (_options_scan_lock) يمنع تشغيلتين يدويتين متزامنتين فقط -- لا
-    يتنافس مع الحلقة الخلفية الدائمة (المسحتان تتشاركان نفس قيد المعدّل
-    العالمي في new_options_module، فتبقيان آمنتين حتى لو تداخلتا)."""
+    """/newoptions: يبدأ مسحة واحدة كاملة (وليست حلقة أبدية) عبر
+    new_options_module.scan_once -- للتجربة الفورية بدل انتظار الحلقة
+    الخلفية (المُعطَّلة حالياً). أي عضو مؤهل يقدر يشغّلها، لكن النتائج
+    تُبث لكل الأعضاء المعتمدين حالياً، وليس فقط لمن كتب الأمر.
+
+    المسحة نفسها تُشغَّل كمهمة خلفية (_run_newoptions_scan) -- هذا
+    الـhandler يرجع فوراً بعد رسالة الإقرار، فالبوت يبقى متاحاً لبقية
+    الأوامر (من نفس العضو أو غيره) طول مدة المسحة. القفل (_options_
+    scan_lock) يُحجَز هنا بشكل متزامن (locked() ثم acquire() بلا أي
+    await بينهما -- فلا يوجد تسابق ممكن) قبل جدولة المهمة الخلفية،
+    فتشغيلة ثانية متزامنة تُرفَض فوراً بدل الانتظار داخل القفل بصمت."""
     if not await require_membership(update):
         return
     if not config.MASSIVE_API_KEY:
@@ -671,25 +700,15 @@ async def cmd_newoptions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if _options_scan_lock.locked():
         await update.message.reply_text("⏳ فيه مسحة شغّالة بالفعل -- انتظر تكتمل.")
         return
+    await _options_scan_lock.acquire()
+    chat_id = update.effective_chat.id
     est_hours = len(config.NEW_LISTING_WATCHLIST) * (60.0 / config.MASSIVE_RATE_LIMIT_PER_MINUTE) / 3600.0
     await update.message.reply_text(
         f"🔎 بدأ فحص إدراج/ارتداد يدوي ({len(config.NEW_LISTING_WATCHLIST)} رمز، بالتمهل "
         f"حسب حد Massive -- المسحة الكاملة تستغرق تقريباً {est_hours:.1f} ساعة). كل تنبيه "
-        f"يُبث فوراً لحظة العثور عليه أثناء الفحص -- لا داعي لانتظار اكتمال المسحة كاملة.")
-    try:
-        async with _options_scan_lock:
-            sent = 0
-            async for row in new_options_module.scan_once():
-                if await _log_and_broadcast_signal(context.application, row):
-                    sent += 1
-    except Exception:
-        log.exception("Manual options scan failed")
-        await update.message.reply_text("⚠️ حدث خطأ غير متوقع أثناء الفحص.")
-        return
-    if sent == 0:
-        await update.message.reply_text("🔎 اكتمل الفحص — لا إدراجات جديدة أو عقود مرتدة الآن.")
-    else:
-        await update.message.reply_text(f"🔎 اكتمل الفحص — أُرسل {sent} تنبيه لكل الأعضاء المعتمدين.")
+        f"يُبث فوراً لحظة العثور عليه أثناء الفحص -- لا داعي لانتظار اكتمال المسحة كاملة، "
+        f"والبوت يبقى متاحاً لبقية الأوامر (/stocks، /options، ...) طول هذي المدة.")
+    asyncio.create_task(_run_newoptions_scan(chat_id, context.application))
 
 
 BOT_COMMANDS = [
