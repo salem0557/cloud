@@ -596,3 +596,11 @@ NEW_LISTING_WATCHLIST = HEAVY_TICKERS   # same curated mega/large/ETF list -- se
 # (e.g. 8.0 = +8% today) -- on top of the existing OPTIONS_ASK_MAX (still
 # cheap) and OPTIONS_MIN_POP (real Black-Scholes odds) bars.
 BOUNCE_MIN_DAY_CHANGE_PCT = _float("BOUNCE_MIN_DAY_CHANGE_PCT", 8.0)
+
+# Short-interest enrichment for /stocks (GET /stocks/v1/short-interest) --
+# checked ONLY for a symbol that already qualified through the free
+# yfinance-based /stocks filters (one Massive request per qualifying
+# stock, never a full-watchlist sweep -- see bot.py's _send_short_squeeze_line).
+# days_to_cover (short_interest / avg_daily_volume) is a standard squeeze-
+# pressure metric; FINRA reports it on a two-week cadence, not real-time.
+SHORT_SQUEEZE_MIN_DAYS_TO_COVER = _float("SHORT_SQUEEZE_MIN_DAYS_TO_COVER", 3.0)

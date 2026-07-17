@@ -26,6 +26,14 @@
    الطلب أو تأخر (يتشارك نفس قيد الـ5/دقيقة مع رصد الإدراج) تُتجاهل
    بصمت.
 
+3) مرشّح short squeeze لـ/stocks (short_squeeze_line): تُستدعى من
+   bot.py **فقط لسهم عدّى فعلاً فلاتر /stocks المجانية (yfinance)** --
+   طلب Massive واحد لهذا السهم تحديداً (GET /stocks/v1/short-interest)،
+   وليس مسحاً لقائمة /stocks كاملة (744 رمزاً أوسع بكثير من ميزانية
+   5/دقيقة). سهم عدّى العتبة (days_to_cover >= SHORT_SQUEEZE_MIN_DAYS_TO_COVER)
+   يحصل على رسالة متابعة "🔥 مرشّح short squeeze" بعد رسالته العادية،
+   بلا انتظار أو حجب لبقية الجلسة.
+
 كل الميزة تتعطل تلقائياً وبأمان لو MASSIVE_API_KEY غير مضبوط -- ليست
 شرطاً لتشغيل بقية البوت.
 """
@@ -267,3 +275,46 @@ async def market_status_line() -> str | None:
             label += f" — 🎌 عطلة اليوم: {today_holiday['name']}"
 
     return label
+
+
+# -------------------------------------------------- short squeeze (/stocks)
+
+async def short_interest(symbol: str) -> dict | None:
+    """أحدث صف short interest لسهم واحد (FINRA، كل أسبوعين) -- None لو
+    تعذّر الجلب أو لا بيانات لهذا الرمز. حقول الرد: avg_daily_volume،
+    days_to_cover، settlement_date، short_interest، ticker."""
+    payload = await _rate_limited_get(
+        "/stocks/v1/short-interest",
+        {"ticker": symbol, "limit": 1, "sort": "settlement_date.desc"})
+    if not isinstance(payload, dict):
+        return None
+    results = payload.get("results")
+    if not isinstance(results, list) or not results:
+        return None
+    return results[0]
+
+
+async def short_squeeze_line(symbol: str) -> str | None:
+    """سطر تنبيه جاهز للإرسال لو عدّى هذا السهم عتبة
+    SHORT_SQUEEZE_MIN_DAYS_TO_COVER، وإلا None بصمت (لا يعني بالضرورة
+    "لا يوجد short interest" -- قد يكون موجوداً لكن دون العتبة). يُستدعى
+    فقط لسهم عدّى فعلاً فلاتر /stocks المجانية أصلاً -- انظر docstring
+    الملف."""
+    data = await short_interest(symbol)
+    if data is None:
+        return None
+    days_to_cover = data.get("days_to_cover")
+    if days_to_cover is None or days_to_cover < config.SHORT_SQUEEZE_MIN_DAYS_TO_COVER:
+        return None
+    shares = data.get("short_interest")
+    settlement = data.get("settlement_date", "-")
+    shares_line = f"الأسهم المباعة على المكشوف: {shares:,}" if shares is not None else ""
+    parts = [
+        f"🔥 *{symbol}* — مرشّح short squeeze محتمل (Massive.com)",
+        f"أيام التغطية (days to cover): {days_to_cover:.1f}",
+    ]
+    if shares_line:
+        parts.append(shares_line)
+    parts.append(f"تاريخ التسوية: {settlement}")
+    parts.append("⚠️ مؤشر إحصائي (بيانات FINRA كل أسبوعين) وليس ضماناً لحركة السعر.")
+    return "\n".join(parts)

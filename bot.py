@@ -154,7 +154,12 @@ async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, a
     `section` tags every result logged to signals.db (stocks/crypto/
     options/leaps/heavy/golden) -- overridden per-row by row["kind"] when
     present (the merged /options scan tags each row with which of the
-    three types -- options/leaps/heavy -- it actually is). See _log_row."""
+    three types -- options/leaps/heavy -- it actually is). See _log_row.
+
+    A "stocks" row also fires a fire-and-forget short-interest check
+    (_send_short_squeeze_line, Massive.com -- one request for just this
+    symbol, never a full-watchlist sweep) alongside the existing golden-
+    confluence collection."""
     cancel_event = asyncio.Event()
     cancel_events[chat_id] = cancel_event
     timed_out = False
@@ -175,8 +180,10 @@ async def _run_watchlist_session(chat_id: int, title: str, scan_fn, format_fn, a
                 await _send_row(app, chat_id, row, format_fn)
                 await _log_row(row.get("kind", section), row)
                 sent_count += 1
-                if section == "stocks" and golden_module.stock_qualifies_for_golden(row):
-                    golden_candidates.append(row)
+                if section == "stocks":
+                    asyncio.create_task(_send_short_squeeze_line(chat_id, row["symbol"], app))
+                    if golden_module.stock_qualifies_for_golden(row):
+                        golden_candidates.append(row)
         finally:
             timer.cancel()
 
@@ -299,6 +306,19 @@ async def _send_market_status_line(chat_id: int, app):
         line = await new_options_module.market_status_line()
     except Exception:
         log.exception("Market status line fetch failed")
+        return
+    if line:
+        await _send(app, chat_id, line)
+
+
+async def _send_short_squeeze_line(chat_id: int, symbol: str, app):
+    """يفحص short interest لسهم واحد بعد أن تأهّل فعلياً بجلسة /stocks
+    (طلب Massive واحد لهذا السهم تحديداً، وليس مسحاً للقائمة كاملة) --
+    fire-and-forget، بصمت بلا شيء لو تعذّر الجلب أو لم يعدِّ العتبة."""
+    try:
+        line = await new_options_module.short_squeeze_line(symbol)
+    except Exception:
+        log.exception("Short interest check failed for %s", symbol)
         return
     if line:
         await _send(app, chat_id, line)
