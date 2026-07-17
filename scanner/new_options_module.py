@@ -12,12 +12,13 @@
        تماماً (yfinance/CBOE + probability_module عبر
        options_module._contracts_for_symbol، بنفس فلاتر /options
        العامة) بدل استهلاك المزيد من حصة Massive على التسعير.
-     - الارتداد: من نفس الرد، أي عقد CALL لسعره حالياً ضمن سقف
-       OPTIONS_ASK_MAX (رخيص) وتغيّره اليومي (day.change_percent، من
-       نفس الرد -- بلا طلب إضافي) إيجابي بوضوح (>= BOUNCE_MIN_DAY_CHANGE_PCT)
-       يُعتبر "عقد كان رخيصاً وبدأ يرتد اليوم" 📈 -- يُحسَب POP له عبر
-       probability_module بنفس المنطق (سعر السهم يُجلب من yfinance
-       مجاناً، لا من Massive).
+     - الارتداد: من نفس الرد، أي عقد CALL سائل (volume/open_interest
+       >= عتبات /options العادية) سعره الحالي القابل للشراء فعلاً
+       (last_quote.ask) ضمن سقف OPTIONS_ASK_MAX (رخيص) وتغيّره اليومي
+       (day.change_percent، من نفس الرد -- بلا طلب إضافي) إيجابي
+       بوضوح (>= BOUNCE_MIN_DAY_CHANGE_PCT) يُعتبر "عقد كان رخيصاً
+       وبدأ يرتد اليوم" 📈 -- يُحسَب POP له عبر probability_module بنفس
+       المنطق (سعر السهم يُجلب من yfinance مجاناً، لا من Massive).
    فشل مؤقت على رمز واحد لا يوقف الحلقة عن بقية القائمة.
 
 2) حالة السوق والعطلات (market_status_line): تُستدعى مرة واحدة عند بدء
@@ -127,19 +128,28 @@ async def _evaluate_new_listing(symbol: str) -> dict | None:
 def _row_from_snapshot_contract(symbol: str, spot: float, contract: dict) -> dict | None:
     """يبني صفاً بنفس شكل صفوف options_module (نفس الحقول اللي يحتاجها
     format_result) من عقد واحد داخل رد Option Chain Snapshot -- None لو
-    العقد PUT، أو حقل أساسي ناقص، أو لا يعدّي شرطي "رخيص + يرتد اليوم"
-    (سعر <= OPTIONS_ASK_MAX وتغيّر يومي >= BOUNCE_MIN_DAY_CHANGE_PCT)، أو
-    لم يحسب POP >= OPTIONS_MIN_POP فعلياً."""
+    العقد PUT، أو حقل أساسي ناقص، أو غير سائل (volume/open_interest أقل
+    من OPTIONS_VOLUME_MIN/OPTIONS_OI_MIN -- نفس عتبات /options العادي)،
+    أو لا يعدّي شرطي "رخيص + يرتد اليوم" (سعر ask <= OPTIONS_ASK_MAX
+    وتغيّر يومي >= BOUNCE_MIN_DAY_CHANGE_PCT)، أو لم يحسب POP >=
+    OPTIONS_MIN_POP فعلياً. السعر يُقرأ من last_quote.ask (السعر القابل
+    للشراء فعلاً الآن) لا من day.close (آخر تداول، قد يكون قديماً) --
+    كلاهما من نفس رد Snapshot المجلوب أصلاً، بلا أي طلب إضافي."""
     details = contract.get("details") or {}
     if details.get("contract_type") != "call":
         return None
     strike = details.get("strike_price")
     expiry = details.get("expiration_date")
     day = contract.get("day") or {}
-    premium = day.get("close")
     change_pct = day.get("change_percent")
+    volume = day.get("volume")
+    open_interest = contract.get("open_interest")
+    premium = (contract.get("last_quote") or {}).get("ask")
     iv = contract.get("implied_volatility")
-    if strike is None or expiry is None or premium is None or change_pct is None or iv is None:
+    if (strike is None or expiry is None or premium is None or change_pct is None
+            or iv is None or volume is None or open_interest is None):
+        return None
+    if volume < config.OPTIONS_VOLUME_MIN or open_interest < config.OPTIONS_OI_MIN:
         return None
     if premium <= 0 or premium > config.OPTIONS_ASK_MAX:
         return None
