@@ -30,7 +30,8 @@ from telegram.constants import ParseMode
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes, MessageHandler, filters)
 
-from scanner import chart, config, engine, market_calendar, options, performance, sentiment, universe
+from scanner import (chart, config, engine, market_calendar, options,
+                     performance, rebound, sentiment, universe)
 from scanner import data as data_mod
 from scanner.indicators import FILTERS, fmt_price
 from scanner.state import State
@@ -49,6 +50,7 @@ state = State()
 scan_lock = asyncio.Lock()
 hot_lock = asyncio.Lock()
 cheap_options_lock = asyncio.Lock()
+bottom_calls_lock = asyncio.Lock()
 throttle = Throttle()
 hotlist: set[str] = set()  # near-signal symbols, rebuilt every full cycle
 pending_check: dict[int, float] = {}  # chat id -> time /check asked for a symbol
@@ -207,6 +209,31 @@ def format_cheap_picks(symbol: str, price: float, picks: dict) -> str:
         breakeven = f" • تعادل {c['breakeven']:.2f}$" if c.get("breakeven") is not None else ""
         lines.append(
             f"    تنفيذ {c['strike']:.2f}$ • ينتهي {c['expiry']}"
+            f" ({c['days']} يوم) • بريميوم {approx}{c['premium']:.2f}$"
+            f" = {approx}{c['premium'] * 100:.0f}$/عقد{_greek_suffix(c)}{breakeven}"
+        )
+    return "\n".join(lines)
+
+
+def format_bottom_block(st, picks: list[dict]) -> str:
+    """One /bottomcalls result block: the stock's dip + historical-rebound
+    stats, then its qualifying ITM/ATM CALL contracts."""
+    trend = f"هبوط {abs(st.change_20d):.1%} في 20 جلسة" if st.change_20d < 0 else "تحت متوسط 50 يوم"
+    lines = [
+        f"*{st.symbol}* — {fmt_price(st.price)} 📉",
+        f"    {trend} • RSI={st.rsi14:.0f}"
+        f" • فوق قاع 52 أسبوع بـ{st.above_52w_low:.1%}"
+        f" • تحت القمة بـ{st.off_52w_high:.1%}",
+        f"    📈 تاريخياً: ارتد ≥{config.REBOUND_MIN_GAIN:.0%} خلال"
+        f" {config.REBOUND_HORIZON_DAYS} جلسة في {st.rebounds} من {st.episodes}"
+        f" مرة مشابهة (متوسط أعلى ارتداد {st.avg_gain:+.1%})",
+    ]
+    for c in picks:
+        approx = "≈" if c.get("estimated") else ""
+        tag = options.moneyness_label(c["strike"], st.price, config.BOTTOM_ATM_TOLERANCE)
+        breakeven = f" • تعادل {c['breakeven']:.2f}$" if c.get("breakeven") is not None else ""
+        lines.append(
+            f"    🟢 CALL {tag} • تنفيذ {c['strike']:.2f}$ • ينتهي {c['expiry']}"
             f" ({c['days']} يوم) • بريميوم {approx}{c['premium']:.2f}$"
             f" = {approx}{c['premium'] * 100:.0f}$/عقد{_greek_suffix(c)}{breakeven}"
         )
@@ -819,6 +846,119 @@ async def cmd_cheap_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
 
 
+async def cmd_bottom_calls(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/bottomcalls [max premium per share] — استراتيجية "القاع والارتداد":
+    يمسح القائمة المؤهلة على الفريم اليومي بحثاً عن أسهم نازلة وفي منطقة
+    قاع اعتادت تاريخياً الارتداد منها (see scanner/rebound.py), ثم يجلب
+    لأفضل المرشحين عقود CALL بشروط: ITM/ATM، بريميوم <= 3$ افتراضياً،
+    وانتهاء بين 30 و365 يوماً. رد خاص؛ قد يستغرق عدة دقائق."""
+    if not await require_subscription(update):
+        return
+    if bottom_calls_lock.locked():
+        await update.message.reply_text("⏳ يوجد بحث قاع/ارتداد آخر قيد التنفيذ، انتظر انتهاءه.")
+        return
+    try:
+        max_premium = float(context.args[0]) if context.args else config.BOTTOM_MAX_PREMIUM
+        if max_premium <= 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(
+            "الصيغة: /bottomcalls [أقصى بريميوم بالدولار للسهم الواحد]\n"
+            f"مثال: /bottomcalls 3 — أي عقد لا يتجاوز 300$ (الافتراضي {config.BOTTOM_MAX_PREMIUM:g}$)")
+        return
+
+    symbols = await asyncio.to_thread(universe.load_qualified)
+    if not symbols:
+        await update.message.reply_text(
+            "⚠️ القائمة المؤهلة غير جاهزة بعد (تُبنى مع أول دورة مسح كاملة). "
+            "جرّب /scan أولاً ثم أعد المحاولة بعد قليل.")
+        return
+
+    async with bottom_calls_lock:
+        status = await update.message.reply_text(
+            f"🔎 المرحلة 1/2: تحليل القاع والارتداد التاريخي لـ {len(symbols)} سهم "
+            "(بيانات يومية لسنتين)... قد يستغرق هذا عدة دقائق.")
+
+        # المرحلة الأولى: فلترة الأسهم — نازل الآن + معتاد على الارتداد.
+        # تجري قبل أي طلب أوبشنز، فلا تُجلب سلاسل عقود إلا لمن يستحق.
+        candidates = []
+        batches = engine.make_batches(symbols)
+        for done, batch in enumerate(batches, start=1):
+            try:
+                frames = await asyncio.to_thread(rebound.fetch_daily_batch, batch)
+            except Exception:
+                log.exception("bottomcalls daily download failed (%s..)", batch[0])
+                continue
+            for sym, df in frames.items():
+                try:
+                    stats = rebound.analyze(sym, df)
+                except Exception:
+                    log.exception("rebound analysis failed for %s", sym)
+                    continue
+                if stats is not None:
+                    candidates.append(stats)
+            if done % config.BOTTOM_PROGRESS_EVERY == 0 or done == len(batches):
+                try:
+                    await status.edit_text(
+                        f"🔎 المرحلة 1/2: تحليل الأسهم... دفعة {done}/{len(batches)} "
+                        f"({len(candidates)} مرشح حتى الآن)")
+                except Exception:
+                    pass
+            await asyncio.sleep(config.BATCH_INTERVAL_SECONDS)
+
+        if not candidates:
+            await update.message.reply_text(
+                "لا توجد حالياً أسهم في منطقة قاع تنطبق عليها شروط الارتداد التاريخي. "
+                "جرّب لاحقاً — القائمة تتغير مع حركة السوق.")
+            return
+
+        # المرحلة الثانية: جلب العقود لأفضل المرشحين فقط (حسب score)
+        candidates.sort(key=lambda s: -s.score)
+        candidates = candidates[:config.BOTTOM_MAX_SYMBOLS]
+        try:
+            await status.edit_text(
+                f"🔎 المرحلة 2/2: جلب عقود CALL لأفضل {len(candidates)} مرشحاً...")
+        except Exception:
+            pass
+
+        found = []
+        for st in candidates:
+            try:
+                picks = await asyncio.to_thread(
+                    options.find_bottom_calls, st.symbol, st.price, max_premium)
+            except (options.OptionsFetchError, options.NoNearTermOptions):
+                picks = []
+            except Exception:
+                log.exception("bottomcalls options fetch failed for %s", st.symbol)
+                picks = []
+            if picks:
+                found.append((st, picks))
+            await asyncio.sleep(config.BOTTOM_PACE_SECONDS)
+
+        if not found:
+            await update.message.reply_text(
+                f"وُجد {len(candidates)} سهماً في منطقة قاع بشروط ارتداد تاريخي جيدة، "
+                f"لكن بلا أي عقد CALL (ITM/ATM) بريميومه ≤ {max_premium:g}$ "
+                f"وانتهائه بين {config.BOTTOM_MIN_DTE} و{config.BOTTOM_MAX_DTE} يوماً. "
+                "جرّب رفع الحد، مثلاً: /bottomcalls 5")
+            return
+
+        header = (f"🎯 أسهم في منطقة قاع اعتادت الارتداد، مع عقود CALL بشروطك "
+                  f"(ITM/ATM • بريميوم ≤ {max_premium:g}$ • "
+                  f"{config.BOTTOM_MIN_DTE}-{config.BOTTOM_MAX_DTE} يوم) — {len(found)} سهم:")
+        chunks, current = [], header
+        for st, picks in found:
+            block = "\n\n" + format_bottom_block(st, picks)
+            if len(current) + len(block) > MSG_LIMIT:
+                chunks.append(current)
+                current = format_bottom_block(st, picks)
+            else:
+                current += block
+        chunks.append(current)
+        for chunk in chunks:
+            await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
+
+
 async def cmd_disclaimer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(DISCLAIMER, parse_mode=ParseMode.MARKDOWN)
 
@@ -1008,6 +1148,7 @@ PUBLIC_COMMANDS = [
     BotCommand("scan", "مسح فوري لكل السوق"),
     BotCommand("check", "فحص سهم محدد: /check <رمز>"),
     BotCommand("cheapoptions", "بحث عن أسهم بعقود رخيصة: /cheapoptions [سعر]"),
+    BotCommand("bottomcalls", "عقود CALL لأسهم في قاع اعتادت الارتداد: /bottomcalls [بريميوم]"),
     BotCommand("status", "حالة البوت واشتراكك"),
     BotCommand("disclaimer", "عرض إخلاء المسؤولية"),
     BotCommand("performance", "سجل أداء الإشارات مقابل السوق"),
@@ -1048,6 +1189,7 @@ def main():
     app.add_handler(CommandHandler("scan", cmd_scan))
     app.add_handler(CommandHandler("check", cmd_check))
     app.add_handler(CommandHandler("cheapoptions", cmd_cheap_options))
+    app.add_handler(CommandHandler("bottomcalls", cmd_bottom_calls))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("disclaimer", cmd_disclaimer))
     app.add_handler(CommandHandler("approve", cmd_approve))
