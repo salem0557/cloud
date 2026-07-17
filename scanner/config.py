@@ -557,15 +557,17 @@ GOLDEN_STOCKS_FILTERS_REQUIRED = _int("GOLDEN_STOCKS_FILTERS_REQUIRED", 3)   # o
 
 # =====================================================================
 # Massive.com integration (scanner/new_options_module.py) -- api.massive.com,
-# a free-tier market-data API (5 requests/minute, delayed data) used for
-# three things sharing one rate-limited client:
+# a free-tier market-data API (delayed data) used for three things sharing
+# one rate-limited client:
 #
-# 1) New-options-listing watch + cheap-contract-bouncing watch: ONE
-#    perpetual background loop (no manual command) over
-#    NEW_LISTING_WATCHLIST that spends exactly ONE Massive request per
-#    symbol per cycle (the Options Chain Snapshot endpoint -- the whole
-#    contract list for that symbol in one reply) and serves BOTH signals
-#    from that single response instead of doubling the request budget:
+# 1) New-options-listing watch + cheap-contract-bouncing watch: MANUAL
+#    ONLY, via /newoptions (no automatic background loop -- disabled on
+#    request, since scanning NEW_LISTING_WATCHLIST's 744 symbols at the
+#    paced rate below takes hours, and the caller decides when that's
+#    worth spending). One Massive request per symbol per cycle (the
+#    Options Chain Snapshot endpoint -- the whole contract list for that
+#    symbol in one reply) serves BOTH signals from that single response
+#    instead of doubling the request budget:
 #      - existence: a false -> true transition since the last check means
 #        a listing just appeared; the actual alerted contract is then
 #        evaluated through this bot's OWN existing yfinance/CBOE +
@@ -584,14 +586,21 @@ GOLDEN_STOCKS_FILTERS_REQUIRED = _int("GOLDEN_STOCKS_FILTERS_REQUIRED", 3)   # o
 #    never blocks the session itself, silently omitted if the request fails
 #    or MASSIVE_API_KEY isn't set.
 #
-# The whole feature no-ops (background loop logs a warning and returns
-# immediately; the status line is just never sent) if MASSIVE_API_KEY isn't
-# configured -- never a hard requirement to run the bot.
+# The whole feature no-ops (the status line is just never sent, /newoptions
+# replies that it's disabled) if MASSIVE_API_KEY isn't configured -- never
+# a hard requirement to run the bot.
 # =====================================================================
 MASSIVE_API_KEY = os.environ.get("MASSIVE_API_KEY") or None
 MASSIVE_BASE_URL = os.environ.get("MASSIVE_BASE_URL", "https://api.massive.com")
-MASSIVE_RATE_LIMIT_PER_MINUTE = _int("MASSIVE_RATE_LIMIT_PER_MINUTE", 5)   # free tier
-NEW_LISTING_WATCHLIST = HEAVY_TICKERS   # same curated mega/large/ETF list -- see its own comment above
+# Free tier allows 5/min; kept deliberately more conservative (15s between
+# requests, not 12s) so a long unattended /newoptions pass has margin
+# against a 429 instead of running right at the documented ceiling.
+MASSIVE_RATE_LIMIT_PER_MINUTE = _int("MASSIVE_RATE_LIMIT_PER_MINUTE", 4)
+# Same curated, already options-liquidity-filtered list /options itself
+# scans (744 symbols) -- reused here instead of a separate list so a
+# "new listing" can only ever be a symbol already known to have real
+# options volume, not an arbitrary padded ticker with no actual market.
+NEW_LISTING_WATCHLIST = OPTIONS_WATCHLIST
 # A cheap contract's day-over-day % move needed to count as "bouncing"
 # (e.g. 8.0 = +8% today) -- on top of the existing OPTIONS_ASK_MAX (still
 # cheap) and OPTIONS_MIN_POP (real Black-Scholes odds) bars.

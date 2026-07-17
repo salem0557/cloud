@@ -671,9 +671,11 @@ async def cmd_newoptions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if _options_scan_lock.locked():
         await update.message.reply_text("⏳ فيه مسحة شغّالة بالفعل -- انتظر تكتمل.")
         return
+    est_hours = len(config.NEW_LISTING_WATCHLIST) * (60.0 / config.MASSIVE_RATE_LIMIT_PER_MINUTE) / 3600.0
     await update.message.reply_text(
         f"🔎 بدأ فحص إدراج/ارتداد يدوي ({len(config.NEW_LISTING_WATCHLIST)} رمز، بالتمهل "
-        f"حسب حد Massive)... قد يأخذ عدة دقائق. النتائج (لو وُجدت) تُبث لكل الأعضاء المعتمدين.")
+        f"حسب حد Massive -- المسحة الكاملة تستغرق تقريباً {est_hours:.1f} ساعة). كل تنبيه "
+        f"يُبث فوراً لحظة العثور عليه أثناء الفحص -- لا داعي لانتظار اكتمال المسحة كاملة.")
     try:
         async with _options_scan_lock:
             sent = 0
@@ -752,11 +754,15 @@ async def post_init(app: Application):
     # itself -- see webapp.start_dashboard's own idempotency/try-except.
     asyncio.create_task(webapp.start_dashboard())
 
-    # Perpetual background loop (not a periodic job_queue tick -- it never
-    # stops iterating, paced internally by Massive's own rate limit) for
-    # the new-options-listing watch. No-ops safely if MASSIVE_API_KEY isn't
-    # set (see new_options_module.watch_options_signals).
-    asyncio.create_task(_new_listing_watch_task(app))
+    # The new-options-listing watch is manual-only (/newoptions) by
+    # request -- NOT started automatically here. NEW_LISTING_WATCHLIST is
+    # now the full 744-symbol options watchlist, and at the deliberately
+    # conservative Massive pace (MASSIVE_RATE_LIMIT_PER_MINUTE) one full
+    # pass takes hours; a perpetual background loop over that list would
+    # never stop running. _new_listing_watch_task/watch_options_signals
+    # still exist and are fully tested -- re-enable with the line below
+    # if background scanning is ever wanted again.
+    # asyncio.create_task(_new_listing_watch_task(app))
 
 
 def _try_run_webhook(app: Application, run_webhook=None, delete_webhook=None) -> bool:
