@@ -5,3 +5,4 @@ state.json
 universe.json
 *.csv
 .venv/
+crypto_state.json
