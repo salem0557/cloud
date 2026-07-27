@@ -6,3 +6,4 @@ universe.json
 *.csv
 .venv/
 crypto_state.json
+alerts_state.json
