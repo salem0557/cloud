@@ -73,3 +73,56 @@ def test_fresh_breakout_still_has_room():
     assert technical.remaining_atr(t) >= C.MIN_REMAINING_ATR
     assert not technical.is_late(t)
     assert technical.confirms(t)
+
+
+# ── Room to target is signed, not absolute ──────────────────────
+def _at(close, direction="call"):
+    c = flat(50)
+    if direction == "call":
+        c[-1] = {"open": 100.4, "high": close + 0.3, "low": 100.3,
+                 "close": close, "volume": 5000, "end_time": "last"}
+    else:
+        c[-1] = {"open": 99.6, "high": 99.7, "low": close - 0.3,
+                 "close": close, "volume": 5000, "end_time": "last"}
+    return technical.analyse(c, direction)
+
+
+def test_price_past_the_target_has_negative_room():
+    """The backtest scored 128 setups at a 100% hit rate because an absolute
+    distance read a price beyond its target as still having room."""
+    t = _at(105.0)
+    assert t["remaining_atr"] < 0
+    assert technical.is_late(t)
+    assert technical.confirms(t) is False
+
+
+def test_price_short_of_the_target_has_positive_room():
+    t = _at(100.85)
+    assert t["remaining_atr"] > C.MIN_REMAINING_ATR
+    assert not technical.is_late(t)
+    assert technical.confirms(t)
+
+
+def test_room_shrinks_as_price_approaches_the_target():
+    near, far = _at(100.85), _at(102.0)
+    assert near["remaining_atr"] > far["remaining_atr"]
+
+
+def test_puts_are_signed_the_other_way():
+    fresh, blown = _at(99.2, "put"), _at(95.0, "put")
+    assert fresh["remaining_atr"] > 0
+    assert blown["remaining_atr"] < 0
+    assert technical.confirms(blown) is False
+
+
+def test_expected_move_never_points_backwards():
+    """expected_profit_pct multiplies by this; a backwards move would have
+    produced a positive estimate for a trade with nothing left to gain."""
+    assert _at(105.0)["expected_move"] == 0.0
+    assert _at(95.0, "put")["expected_move"] == 0.0
+    assert _at(100.85)["expected_move"] > 0
+
+
+def test_direction_is_recorded_on_the_analysis():
+    assert _at(100.85)["direction"] == "call"
+    assert _at(99.2, "put")["direction"] == "put"
