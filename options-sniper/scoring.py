@@ -17,11 +17,41 @@ def flow_score(flow: dict) -> float:
     if total > 0:
         s += abs(cp - pp) / total * 6                    # directional conviction
     s += min(4, flow.get("vol_oi_ratio", 0) * 2)         # vol/OI >= 2 = full 4
+
+    # Conviction: premium lifted at the ask is someone paying up to get in.
+    # Flow that is mostly bid-side is being sold, and scoring it like buying
+    # is how a bearish tape reads as a bullish setup.
+    ratio = ask_side_ratio(flow)
+    if ratio > 0:
+        s *= 0.6 + 0.4 * min(1.0, ratio / 0.7)          # 70%+ ask-side = no haircut
     return min(WEIGHTS["flow"], round(s, 1))
 
 
 def flow_direction(flow: dict) -> str:
+    """Direction from premium that was actually BOUGHT, not merely traded.
+
+    Comparing call premium to put premium is not enough: a contract hit on the
+    bid was sold, not bought. $3M of call premium that is mostly bid-side is
+    somebody writing calls — a bearish or neutral position — and reading it as
+    bullish points the whole alert the wrong way. UW reports both sides on
+    every alert and the first version fetched them and threw them away.
+
+    Ask-side premium is used where the split is available, and the raw premium
+    only as a fallback.
+    """
+    ca = flow.get("call_ask_premium")
+    pa = flow.get("put_ask_premium")
+    if ca is not None and pa is not None and (ca + pa) > 0:
+        return "call" if ca >= pa else "put"
     return "call" if flow.get("call_premium", 0) >= flow.get("put_premium", 0) else "put"
+
+
+def ask_side_ratio(flow: dict) -> float:
+    """Share of this ticker's premium that was bought at the ask (0..1)."""
+    ask = flow.get("ask_premium", 0)
+    bid = flow.get("bid_premium", 0)
+    total = ask + bid
+    return (ask / total) if total > 0 else 0.0
 
 
 # ── 2) Technical-break score (0-30) ─────────────────────────────

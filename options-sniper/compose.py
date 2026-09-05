@@ -29,7 +29,9 @@ def _required_present(p):
 def render_entry(p):
     tech = p["technical"]
     lines = [
-        f"🚨 {p['ticker']} — تنبيه دخول (نقاط: {p['score']}/100)",
+        (f"🚨 {p['ticker']} — تنبيه دخول (نقاط: {p['score']}/100"
+         + (f" بعد خصم {p['risk']['penalty']:g} مخاطر)"
+            if (p.get('risk') or {}).get('penalty') else ")")),
         "",
         f"الاتجاه: {DIRECTION_AR.get(p['direction'], p['direction'])} ({p.get('flow_reason', 'تدفق خيارات غير اعتيادي')})",
         f"السعر الحالي للسهم: ${p['spot']:.2f}",
@@ -74,6 +76,11 @@ def render_entry(p):
         "⚠️ الربح المتوقع تقدير (دلتا+جاما−ثيتا) وليس ضماناً",
     ]
 
+    flags = (p.get("risk") or {}).get("flags") or []
+    if flags:
+        penalty = p["risk"]["penalty"]
+        lines += ["", f"⚠️ مخاطر محسوبة (خُصمت {penalty:g} نقطة):"]
+        lines += [f"   • {f}" for f in flags]
     if p.get("news"):
         lines += ["", "📰 " + " | ".join(str(n) for n in p["news"][:2])]
     return "\n".join(lines)

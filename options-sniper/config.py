@@ -132,6 +132,18 @@ MAX_FINVIZ_LOOKUPS = 15     # of those, how many get a UW per-ticker flow call.
                             # Each is one request; the trial allows 30,000/day,
                             # so 15 x ~14 scans/day is comfortably inside it.
 
+# ── Risk checks (risk.py) — deductions only, never bonuses ──────
+# These exist because a summed score cannot see a setup that is internally
+# incoherent. Each penalty is subtracted after scoring and named in the alert.
+EARNINGS_BLOCK_DAYS  = 3     # earnings this close: full penalty
+EARNINGS_PENALTY     = 15.0
+REGIME_TICKER        = "SPY"
+REGIME_MOVE_PCT      = 1.0   # broad-market move that counts as a real tide
+REGIME_PENALTY       = 8.0
+MIN_ASK_SIDE_RATIO   = 0.55  # below this the premium was mostly sold, not bought
+CONVICTION_PENALTY   = 10.0
+MAX_RISK_PENALTY     = 20.0  # a setup is rejected on its own merits, not buried
+
 # ── Message composition ─────────────────────────────────────────
 # True  = `claude -p` writes the Arabic message (Salem's original design)
 # False = deterministic Python formatter (no LLM, zero fabrication risk)
