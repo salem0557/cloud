@@ -24,6 +24,12 @@ def flow_score(flow: dict) -> float:
     ratio = ask_side_ratio(flow)
     if ratio > 0:
         s *= 0.6 + 0.4 * min(1.0, ratio / 0.7)          # 70%+ ask-side = no haircut
+
+    # Multi-leg legs are not directional bets. Premium that is mostly spread
+    # volume should not score as conviction in either direction.
+    dshare = flow.get("directional_share")
+    if dshare is not None:
+        s *= max(0.3, min(1.0, dshare / C.MIN_DIRECTIONAL_SHARE))
     return min(WEIGHTS["flow"], round(s, 1))
 
 
@@ -44,6 +50,24 @@ def flow_direction(flow: dict) -> str:
     if ca is not None and pa is not None and (ca + pa) > 0:
         return "call" if ca >= pa else "put"
     return "call" if flow.get("call_premium", 0) >= flow.get("put_premium", 0) else "put"
+
+
+def directional_share(contract: dict) -> float:
+    """Fraction of a contract's volume that is NOT part of a multi-leg order.
+
+    A live screen showed SPY 745P with 39,025 of its 39,829 contracts traded as
+    legs of spreads — 98%. Read as one-way flow that is a large bearish bet;
+    read correctly it is one side of a structure whose other leg says the
+    opposite, and it carries no directional information at all. Three of eight
+    heavily-traded contracts in that sample were over half multi-leg.
+
+    flow_score counted every contract of premium the same way.
+    """
+    vol = contract.get("volume", 0)
+    if vol <= 0:
+        return 0.0
+    ml = contract.get("multileg_volume", 0) or 0
+    return max(0.0, min(1.0, (vol - ml) / vol))
 
 
 def ask_side_ratio(flow: dict) -> float:

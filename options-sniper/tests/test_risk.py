@@ -113,3 +113,44 @@ def test_clean_setup_has_no_penalty(monkeypatch):
     out = risk.assess("NVDA", "call", {"ask_premium": 90, "bid_premium": 10},
                       [{"dte": 7}])
     assert out == {"penalty": 0.0, "flags": []}
+
+
+# ── Multi-leg legs are not directional bets ─────────────────────
+def test_spread_legs_are_not_directional():
+    """A live screen showed SPY 745P with 39,025 of 39,829 contracts traded as
+    legs of spreads. Read as one-way flow it is a huge bearish bet; it is one
+    side of a structure whose other leg says the opposite."""
+    assert scoring.directional_share(
+        {"volume": 39829, "multileg_volume": 39025}) < 0.05
+
+
+def test_clean_flow_is_mostly_directional():
+    assert scoring.directional_share(
+        {"volume": 88492, "multileg_volume": 6448}) > 0.9
+
+
+def test_no_volume_is_not_directional():
+    assert scoring.directional_share({"volume": 0, "multileg_volume": 0}) == 0.0
+    assert scoring.directional_share({}) == 0.0
+
+
+def test_share_is_clamped():
+    assert scoring.directional_share(
+        {"volume": 100, "multileg_volume": 500}) == 0.0
+
+
+BASE_FLOW = {"premium_usd": 3_400_000, "sweep_count": 6,
+             "call_premium": 3_400_000, "put_premium": 0, "vol_oi_ratio": 2.4,
+             "ask_premium": 2_900_000, "bid_premium": 500_000}
+
+
+def test_spread_heavy_flow_scores_far_below_clean_flow():
+    clean = scoring.flow_score(dict(BASE_FLOW, directional_share=0.93))
+    spread = scoring.flow_score(dict(BASE_FLOW, directional_share=0.02))
+    assert clean == C.WEIGHTS["flow"]
+    assert spread < clean / 3
+
+
+def test_absent_share_leaves_the_score_alone():
+    """Older aggregates have no multileg field; they must not be penalised."""
+    assert scoring.flow_score(BASE_FLOW) == C.WEIGHTS["flow"]

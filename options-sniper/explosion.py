@@ -215,6 +215,7 @@ def scan_contract(symbol, meta, horizon, min_price, max_price,
         if max_spread_pct is not None and fwd["spread_pct"] > max_spread_pct:
             continue
         out.append({"symbol": symbol, "date": rows[i]["date"],
+                    "side": (meta.get("type") or "").lower(),
                     **fwd, "features": features(rows, i, meta)})
     return out
 
@@ -380,6 +381,30 @@ def main(args):
             s = summarise(alt_obs, args.multiple)
             print(f"    --fills {alt:<4} : ${s['realised_avg']} per $1, "
                   f"{s['explosion_rate']}% touching, n={s['count']}")
+
+    # Calls against puts. A long-options result measured over a rising stretch
+    # looks profitable whatever the filters say, because every call benefits.
+    # If calls pay and puts do not, the finding is the market's direction, not
+    # the setup's. Both sides paying is the only reading that survives.
+    calls = [o for o in obs if o.get("side") == "call"]
+    puts = [o for o in obs if o.get("side") == "put"]
+    if calls and puts:
+        cs, ps = summarise(calls, args.multiple), summarise(puts, args.multiple)
+        print(f"\n  Calls vs puts — the period-bias check:")
+        print(f"    calls : ${cs['realised_avg']} per $1, {cs['explosion_rate']}% "
+              f"touching, {cs['contracts']} contracts")
+        print(f"    puts  : ${ps['realised_avg']} per $1, {ps['explosion_rate']}% "
+              f"touching, {ps['contracts']} contracts")
+        if cs["realised_avg"] > 1.0 and ps["realised_avg"] > 1.0:
+            print("    Both sides pay — the result is not simply a rising market.")
+        elif cs["realised_avg"] > 1.0:
+            print("    Only calls pay. On this sample that is the market going "
+                  "up, not\n    an edge in the setup. Re-run over a different "
+                  "stretch before trusting it.")
+        elif ps["realised_avg"] > 1.0:
+            print("    Only puts pay — the mirror of the same problem.")
+        else:
+            print("    Neither side pays.")
 
     base = overall["realised_avg"]
     print(f"\n{'═' * 64}\nWhat separates the ones that ran")
