@@ -38,6 +38,10 @@ class HistoryError(RuntimeError):
     pass
 
 
+class _RateLimited(HistoryError):
+    """429. Distinct because it means stop asking, not try another window."""
+
+
 # ── Yahoo ───────────────────────────────────────────────────────
 # Yahoo's own vocabulary for a lookback window, longest first. The fetch walks
 # down this list until one returns data, so a reduced ceiling degrades to the
@@ -51,11 +55,38 @@ _YF_PERIODS = ["2y", "1y", "6mo", "3mo", "60d", "1mo", "5d"]
 # was always there, and none of its machinery was being used: the DataFrame was
 # immediately unpacked back into plain dicts.
 _CHART = "https://query1.finance.yahoo.com/v8/finance/chart/{}"
+# Yahoo throttles datacenter IPs hard, and a cloud host usually shares one that
+# is already spent. Once it starts answering 429 it does not relent within a
+# run, so the first few tell us to stop asking: 30 tickers x 7 windows is 210
+# pointless requests that make the block worse and bury the real answer.
+_YAHOO_STRIKES = 3
+_yahoo_blocked = False
+_yahoo_429s = 0
 _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/120.0 Safari/537.36")
 
 
+def yahoo_blocked():
+    return _yahoo_blocked
+
+
+def reset_yahoo():
+    global _yahoo_blocked, _yahoo_429s
+    _yahoo_blocked, _yahoo_429s = False, 0
+
+
+def _note_429():
+    global _yahoo_blocked, _yahoo_429s
+    _yahoo_429s += 1
+    if _yahoo_429s >= _YAHOO_STRIKES and not _yahoo_blocked:
+        _yahoo_blocked = True
+        print("[history] Yahoo is rate-limiting this host (429). Skipping it "
+              "for the rest of this run — use --source uw.", flush=True)
+
+
 def _yahoo(ticker, interval, days):
+    if _yahoo_blocked:
+        raise HistoryError("Yahoo is rate-limiting this host (429)")
     wanted = [p for p in _YF_PERIODS if _period_days(p) >= days] or ["60d"]
     order = wanted + [p for p in _YF_PERIODS if p not in wanted]
     tried, last_error = [], None
@@ -63,6 +94,9 @@ def _yahoo(ticker, interval, days):
         tried.append(period)
         try:
             bars = _chart_request(ticker, interval, period)
+        except _RateLimited as e:
+            _note_429()
+            raise HistoryError(str(e)) from e
         except Exception as e:
             last_error = e
             continue
@@ -79,6 +113,9 @@ def _chart_request(ticker, interval, period):
                              "includePrePost": "false"},
                      headers={"User-Agent": _UA, "Accept": "application/json"},
                      timeout=30)
+    if r.status_code == 429:
+        raise _RateLimited(f"Yahoo HTTP 429 for {ticker} — this host is "
+                           "rate-limited")
     if r.status_code == 404:
         raise HistoryError(f"Yahoo does not know the ticker {ticker}")
     if not r.ok:
@@ -174,6 +211,8 @@ def _uw(ticker, interval, days):
 def fetch(ticker, interval="15m", days=365, source="auto"):
     """-> candle dicts, oldest first. Raises HistoryError if no source works."""
     order = {"yahoo": ["yahoo"], "uw": ["uw"]}.get(source, ["yahoo", "uw"])
+    if source == "auto" and _yahoo_blocked:
+        order = ["uw"]                      # settled for this run, do not retry
     errors = []
     for name in order:
         try:

@@ -73,9 +73,22 @@ def analyse(candles, direction, lookback=None):
         stop = level + C.STOP_ATR_MULT * a
         entry_rule = f"إغلاق شمعة 15د تحت ${level:.2f}"
 
+    # Room left toward the target, SIGNED by direction. An absolute distance
+    # reads a price that has already blown past its target as "still 1 ATR to
+    # go", which is how 128 setups scored a 100% hit rate in the backtest: the
+    # simulated entry opened beyond the target and registered an instant win.
+    # Live it is worse — an alert whose target sits behind the price, with an
+    # expected profit computed from a move pointing backwards.
+    if direction == "call":
+        remaining = (target - last["close"]) / a
+    else:
+        remaining = (last["close"] - target) / a
+
     return {
         # scoring inputs
         "broke_level": bool(broke),
+        "direction": direction,
+        "remaining_atr": round(remaining, 2),
         "break_distance_atr": round(max(0.0, distance_atr), 2),
         "volume_ratio": round(vol_ratio, 2),
         "closed_beyond": bool(closed_beyond),
@@ -86,17 +99,21 @@ def analyse(candles, direction, lookback=None):
         "target": round(target, 2),
         "stop": round(stop, 2),
         "entry_rule": entry_rule,
-        "expected_move": round(abs(target - last["close"]), 2),
+        "expected_move": round(max(0.0, remaining) * a, 2),
         "bar_time": last.get("end_time", ""),
         "bars_used": len(window),
     }
 
 
 def remaining_atr(tech):
-    """How much of the measured move is still ahead of price, in ATRs."""
-    if not tech or tech["atr"] <= 0:
+    """How much of the measured move is still ahead of price, in ATRs.
+
+    Negative once price has passed the target — that is a setup with no room
+    left, not one with room behind it.
+    """
+    if not tech:
         return 0.0
-    return abs(tech["target"] - tech["close"]) / tech["atr"]
+    return tech.get("remaining_atr", 0.0)
 
 
 def is_late(tech):

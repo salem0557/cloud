@@ -131,3 +131,49 @@ def test_session_thirds_survive_daylight_saving():
 def test_unparseable_timestamp_is_flagged_not_guessed():
     assert history.session_third("") == "unknown"
     assert history.session_third(None) == "unknown"
+
+
+# ── Yahoo throttles cloud IPs; stop asking rather than hammer it ─
+def test_repeated_429s_trip_a_circuit_breaker(monkeypatch):
+    """30 tickers x 7 windows is 210 pointless requests once Yahoo has
+    decided to throttle this host — and they make the block worse."""
+    history.reset_yahoo()
+    calls = []
+    patch_get(monkeypatch, lambda *a, **k: (calls.append(1),
+                                            Resp(None, ok=False, status=429))[1])
+    for t in ("SPY", "QQQ", "IWM", "AAPL", "MSFT"):
+        try:
+            history.fetch(t, "15m", 60, source="yahoo")
+        except history.HistoryError:
+            pass
+    assert history.yahoo_blocked()
+    assert len(calls) <= history._YAHOO_STRIKES     # stopped, did not grind on
+    history.reset_yahoo()
+
+
+def test_auto_falls_through_to_uw_once_yahoo_is_blocked(monkeypatch):
+    history.reset_yahoo()
+    patch_get(monkeypatch, lambda *a, **k: Resp(None, ok=False, status=429))
+    for t in ("A", "B", "C"):
+        try:
+            history.fetch(t, "15m", 60, source="auto")
+        except history.HistoryError:
+            pass
+    assert history.yahoo_blocked()
+
+    seen = []
+    fake_uw = types.SimpleNamespace(
+        candles=lambda *a, **k: (seen.append(1),
+                                 [{"start_time": "2026-01-01T14:00:00Z",
+                                   "close": 100.0}])[1])
+    monkeypatch.setitem(sys.modules, "uw", fake_uw)
+    bars = history.fetch("D", "15m", 60, source="auto")
+    assert bars and seen                            # UW served it instead
+    history.reset_yahoo()
+
+
+def test_a_healthy_yahoo_is_not_blocked(monkeypatch):
+    history.reset_yahoo()
+    patch_get(monkeypatch, lambda *a, **k: Resp(chart_json(3)))
+    assert len(history.fetch("AAPL", "15m", 60, source="yahoo")) == 3
+    assert not history.yahoo_blocked()
