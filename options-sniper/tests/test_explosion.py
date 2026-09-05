@@ -221,3 +221,54 @@ def test_pairs_find_the_intersection():
 def test_thin_pairs_are_excluded():
     obs = [_o(0.05, 5, 8.0, 6.0)] * 3
     assert explosion.combinations(obs, ["price", "dte"], 5.0, 20) == []
+
+
+# ── Realistic fills: you sell into the bid, not the print ───────
+PENNY = [  # $0.02 contract quoted 0.01 x 0.02 — spread is half the price
+    {"date": "d1", "ask": 0.02, "bid": 0.01, "high": 0.02, "low": 0.01, "last": 0.02},
+    {"date": "d2", "ask": 0.06, "bid": 0.05, "high": 0.08, "low": 0.02, "last": 0.06},
+    {"date": "d3", "ask": 0.11, "bid": 0.10, "high": 0.12, "low": 0.06, "last": 0.11},
+    {"date": "d4", "ask": 0.03, "bid": 0.02, "high": 0.11, "low": 0.02, "last": 0.03},
+]
+
+
+def test_the_high_overstates_what_you_could_exit_at():
+    hi = explosion.forward_multiple(PENNY, 0, 10, realistic=False)
+    bid = explosion.forward_multiple(PENNY, 0, 10, realistic=True)
+    assert hi["peak_multiple"] > bid["peak_multiple"]
+    assert hi["end_multiple"] > bid["end_multiple"]
+
+
+def test_the_spread_at_entry_is_recorded():
+    """On a $0.02 contract the spread is 50% of the price — the single fact
+    the multiple-based result hides."""
+    assert explosion.forward_multiple(PENNY, 0, 10)["spread_pct"] == 50.0
+
+
+def test_spread_is_a_feature_you_can_filter_on():
+    assert "spread_pct" in explosion.FEATURES
+    assert explosion.bucket("spread_pct", 50.0) == "spread=50%+"
+    assert explosion.bucket("spread_pct", 5.0) == "spread=<10%"
+
+
+def test_entries_with_no_bid_are_not_tradeable(monkeypatch):
+    """A contract quoted 0.00 x 0.02 cannot be sold at all, so buying it is
+    not an entry the backtest should count."""
+    rows = [dict(r, bid=0.0) for r in PENNY]
+    monkeypatch.setattr(explosion.uw, "contract_history", lambda *a, **k: rows)
+    assert explosion.scan_contract("X", {}, 10, 0.01, 1.0, realistic=True) == []
+    assert explosion.scan_contract("X", {}, 10, 0.01, 1.0, realistic=False) != []
+
+
+def test_wide_spreads_can_be_excluded(monkeypatch):
+    monkeypatch.setattr(explosion.uw, "contract_history", lambda *a, **k: PENNY)
+    assert explosion.scan_contract("X", {}, 10, 0.01, 1.0, max_spread_pct=25) == []
+    assert explosion.scan_contract("X", {}, 10, 0.01, 1.0, max_spread_pct=60) != []
+
+
+def test_five_x_is_a_smaller_move_on_a_cheap_contract():
+    """The reason the result favours cheap contracts almost tautologically:
+    5x on $0.02 is eight cents, inside the spread; on $1.00 it is four
+    dollars, a real move in the underlying."""
+    assert round(0.02 * 5 - 0.02, 2) == 0.08
+    assert round(1.00 * 5 - 1.00, 2) == 4.00
