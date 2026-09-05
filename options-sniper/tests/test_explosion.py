@@ -348,3 +348,20 @@ def test_a_bucket_with_no_symbols_is_still_safe():
     obs = [{"peak_multiple": 1.0, "end_multiple": 1.0, "days_to_peak": 1}]
     s = explosion.summarise(obs, 5.0)
     assert s["contracts"] == 0
+
+
+# ── Calls against puts: the period-bias check ───────────────────
+def test_side_is_recorded_on_each_observation(monkeypatch):
+    """A long-options result measured over a rising stretch looks profitable
+    whatever the filters say. Splitting by side is what separates an edge in
+    the setup from the market having gone up."""
+    monkeypatch.setattr(explosion.uw, "contract_history", lambda *a, **k: PENNY)
+    got = explosion.scan_contract("X", {"type": "call", "expiry": "2026-09-11"},
+                                  10, 0.01, 1.0)
+    assert got and all(o["side"] == "call" for o in got)
+
+
+def test_missing_type_gives_an_empty_side_not_a_guess(monkeypatch):
+    monkeypatch.setattr(explosion.uw, "contract_history", lambda *a, **k: PENNY)
+    got = explosion.scan_contract("X", {}, 10, 0.01, 1.0)
+    assert all(o["side"] == "" for o in got)
