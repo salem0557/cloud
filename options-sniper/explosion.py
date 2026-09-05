@@ -124,7 +124,7 @@ FEATURES = ["price", "vol_oi", "ask_share", "sweep_share", "dte", "iv", "vol_vs_
 
 
 def scan_contract(symbol, meta, horizon, min_price, max_price):
-    rows = uw.contract_history(symbol)
+    rows = uw.contract_history(symbol)      # raises; the caller reports why
     if len(rows) < 3:
         return []
     out = []
@@ -189,18 +189,38 @@ def main(args):
     print(f"{len(pool)} contracts. Pulling each one's own history "
           f"(this is one request each)\n")
 
-    obs = []
+    obs, failures, empties = [], [], 0
     for n, c in enumerate(pool, 1):
-        got = scan_contract(c["option_symbol"], c, args.horizon,
-                            args.min_price, args.max_price)
+        try:
+            got = scan_contract(c["option_symbol"], c, args.horizon,
+                                args.min_price, args.max_price)
+        except uw.UWError as err:
+            failures.append(f"{c['option_symbol']}: {err}")
+            if len(failures) == 1:
+                # say it once, immediately, instead of after 147 silent rounds
+                print(f"  ! {c['option_symbol']} history failed: {err}")
+            continue
+        if not got:
+            empties += 1
         obs += got
         if n % 25 == 0 or n == len(pool):
             print(f"  {n}/{len(pool)} contracts, {len(obs)} entry days so far")
 
     if not obs:
-        print("\nNo usable contract history. The plan may not serve "
-              "/api/option-contract/{id}/historic.")
+        print()
+        if failures:
+            print(f"{len(failures)} of {len(pool)} history requests failed. First: "
+                  f"{failures[0]}")
+            print("A 403 means the plan does not serve "
+                  "/api/option-contract/{id}/historic.")
+        else:
+            print(f"Every contract returned history, but none had {3}+ days "
+                  f"inside ${args.min_price}-${args.max_price}. These are new "
+                  "contracts with a short tape — widen the price band or raise "
+                  "--max-dte to reach older ones.")
         return 1
+    if failures:
+        print(f"\n({len(failures)} contracts had no history and were skipped)")
 
     overall = summarise(obs, args.multiple)
     print(f"\n{'═' * 64}")
