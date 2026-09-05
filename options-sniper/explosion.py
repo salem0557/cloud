@@ -43,6 +43,7 @@ import venv_boot
 venv_boot.ensure(["requests"])
 
 import config as C
+import finviz
 import uw
 
 
@@ -153,7 +154,30 @@ def stock_context(meta):
     flip = (gex or {}).get("gamma_flip")
     if flip:
         out["gex_side"] = "above_flip" if spot >= flip else "below_flip"
+
+    # Finviz's technical view. UW serves no RSI and no distance-from-average,
+    # and both describe whether the stock is stretched or coiled — the state
+    # that decides whether it can travel to the strike at all.
+    tech = _finviz_technicals().get(ticker)
+    if tech:
+        out["rsi"] = tech.get("rsi")
+        out["vs_sma20"] = tech.get("vs_sma20")
     return out
+
+
+_fv_cache = {}
+
+
+def _finviz_technicals():
+    """One screener-wide pull, cached: per-ticker requests would be hundreds."""
+    if "rows" not in _fv_cache:
+        _fv_cache["rows"] = finviz.technicals() or {}
+        n = len(_fv_cache["rows"])
+        cols = next(iter(_fv_cache["rows"].values()), {}).get("_columns", [])
+        print(f"[finviz] technical view: {n} tickers"
+              + (f", columns: {', '.join(cols[:6])}" if cols else
+                 " — no technical columns, features will be blank"))
+    return _fv_cache["rows"]
 
 
 def features(rows, i, meta):
@@ -228,6 +252,10 @@ def bucket(name, value):
         return f"dte={'0-2' if value <= 2 else '3-7' if value <= 7 else '8-21' if value <= 21 else '22+'}"
     if name == "iv":
         return f"iv={'<50%' if value < 0.5 else '50-100%' if value < 1.0 else '100%+'}"
+    if name == "rsi":
+        return f"rsi={'<40' if value < 40 else '40-60' if value < 60 else '60-70' if value < 70 else '70+'}"
+    if name == "vs_sma20":
+        return f"vs20={'below' if value < 0 else '0-5%' if value < 5 else '5%+'}"
     if name == "atr_to_strike":
         return f"atr2strike={'<1' if value < 1 else '1-2' if value < 2 else '2-4' if value < 4 else '4+'}"
     if name == "gex_side":
@@ -240,7 +268,8 @@ def bucket(name, value):
 
 
 FEATURES = ["price", "spread_pct", "vol_oi", "ask_share", "sweep_share",
-            "dte", "iv", "vol_vs_avg", "atr_to_strike", "gex_side"]
+            "dte", "iv", "vol_vs_avg", "atr_to_strike", "gex_side",
+            "rsi", "vs_sma20"]
 
 
 def scan_contract(symbol, meta, horizon, min_price, max_price,
