@@ -5,6 +5,7 @@ Every path and field name below was verified against the official OpenAPI spec
 *strings* — normalisation to float happens here, once, so the rest of the code
 never has to guess a type.
 """
+import datetime
 import re
 import time
 
@@ -190,6 +191,33 @@ def _normalise_contract(c):
     }
 
 
+def _dte(expiry):
+    """Calendar days until expiry, or None when the date is unusable."""
+    try:
+        d = datetime.date.fromisoformat(expiry)
+    except (TypeError, ValueError):
+        return None
+    return (d - datetime.date.today()).days
+
+
+def _in_window(c):
+    """Contracts this system is willing to trade.
+
+    The chain endpoint returns every expiry the ticker has - AAPL came back
+    with 3,294 contracts running out to 2028. A 2028 LEAP is not a candidate
+    for a 15-minute breakout, and a cheap far-dated OTM call can slip through
+    the budget filter on price alone, so the DTE window is enforced here
+    rather than only in the option_contracts fallback.
+
+    Contracts without a delta are dropped too: expected_profit_pct needs one,
+    and roughly half of what UW returns for a full chain has none.
+    """
+    dte = _dte(c.get("expiry"))
+    if dte is None or not (C.MIN_DTE <= dte <= C.MAX_DTE):
+        return False
+    return abs(_num(c.get("delta"))) > 0   # _num handles None and "" too
+
+
 def option_chain(ticker):
     """GET /api/stock/{ticker}/option-chains?greeks=true
 
@@ -204,9 +232,15 @@ def option_chain(ticker):
     except UWError:
         raw = []
     if raw and isinstance(raw[0], dict):
-        return [_normalise_contract(c) for c in raw]
+        chain = [_normalise_contract(c) for c in raw]
+        usable = [c for c in chain if _in_window(c)]
+        if usable:
+            return usable
+        print(f"[uw] {ticker}: {len(chain)} contracts, none inside "
+              f"{C.MIN_DTE}-{C.MAX_DTE} DTE with a delta")
+        return []
     # fallback: greeks not served on this plan for option-chains
-    return option_contracts(ticker)
+    return [c for c in option_contracts(ticker) if _in_window(c)]
 
 
 def option_contracts(ticker):
