@@ -105,3 +105,64 @@ def test_explosion_rate_and_the_gap_to_the_end_value():
 
 def test_empty_summary_is_safe():
     assert explosion.summarise([], 5.0) == {"count": 0}
+
+
+# ── The screener speaks a different dialect from the chain endpoints ──
+import uw
+
+
+SCREENER_ROW = {
+    "option_symbol": "TSLA230908C00255000", "option_type": "call",
+    "expiry": "2023-09-08", "strike": "255.0",
+    "close": "0.03", "high": "2.95", "low": "0.02", "open": "0.92",
+    "chain_prev_close": "1.29", "volume": 264899, "open_interest": 18680,
+    "ask_side_volume": 119403, "bid_side_volume": 122789,
+    "sweep_volume": 18260, "premium": "27723806.00", "stock_price": "247.94",
+    "next_earnings_date": "2023-10-18", "sector": "Consumer Cyclical",
+}
+
+
+def test_screener_rows_carry_a_usable_price():
+    """The screener reports `close`, not an NBBO pair. Reading it with the
+    chain normaliser produced ask=0 on every row, so a $0.02-$1.00 filter
+    rejected the whole result and the run blamed the price band."""
+    n = uw._normalise_screener_row(SCREENER_ROW)
+    assert n["price"] == 0.03
+    assert n["type"] == "call" and n["strike"] == 255.0
+
+
+def test_the_chain_normaliser_would_have_zeroed_it():
+    assert uw._normalise_contract(SCREENER_ROW)["ask"] == 0.0
+
+
+def test_screener_side_volumes_are_mapped():
+    """ask_side_volume, not ask_volume — the ask share is the whole point."""
+    n = uw._normalise_screener_row(SCREENER_ROW)
+    assert n["ask_volume"] == 119403 and n["bid_volume"] == 122789
+    assert n["sweep_volume"] == 18260
+
+
+def test_screener_carries_context_the_chain_does_not():
+    n = uw._normalise_screener_row(SCREENER_ROW)
+    assert n["stock_price"] == 247.94
+    assert n["next_earnings_date"] == "2023-10-18"
+
+
+def test_symbol_fills_in_missing_fields():
+    n = uw._normalise_screener_row({"option_symbol": "UBER260904C00076000"})
+    assert n["strike"] == 76.0 and n["type"] == "call"
+    assert n["expiry"] == "2026-09-04"
+
+
+def test_screener_failure_raises_rather_than_returning_empty(monkeypatch):
+    """An empty list from a plan that does not serve the endpoint is
+    indistinguishable from an empty result, and the caller cannot say which."""
+    def denied(path, params=None, retries=3):
+        raise uw.UWError(f"{path}: auth failed (403)")
+    monkeypatch.setattr(uw, "_get", denied)
+    try:
+        uw.screen_contracts(is_otm="true")
+    except uw.UWError as e:
+        assert "403" in str(e)
+    else:
+        raise AssertionError("should have raised")
