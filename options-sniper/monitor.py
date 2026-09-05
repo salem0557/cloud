@@ -10,6 +10,10 @@ import datetime
 import json
 import sys
 
+import venv_boot
+
+venv_boot.ensure(["requests"])
+
 import config as C
 import journal
 import market

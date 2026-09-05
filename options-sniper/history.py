@@ -20,6 +20,7 @@ number. Every fetch reports the span it actually returned, and the backtest
 prints that coverage rather than implying it got what it asked for.
 """
 import datetime
+import sys
 
 import config as C
 
@@ -46,7 +47,11 @@ def _yahoo(ticker, interval, days):
     try:
         import yfinance as yf
     except ImportError as e:
-        raise HistoryError("yfinance is not installed (pip install yfinance)") from e
+        raise HistoryError(
+            "yfinance is not importable by this interpreter "
+            f"({sys.executable}). Either it is not installed, or this is the "
+            "system python and the packages are in the venv — run "
+            "/opt/venv/bin/python instead.") from e
 
     wanted = [p for p in _YF_PERIODS if _period_days(p) >= days] or ["60d"]
     tried = []

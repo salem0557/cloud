@@ -12,6 +12,10 @@ import json
 import sys
 
 import analyst
+import venv_boot
+
+venv_boot.ensure(["requests"])
+
 import config as C
 import finviz
 import journal

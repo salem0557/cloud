@@ -14,6 +14,10 @@ import sys
 import time
 import traceback
 
+import venv_boot
+
+venv_boot.ensure(["requests"])
+
 import config as C
 import market
 import monitor
