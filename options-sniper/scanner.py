@@ -159,9 +159,11 @@ def tradable_chain(chain):
 
 
 def build_tiers(cand):
-    picks = pick_contracts_by_budget(tradable_chain(cand["chain"]),
-                                     cand["direction"], cand["spot"])
     move = cand["technical"]["expected_move"]
+    picks = pick_contracts_by_budget(tradable_chain(cand["chain"]),
+                                     cand["direction"], cand["spot"],
+                                     expected_move=move,
+                                     atr=cand["technical"].get("atr", 0.0))
     tiers = []
     for label, c in picks:
         if c is None:

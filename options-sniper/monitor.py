@@ -144,8 +144,10 @@ def check_shortlist(dry_run=False):
         except uw.UWError as e:
             print(f"  {t}: {e}")
             continue
-        picks = pick_contracts_by_budget(chain, item["direction"], tech["close"])
         move = tech["expected_move"]
+        picks = pick_contracts_by_budget(chain, item["direction"], tech["close"],
+                                         expected_move=move,
+                                         atr=tech.get("atr", 0.0))
         tiers = []
         for label, c in picks:
             if c is None:
