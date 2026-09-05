@@ -287,9 +287,30 @@ def candles(ticker, candle_size=None, timeframe="5D", limit=500):
             "volume": _num(c.get("volume")),
             "start_time": c.get("start_time", ""),
             "end_time": c.get("end_time", ""),
+            "closed": _is_closed(c.get("end_time", "")),
         })
     rows.sort(key=lambda r: r["start_time"])          # UW returns newest-first
-    return [r for r in rows if r["close"] > 0]
+    rows = [r for r in rows if r["close"] > 0]
+    return [r for r in rows if r["closed"]]
+
+
+def _is_closed(end_time):
+    """True once the bar's window has actually elapsed.
+
+    UW includes the bar currently forming. Judging a break on it means reading
+    a 15-minute candle five minutes in: price can be above the level now and
+    close back under it, which is exactly the false break the 15m frame exists
+    to filter out. Only completed bars are ever scored.
+    """
+    if not end_time:
+        return False
+    try:
+        end = datetime.datetime.fromisoformat(end_time.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=datetime.timezone.utc)
+    return end <= datetime.datetime.now(datetime.timezone.utc)
 
 
 def spot(ticker):

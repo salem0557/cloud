@@ -72,6 +72,28 @@ MIN_REMAINING_ATR  = 0.75   # reject a setup whose target is already this close.
 REGULAR_HOURS_ONLY = True   # ignore pre/post-market candles (market_time == "r")
 
 # ── Exit rules for open positions ───────────────────────────────
+# One set of numbers cannot serve both a same-day contract and a 6-week one.
+# A 0DTE position has no tomorrow to recover in, so it takes profit earlier,
+# cuts earlier, and is closed on the clock whatever it is doing. A longer-dated
+# contract can be given room, because theta is not taking it apart today.
+#
+# STARTING POINTS, not conclusions. After ~20 logged alerts, fill `outcome`
+# and `result_pct` in journal.csv and set these from your own results:
+# if most winners ran well past the take level you cut too early; if most
+# losers passed the stop before reversing you cut too late.
+EXIT_RULES = [
+    # (max_dte, take_profit_pct, stop_loss_pct, note)
+    (0,   50, -35, "0DTE: اخرج بالكامل عند الهدف — لا يوجد غد"),
+    (7,   60, -40, "بيع نصف الكمية عند الهدف وارفع الوقف إلى سعر الدخول"),
+    (999, 80, -40, "بيع ثلث الكمية عند الهدف واترك الباقي بوقف متحرك"),
+]
+
+# Same-day contracts are closed on the clock regardless of P&L: whatever is
+# left of a 0DTE contract at 16:00 ET is worth its intrinsic value and nothing
+# more, and the last half hour is where that collapse happens fastest.
+ZERO_DTE_HARD_EXIT_ET = "15:30"
+
+# Kept for anything that does not resolve to a rule above.
 PROFIT_TAKE_PCT = 60
 STOP_LOSS_PCT   = -40
 

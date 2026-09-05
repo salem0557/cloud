@@ -17,8 +17,8 @@ import state
 import technical
 import uw
 from compose import compose, NO_TRADE
-from scoring import (contract_cost, expected_profit_pct, technical_score,
-                     pick_contracts_by_budget)
+from scoring import (contract_cost, exit_rule, expected_profit_pct,
+                     technical_score, pick_contracts_by_budget)
 from telegram_send import send
 
 
@@ -59,15 +59,25 @@ def check_positions(dry_run=False):
         entry, price = float(p["entry_price"]), quote["price"]
         pct = (price - entry) / entry * 100
 
+        occ = uw.parse_occ(sym) or {}
+        rule = exit_rule(uw._dte(occ.get("expiry")))
+
         kind = reason = advice = None
-        if pct >= C.PROFIT_TAKE_PCT:
+        if pct >= rule["take_pct"]:
             kind = "✅ جني ربح"
-            reason = f"العقد وصل {pct:+.1f}% (حد الربح {C.PROFIT_TAKE_PCT}%)"
-            advice = "بيع نصف الكمية ورفع الوقف على الباقي إلى سعر الدخول"
-        elif pct <= C.STOP_LOSS_PCT:
+            reason = f"العقد وصل {pct:+.1f}% (حد الربح {rule['take_pct']}%)"
+            advice = rule["note"] or "بيع كامل"
+        elif pct <= rule["stop_pct"]:
             kind = "⛔ وقف خسارة"
-            reason = f"العقد نزل {pct:+.1f}% (حد الخسارة {C.STOP_LOSS_PCT}%)"
+            reason = f"العقد نزل {pct:+.1f}% (حد الخسارة {rule['stop_pct']}%)"
             advice = "بيع كامل"
+        elif rule["dte"] == 0 and market.past_hard_exit():
+            # a same-day contract keeps only intrinsic value into the bell, and
+            # the last half hour is where that collapse is fastest
+            kind = "⏰ خروج زمني"
+            reason = (f"عقد ينتهي اليوم وتجاوزنا {C.ZERO_DTE_HARD_EXIT_ET} "
+                      f"بتوقيت نيويورك (الوضع {pct:+.1f}%)")
+            advice = "بيع كامل الآن — لا تحمله للإغلاق"
         if not kind or p.get("last_alert") == kind:
             continue
 

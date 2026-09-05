@@ -7,6 +7,8 @@ than a fixed offset, so no seasonal edit is ever needed: the session is always
 """
 import datetime
 
+import config as C
+
 try:
     from zoneinfo import ZoneInfo
     _ET = ZoneInfo("America/New_York")
@@ -37,6 +39,14 @@ def minutes_to_close(now=None):
         return 0
     close = now.replace(hour=CLOSE.hour, minute=CLOSE.minute, second=0, microsecond=0)
     return max(0, int((close - now).total_seconds() // 60))
+
+
+def past_hard_exit(now=None):
+    """True once the 0DTE hard-exit time has passed in the current session."""
+    now = now or now_et()
+    hh, _, mm = C.ZERO_DTE_HARD_EXIT_ET.partition(":")
+    cutoff = datetime.time(int(hh), int(mm))
+    return is_open(now) and now.time() >= cutoff
 
 
 def reason():

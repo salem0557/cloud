@@ -19,7 +19,7 @@ import state
 import technical
 import uw
 from compose import compose, NO_TRADE
-from scoring import (best_contract, contract_cost, expected_profit_pct,
+from scoring import (best_contract, contract_cost, exit_rule, expected_profit_pct,
                      flow_direction, flow_score, technical_score,
                      catalyst_score, liquidity_score, pick_contracts_by_budget)
 from telegram_send import send
@@ -144,6 +144,7 @@ def build_tiers(cand):
             "delta": c["delta"], "gamma": c.get("gamma"), "theta": c.get("theta"),
             "open_interest": c["open_interest"], "dte": c.get("dte"),
             "expected_profit_pct": expected_profit_pct(c, move),
+            "exit": exit_rule(c.get("dte")),
         })
     return tiers
 

@@ -193,6 +193,17 @@ def best_contract(chain, direction, spot):
     return max(affordable, key=lambda c: c.get("open_interest", 0))
 
 
+# ── Exit plan per contract ──────────────────────────────────────
+def exit_rule(dte):
+    """The take/stop pair that fits this contract's remaining life."""
+    d = 0 if dte is None else max(0, int(dte))
+    for max_dte, take, stop, note in C.EXIT_RULES:
+        if d <= max_dte:
+            return {"take_pct": take, "stop_pct": stop, "note": note, "dte": d}
+    take, stop, note = C.PROFIT_TAKE_PCT, C.STOP_LOSS_PCT, ""
+    return {"take_pct": take, "stop_pct": stop, "note": note, "dte": d}
+
+
 # ── Expected profit ─────────────────────────────────────────────
 def expected_profit_pct(contract: dict, expected_move: float) -> float:
     """Estimate the contract's return if the stock reaches the measured target.
