@@ -111,6 +111,8 @@ CLAUDE_TIMEOUT_SEC  = 300
 # ── Scheduler (used by scheduler.py on an always-on host) ───────
 SCAN_EVERY_MIN    = 30
 MONITOR_EVERY_MIN = 5
+HEARTBEAT_MIN     = 60      # a line in the log so a healthy idle service is
+                            # distinguishable from a dead one over a weekend
 
 # ── State / data files ──────────────────────────────────────────
 DATA_DIR.mkdir(parents=True, exist_ok=True)

@@ -90,7 +90,7 @@ def main():
         return park(f"{', '.join(missing)} not set (or still holding the "
                     f".env.example placeholder)")
 
-    last_scan = last_monitor = None
+    last_scan = last_monitor = last_beat = None
     was_open = None
 
     while not _stop:
@@ -100,6 +100,18 @@ def main():
         if is_open != was_open:
             log("market OPEN" if is_open else f"market closed — {market.reason()}")
             was_open = is_open
+
+        # Heartbeat. Without it the log is silent from Friday's close until
+        # Monday's open, and there is no way to tell a healthy idle service
+        # from a dead one. Hourly is quiet enough to stay readable.
+        beat = slot(now, C.HEARTBEAT_MIN)
+        if beat != last_beat:
+            last_beat = beat
+            if not is_open:
+                log(f"alive, waiting — {market.reason()}")
+            else:
+                left = state.capacity_left()
+                log(f"alive, market open — {left}/{C.MAX_ALERTS_PER_DAY} alerts left today")
 
         if is_open:
             s = slot(now, C.SCAN_EVERY_MIN)

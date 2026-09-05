@@ -64,3 +64,10 @@ def test_slot_does_not_collide_across_days():
 def test_five_minute_slots_are_distinct():
     keys = {scheduler.slot(et(2026, 9, 8, 10, m), 5) for m in range(0, 30)}
     assert len(keys) == 6
+
+
+def test_heartbeat_slots_are_hourly():
+    a = scheduler.slot(et(2026, 9, 5, 10, 0), 60)
+    b = scheduler.slot(et(2026, 9, 5, 10, 59), 60)
+    c = scheduler.slot(et(2026, 9, 5, 11, 0), 60)
+    assert a == b and b != c
