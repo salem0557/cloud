@@ -19,7 +19,7 @@ import state
 import technical
 import uw
 from compose import compose, NO_TRADE
-from scoring import (best_contract, contract_cost, expected_profit_pct,
+from scoring import (best_contract, contract_cost, exit_rule, expected_profit_pct,
                      flow_direction, flow_score, technical_score,
                      catalyst_score, liquidity_score, pick_contracts_by_budget)
 from telegram_send import send
@@ -108,8 +108,29 @@ def evaluate(ticker, flow, dry_run=False):
             "news": [n["headline"] for n in news[:3]], "chain": chain}
 
 
+def tradable_chain(chain):
+    """Drop same-day contracts once too little of the session is left.
+
+    A 0DTE contract is worth its intrinsic value at 16:00 ET and nothing more,
+    so an entry taken minutes before the bell needs the whole measured move to
+    land almost immediately. Set MIN_MINUTES_TO_CLOSE = 0 to allow them anyway.
+    """
+    if not C.MIN_MINUTES_TO_CLOSE:
+        return chain
+    left = market.minutes_to_close()
+    if left >= C.MIN_MINUTES_TO_CLOSE:
+        return chain
+    kept = [c for c in chain if (c.get("dte") or 0) > 0]
+    dropped = len(chain) - len(kept)
+    if dropped:
+        print(f"  dropped {dropped} same-day contracts — {left} min to the close "
+              f"(minimum {C.MIN_MINUTES_TO_CLOSE})")
+    return kept
+
+
 def build_tiers(cand):
-    picks = pick_contracts_by_budget(cand["chain"], cand["direction"], cand["spot"])
+    picks = pick_contracts_by_budget(tradable_chain(cand["chain"]),
+                                     cand["direction"], cand["spot"])
     move = cand["technical"]["expected_move"]
     tiers = []
     for label, c in picks:
@@ -120,8 +141,10 @@ def build_tiers(cand):
             "tier": label, "option_symbol": c["option_symbol"],
             "strike": c["strike"], "type": c["type"], "expiry": c["expiry"],
             "ask": c["ask"], "bid": c["bid"], "cost": contract_cost(c),
-            "delta": c["delta"], "open_interest": c["open_interest"],
+            "delta": c["delta"], "gamma": c.get("gamma"), "theta": c.get("theta"),
+            "open_interest": c["open_interest"], "dte": c.get("dte"),
             "expected_profit_pct": expected_profit_pct(c, move),
+            "exit": exit_rule(c.get("dte")),
         })
     return tiers
 

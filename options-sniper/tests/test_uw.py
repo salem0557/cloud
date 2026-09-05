@@ -66,3 +66,44 @@ def test_real_values_pass_through():
     assert c.TELEGRAM_TOKEN == "8123456789:AAHrealtoken"
     assert c.TELEGRAM_CHAT_ID == "987654321"
     _reload()
+
+
+# ── DTE window and delta requirement ────────────────────────────
+import datetime
+import config as C2
+
+
+def _c(days, delta=0.5):
+    d = (datetime.date.today() + datetime.timedelta(days=days)).isoformat()
+    return {"expiry": d, "delta": delta}
+
+
+def test_far_dated_leaps_are_excluded():
+    """AAPL's chain came back with 3,294 contracts running to 2028. A 2028
+    LEAP is not a candidate for a 15-minute breakout."""
+    assert not uw._in_window(_c(900))
+    assert not uw._in_window(_c(C2.MAX_DTE + 1))
+
+
+def test_same_day_expiry_is_allowed():
+    """Salem trades 0DTE; the window starts at 0, not 2."""
+    assert C2.MIN_DTE == 0
+    assert uw._in_window(_c(0))
+
+
+def test_contracts_inside_the_window_pass():
+    assert uw._in_window(_c(C2.MIN_DTE))
+    assert uw._in_window(_c(C2.MAX_DTE))
+    assert uw._in_window(_c(21))
+
+
+def test_contracts_without_delta_are_dropped():
+    """About half of a full UW chain has no greeks; without a delta the
+    profit estimate can only read 0%."""
+    assert not uw._in_window(_c(21, delta=0))
+    assert not uw._in_window(_c(21, delta=None))
+
+
+def test_unparseable_expiry_is_dropped():
+    assert not uw._in_window({"expiry": "", "delta": 0.5})
+    assert not uw._in_window({"expiry": "not-a-date", "delta": 0.5})

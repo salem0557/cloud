@@ -35,6 +35,7 @@ def render_entry(p):
         f"السعر الحالي للسهم: ${p['spot']:.2f}",
         f"الهدف: ${tech['target']:.2f} (كسر ${tech['level']:.2f} + {C.TARGET_ATR_MULT}×ATR)",
         f"نقطة الدخول: {tech['entry_rule']}",
+        f"   ← الكسر مؤكد على شمعة 15د مُغلقة ({tech.get('bar_time', '')})",
         f"وقف الخسارة (السهم): ${tech['stop']:.2f}",
         "",
         "العقود المرشحة:",
@@ -44,17 +45,35 @@ def render_entry(p):
             lines.append(f"{t['tier']}: لا يوجد عقد مناسب (سيولة/سعر)")
             continue
         kind = "C" if t["type"] == "call" else "P"
+        dte = t.get("dte")
+        tag = " ⚡0DTE" if dte == 0 else (f" ({dte}ي)" if dte is not None else "")
         lines.append(
-            f"{t['tier']}: {t['strike']:g}{kind} @ ${t['ask']:.2f} → "
+            f"{t['tier']}: {t['strike']:g}{kind}{tag} @ ${t['ask']:.2f} → "
             f"تكلفة ${t['cost']:.0f} — ربح متوقع ~{t['expected_profit_pct']:.0f}%"
         )
+    plans = {}
+    for t in p.get("tiers", []):
+        e = t.get("exit")
+        if e:
+            plans.setdefault((e["take_pct"], e["stop_pct"], e["note"]), []).append(t["tier"][0])
+    if plans:
+        lines += ["", "خطة الخروج (على العقد لا السهم):"]
+        for (take, stop, note), marks in plans.items():
+            who = " ".join(marks)
+            lines.append(f"{who} جني ربح +{take}% | وقف خسارة {stop}%")
+            if note:
+                lines.append(f"   ← {note}")
+    if any(t.get("dte") == 0 for t in p.get("tiers", [])):
+        lines.append(f"   ← اخرج من 0DTE قبل {C.ZERO_DTE_HARD_EXIT_ET} بتوقيت نيويورك مهما كانت النتيجة")
+
     expiries = [t.get("expiry") for t in p.get("tiers", []) if t.get("expiry")]
     lines += [
         "",
         f"انتهاء الصلاحية: {sorted(set(expiries))[0] if expiries else '—'}",
         f"⏰ {p.get('time_riyadh', '')}",
-        "⚠️ الربح المتوقع تقدير تقريبي (دلتا) وليس ضماناً",
+        "⚠️ الربح المتوقع تقدير (دلتا+جاما−ثيتا) وليس ضماناً",
     ]
+
     if p.get("news"):
         lines += ["", "📰 " + " | ".join(str(n) for n in p["news"][:2])]
     return "\n".join(lines)

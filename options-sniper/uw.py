@@ -5,6 +5,7 @@ Every path and field name below was verified against the official OpenAPI spec
 *strings* — normalisation to float happens here, once, so the rest of the code
 never has to guess a type.
 """
+import datetime
 import re
 import time
 
@@ -187,7 +188,35 @@ def _normalise_contract(c):
         "implied_volatility": _num(c.get("implied_volatility")),
         "open_interest": _num(c.get("open_interest")),
         "volume": _num(c.get("volume")),
+        "dte": _dte(expiry),
     }
+
+
+def _dte(expiry):
+    """Calendar days until expiry, or None when the date is unusable."""
+    try:
+        d = datetime.date.fromisoformat(expiry)
+    except (TypeError, ValueError):
+        return None
+    return (d - datetime.date.today()).days
+
+
+def _in_window(c):
+    """Contracts this system is willing to trade.
+
+    The chain endpoint returns every expiry the ticker has - AAPL came back
+    with 3,294 contracts running out to 2028. A 2028 LEAP is not a candidate
+    for a 15-minute breakout, and a cheap far-dated OTM call can slip through
+    the budget filter on price alone, so the DTE window is enforced here
+    rather than only in the option_contracts fallback.
+
+    Contracts without a delta are dropped too: expected_profit_pct needs one,
+    and roughly half of what UW returns for a full chain has none.
+    """
+    dte = _dte(c.get("expiry"))
+    if dte is None or not (C.MIN_DTE <= dte <= C.MAX_DTE):
+        return False
+    return abs(_num(c.get("delta"))) > 0   # _num handles None and "" too
 
 
 def option_chain(ticker):
@@ -204,9 +233,15 @@ def option_chain(ticker):
     except UWError:
         raw = []
     if raw and isinstance(raw[0], dict):
-        return [_normalise_contract(c) for c in raw]
+        chain = [_normalise_contract(c) for c in raw]
+        usable = [c for c in chain if _in_window(c)]
+        if usable:
+            return usable
+        print(f"[uw] {ticker}: {len(chain)} contracts, none inside "
+              f"{C.MIN_DTE}-{C.MAX_DTE} DTE with a delta")
+        return []
     # fallback: greeks not served on this plan for option-chains
-    return option_contracts(ticker)
+    return [c for c in option_contracts(ticker) if _in_window(c)]
 
 
 def option_contracts(ticker):
@@ -252,9 +287,30 @@ def candles(ticker, candle_size=None, timeframe="5D", limit=500):
             "volume": _num(c.get("volume")),
             "start_time": c.get("start_time", ""),
             "end_time": c.get("end_time", ""),
+            "closed": _is_closed(c.get("end_time", "")),
         })
     rows.sort(key=lambda r: r["start_time"])          # UW returns newest-first
-    return [r for r in rows if r["close"] > 0]
+    rows = [r for r in rows if r["close"] > 0]
+    return [r for r in rows if r["closed"]]
+
+
+def _is_closed(end_time):
+    """True once the bar's window has actually elapsed.
+
+    UW includes the bar currently forming. Judging a break on it means reading
+    a 15-minute candle five minutes in: price can be above the level now and
+    close back under it, which is exactly the false break the 15m frame exists
+    to filter out. Only completed bars are ever scored.
+    """
+    if not end_time:
+        return False
+    try:
+        end = datetime.datetime.fromisoformat(end_time.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=datetime.timezone.utc)
+    return end <= datetime.datetime.now(datetime.timezone.utc)
 
 
 def spot(ticker):

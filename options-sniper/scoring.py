@@ -193,14 +193,50 @@ def best_contract(chain, direction, spot):
     return max(affordable, key=lambda c: c.get("open_interest", 0))
 
 
-# ── Expected profit (delta approximation — labeled as estimate) ─
+# ── Exit plan per contract ──────────────────────────────────────
+def exit_rule(dte):
+    """The take/stop pair that fits this contract's remaining life."""
+    d = 0 if dte is None else max(0, int(dte))
+    for max_dte, take, stop, note in C.EXIT_RULES:
+        if d <= max_dte:
+            return {"take_pct": take, "stop_pct": stop, "note": note, "dte": d}
+    take, stop, note = C.PROFIT_TAKE_PCT, C.STOP_LOSS_PCT, ""
+    return {"take_pct": take, "stop_pct": stop, "note": note, "dte": d}
+
+
+# ── Expected profit ─────────────────────────────────────────────
 def expected_profit_pct(contract: dict, expected_move: float) -> float:
-    """expected_move = |target - spot| in dollars, taken from the measured 15m
-    level (config.TARGET_ATR_MULT x ATR), NOT a flat 2% guess.
-    Approximation only: gamma and theta move the real result, especially near
-    expiry. Always shown to Salem labelled as a تقدير."""
+    """Estimate the contract's return if the stock reaches the measured target.
+
+    expected_move = |target - close| in dollars, from the 15m level.
+
+    Delta alone is not good enough once same-day expiries are in scope. A pure
+    delta estimate ignores both of the terms that dominate a 0DTE contract:
+
+      gamma  delta itself rises as the move happens, so the delta-only figure
+             understates a winning breakout
+      theta  a same-day contract bleeds its whole remaining value into the
+             close, so the delta-only figure overstates every trade, and by
+             far the most on the ones Salem now wants to take
+
+    Second-order estimate:  ΔP ≈ δ·m + ½·γ·m² − θ·(held/6.5)
+
+    Still an estimate — it assumes a static IV, and a 0DTE contract's real
+    path depends on when in the session the move arrives. Labelled as a
+    تقدير in every message.
+    """
     ask = contract.get("ask", 0)
     delta = abs(contract.get("delta", 0))
     if ask <= 0 or delta <= 0 or expected_move <= 0:
         return 0.0
-    return round(delta * expected_move / ask * 100, 0)
+
+    gamma = abs(contract.get("gamma", 0) or 0)
+    theta = abs(contract.get("theta", 0) or 0)
+
+    intrinsic_gain = delta * expected_move + 0.5 * gamma * expected_move ** 2
+    decay = theta * (C.HOLD_HOURS / C.TRADING_HOURS_PER_DAY)
+
+    net = intrinsic_gain - decay
+    if net <= 0:
+        return 0.0                    # theta eats the move — not a candidate
+    return round(net / ask * 100, 0)
