@@ -1,0 +1,138 @@
+name: Options Sniper
+
+on:
+  schedule:
+    # GitHub cron is UTC ONLY and cannot follow US daylight saving, so the window
+    # below covers both EST (14:30-21:00 UTC) and EDT (13:30-20:00 UTC).
+    # market.py ends any run that lands outside real trading hours.
+    #
+    # scanner: every 30 minutes
+    - cron: "0,30 13-21 * * 1-5"
+    # monitor: every 10 minutes. NOT every 5 — GitHub delays scheduled runs
+    # under load (commonly 5-20 minutes), so a tighter cadence buys nothing real.
+    - cron: "10,20,40,50 13-21 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "Which script to run now"
+        type: choice
+        options: [scanner, monitor]
+        default: scanner
+      dry_run:
+        description: "Print alerts instead of sending them"
+        type: boolean
+        default: true
+
+# Serialise every run: scanner and monitor share state.json, and two concurrent
+# runs could each spend the same slot out of the 5/day cap.
+concurrency:
+  group: options-sniper-state
+  cancel-in-progress: false
+
+env:
+  STATE_BRANCH: sniper-state
+  STATE_FILES: "state.json shortlist.json positions.json journal.csv"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write        # to push state back to the state branch
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: options-sniper/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r options-sniper/requirements.txt
+
+      - name: Decide which script to run
+        id: pick
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "script=${{ inputs.job }}"                        >> "$GITHUB_OUTPUT"
+            echo "dry=${{ inputs.dry_run && '--dry-run' || '' }}"  >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "0,30 13-21 * * 1-5" ]; then
+            echo "script=scanner" >> "$GITHUB_OUTPUT"
+            echo "dry="           >> "$GITHUB_OUTPUT"
+          else
+            echo "script=monitor" >> "$GITHUB_OUTPUT"
+            echo "dry="           >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Restore state ───────────────────────────────────────────
+      # Actions runners are wiped after every job. Without this the 5/day cap
+      # resets on every run, shortlist.json is always empty, and journal.csv
+      # never accumulates the history the threshold is calibrated from.
+      - name: Restore state
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --heads origin "$STATE_BRANCH" >/dev/null 2>&1; then
+            # a failure here must NOT be swallowed: saving afterwards would
+            # force-push an empty branch over the real journal history
+            git clone --branch "$STATE_BRANCH" --depth 1 \
+              "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
+              "$RUNNER_TEMP/state"
+            for f in $STATE_FILES; do
+              if [ -f "$RUNNER_TEMP/state/$f" ]; then
+                cp "$RUNNER_TEMP/state/$f" "options-sniper/$f"
+                echo "restored $f ($(wc -c < "options-sniper/$f") bytes)"
+              fi
+            done
+          else
+            echo "no '$STATE_BRANCH' branch yet — first run, starting clean"
+          fi
+
+      - name: Run ${{ steps.pick.outputs.script }}
+        working-directory: options-sniper
+        env:
+          UW_API_KEY:        ${{ secrets.UW_API_KEY }}
+          FINVIZ_AUTH:       ${{ secrets.FINVIZ_AUTH }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:  ${{ secrets.TELEGRAM_CHAT_ID }}
+          USE_CLAUDE_COMPOSER: "0"     # the runner has no `claude` CLI
+        run: python ${{ steps.pick.outputs.script }}.py ${{ steps.pick.outputs.dry }}
+
+      # ── Persist state ───────────────────────────────────────────
+      - name: Save state
+        if: always() && steps.pick.outputs.dry == ''
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/save"
+          mkdir -p "$OUT"
+          for f in $STATE_FILES; do
+            [ -f "options-sniper/$f" ] && cp "options-sniper/$f" "$OUT/$f" || true
+          done
+          if [ -z "$(ls -A "$OUT")" ]; then
+            echo "nothing to save"; exit 0
+          fi
+          cd "$OUT"
+          git init -q
+          git config user.name  "options-sniper[bot]"
+          git config user.email "options-sniper@users.noreply.github.com"
+          git add -A
+          git commit -q -m "state $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          URL="https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          for i in 1 2 3 4; do
+            if git push -f "$URL" "HEAD:refs/heads/$STATE_BRANCH"; then
+              echo "state saved to $STATE_BRANCH"; exit 0
+            fi
+            echo "push retry $i"; sleep $((2 ** i))
+          done
+          exit 1
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sniper-${{ steps.pick.outputs.script }}-${{ github.run_id }}
+          path: options-sniper/journal.csv
+          if-no-files-found: ignore
+          retention-days: 30

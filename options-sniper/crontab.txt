@@ -1,0 +1,34 @@
+# ─────────────────────────────────────────────────────────────────────
+# Options Sniper — cron (توقيت الرياض / Asia/Riyadh)
+#
+# تحقّق أن جهازك على توقيت الرياض:   timedatectl        (أو: date)
+# إن لم يكن، أضف هذا السطر أعلى crontab:   CRON_TZ=Asia/Riyadh
+#
+# السوق الأمريكي بتوقيت الرياض:
+#   صيفاً (DST، مارس→نوفمبر):  16:30 – 23:00
+#   شتاءً (نوفمبر→مارس):       17:30 – 00:00
+#
+# التنصيب:  crontab crontab.txt      (أو: crontab -e ثم الصق)
+# ─────────────────────────────────────────────────────────────────────
+CRON_TZ=Asia/Riyadh
+SNIPER=/home/salem/options-sniper
+
+# ══ صيفاً (فعّل هذه، وعلّق الشتوية) ══
+# الفحص الشامل: 16:30 ثم كل 30 دقيقة حتى 23:00
+30 16 * * 1-5   cd $SNIPER && python3 scanner.py >> log.txt 2>&1
+0,30 17-22 * * 1-5  cd $SNIPER && python3 scanner.py >> log.txt 2>&1
+# المراقبة: كل 5 دقائق من 16:30 حتى 23:00
+35,40,45,50,55 16 * * 1-5  cd $SNIPER && python3 monitor.py >> log.txt 2>&1
+*/5 17-22 * * 1-5          cd $SNIPER && python3 monitor.py >> log.txt 2>&1
+0 23 * * 1-5               cd $SNIPER && python3 monitor.py >> log.txt 2>&1
+
+# ══ شتاءً (علّق الصيفية أعلاه وفعّل هذه) ══
+# 30 17 * * 1-5              cd $SNIPER && python3 scanner.py >> log.txt 2>&1
+# 0,30 18-23 * * 1-5         cd $SNIPER && python3 scanner.py >> log.txt 2>&1
+# 35,40,45,50,55 17 * * 1-5  cd $SNIPER && python3 monitor.py >> log.txt 2>&1
+# */5 18-23 * * 1-5          cd $SNIPER && python3 monitor.py >> log.txt 2>&1
+# 0 0 * * 2-6                cd $SNIPER && python3 monitor.py >> log.txt 2>&1
+#   ↑ منتصف الليل شتاءً يقع في اليوم التالي، لذلك 2-6 (ثلاثاء–سبت) لا 1-5
+
+# تنظيف السجل كل جمعة
+0 1 * * 6   cd $SNIPER && tail -n 5000 log.txt > log.tmp && mv log.tmp log.txt
