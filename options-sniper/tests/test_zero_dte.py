@@ -12,7 +12,7 @@ import zero_dte as z
 
 def bar(t, o, h, l, c, bid=0.0, ask=0.0, vol=100):
     return {"time": f"2026-09-04T{t}:00", "open": o, "high": h, "low": l,
-            "close": c, "bid": bid, "ask": ask, "volume": vol,
+            "close": c, "avg_price": c, "bid": bid, "ask": ask, "volume": vol,
             "ask_volume": 60, "bid_volume": 40, "iv": 0.5, "delta": 0.3,
             "_keys": []}
 
@@ -30,12 +30,26 @@ def test_a_tighter_stop_lowers_the_bar():
 
 
 # ── The assumption that invents edges ───────────────────────────
+def test_the_spread_is_charged_at_both_ends():
+    """Buy above the mid, sell below it. At 10% the entry costs 5% more than
+    the print and the exit gives back 5%."""
+    rows = [bar("10:00", 1.0, 1.0, 1.0, 1.0),
+            bar("10:01", 1.0, 5.0, 1.0, 5.0)]
+    free = z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30")
+    paid = z.entry_exit(rows, 0, 40, 25, 15, 10.0, "15:30")
+    assert free["entry"] == 1.0 and paid["entry"] == 1.05
+    assert round(free["multiple"] if "multiple" in free
+                 else free["exit"] / free["entry"], 4) == 1.4
+    assert round(paid["exit"] / paid["entry"], 4) == 1.4    # nets the same +40%
+    assert paid["exit"] > free["exit"]     # but the contract had to travel further
+
+
 def test_a_minute_holding_both_target_and_stop_counts_as_the_stop():
     """An OHLC bar cannot say which came first. Assuming the good one is how a
     backtest manufactures a win rate."""
     rows = [bar("10:00", 1.0, 1.0, 1.0, 1.0, bid=0.99, ask=1.00),
             bar("10:01", 1.0, 1.50, 0.70, 1.0, bid=0.99, ask=1.00)]
-    t = z.entry_exit(rows, 0, 40, 25, 15, "mid", "15:30")
+    t = z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30")
     assert t["why"] == "stop"
     assert t["exit"] == 0.75                    # entry 1.00, stop -25%
 
@@ -45,17 +59,18 @@ def test_the_target_pays_the_limit_price_not_the_spike():
     for a print nobody's order reached."""
     rows = [bar("10:00", 1.0, 1.0, 1.0, 1.0, bid=0.99, ask=1.00),
             bar("10:01", 1.0, 3.00, 1.0, 2.9, bid=2.80, ask=2.90)]
-    t = z.entry_exit(rows, 0, 40, 25, 15, "mid", "15:30")
+    t = z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30")
     assert t["why"] == "take" and t["exit"] == 1.40
 
 
-def test_under_bid_fills_the_target_must_reach_the_bid():
-    """A seller gets out at the bid. A high that printed above the target
-    while the bid stayed under it is not a fill."""
+def test_the_spread_can_turn_a_winner_into_a_loser():
+    """This endpoint serves no bid/ask, so the spread is a parameter. A move
+    that clears +40% on the trade price does not clear it once the round trip
+    is paid for — and on a 0DTE contract the round trip is not small."""
     rows = [bar("10:00", 1.0, 1.0, 1.0, 1.0, bid=0.99, ask=1.00),
             bar("10:01", 1.0, 1.45, 1.0, 1.4, bid=1.20, ask=1.45)]
-    assert z.entry_exit(rows, 0, 40, 25, 15, "mid", "15:30")["why"] == "take"
-    assert z.entry_exit(rows, 0, 40, 25, 15, "bid", "15:30")["why"] != "take"
+    assert z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30")["why"] == "take"
+    assert z.entry_exit(rows, 0, 40, 25, 15, 30.0, "15:30")["why"] != "take"
 
 
 # ── Getting out ─────────────────────────────────────────────────
@@ -64,7 +79,7 @@ def test_the_trade_is_closed_when_the_clock_runs_out():
     rows = [bar("10:00", 1.0, 1.0, 1.0, 1.0, bid=0.99, ask=1.00)]
     rows += [bar(f"10:{m:02d}", 1.0, 1.05, 0.95, 0.90, bid=0.89, ask=0.91)
              for m in range(1, 6)]
-    t = z.entry_exit(rows, 0, 40, 25, 5, "mid", "15:30")
+    t = z.entry_exit(rows, 0, 40, 25, 5, 0.0, "15:30")
     assert t["why"] == "timeout" and t["minutes"] == 5
     assert t["exit"] < t["entry"]
 
@@ -74,7 +89,7 @@ def test_nothing_is_held_past_the_hard_exit():
     rows = [bar("15:28", 1.0, 1.0, 1.0, 1.0, bid=0.99, ask=1.00),
             bar("15:29", 1.0, 1.05, 0.98, 1.0, bid=0.99, ask=1.01),
             bar("15:31", 1.0, 2.00, 1.0, 2.0, bid=1.99, ask=2.01)]
-    t = z.entry_exit(rows, 0, 40, 25, 15, "mid", "15:30")
+    t = z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30")
     assert t["why"] == "timeout"                # the 2x minute is past the exit
     assert t["minutes"] == 1
 
@@ -82,12 +97,12 @@ def test_nothing_is_held_past_the_hard_exit():
 def test_an_entry_with_no_minutes_left_is_not_a_trade():
     rows = [bar("15:29", 1.0, 1.0, 1.0, 1.0, bid=0.99, ask=1.00),
             bar("15:31", 1.0, 2.0, 1.0, 2.0, bid=1.99, ask=2.01)]
-    assert z.entry_exit(rows, 0, 40, 25, 15, "mid", "15:30") is None
+    assert z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30") is None
 
 
 def test_a_contract_with_no_price_is_skipped():
     rows = [bar("10:00", 0, 0, 0, 0), bar("10:01", 0, 0, 0, 0)]
-    assert z.entry_exit(rows, 0, 40, 25, 15, "mid", "15:30") is None
+    assert z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30") is None
 
 
 # ── Reading the minute ──────────────────────────────────────────

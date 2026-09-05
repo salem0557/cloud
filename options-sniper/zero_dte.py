@@ -46,36 +46,35 @@ def minute_of(row):
     return t[:5]
 
 
-def _take_filled(row, target, model):
-    """Did the target actually become sellable in this minute?
-
-    Under `bid` the sale has to reach the BID, because that is where a seller
-    gets out. Under the looser models a print at or above the target is enough.
-    """
-    if model == "bid" and row["bid"] > 0:
-        return row["bid"] >= target
-    return row["high"] >= target
-
-
-def entry_exit(rows, i, take_pct, stop_pct, max_hold, model, hard_exit):
+def entry_exit(rows, i, take_pct, stop_pct, max_hold, spread_pct, hard_exit):
     """One trade: buy at row i, then walk forward minute by minute.
 
-    The order of the checks inside a minute is deliberately pessimistic. A
-    minute whose range covers BOTH the target and the stop is counted as a
-    stop: an OHLC bar cannot say which came first, and assuming the good one is
-    how a backtest invents an edge.
+    This endpoint serves NO bid/ask — only trade prices — so the spread cannot
+    be measured and must be charged explicitly. `spread_pct` is the quoted
+    width as a percentage of the mid; the buy pays half of it and the sale
+    gives up the other half. At 0 the run assumes a free round trip, which on a
+    0DTE contract is not a conservative assumption, it is a fictional one.
 
-    Two assumptions still favour the trade, and neither can be removed from
-    minute bars: the target is credited at exactly the limit price, and the
-    stop at exactly the stop, so slippage through a fast 0DTE move is not
-    charged. Both make the result better than reality, never worse.
+    Everything is computed in mid space: to net +40% AFTER paying to get out,
+    the contract has to reach more than the entry times 1.4.
+
+    The order of the checks inside a minute is deliberately pessimistic. A
+    minute whose range covers both the target and the stop counts as a stop —
+    an OHLC bar cannot say which came first, and assuming the good one is how
+    a backtest invents a win rate.
+
+    One assumption still favours the trade and cannot be removed from minute
+    bars: the target pays exactly the limit and the stop exactly the stop, so
+    slippage through a fast move is not charged.
     """
-    entry = fill_price(rows[i]["bid"], rows[i]["ask"] or rows[i]["close"],
-                       model, buying=True)
-    if entry <= 0:
+    half = spread_pct / 200.0
+    mid_in = rows[i]["close"] or rows[i]["avg_price"]
+    if mid_in <= 0:
         return None
-    target = entry * (1 + take_pct / 100.0)
-    stop = entry * (1 - stop_pct / 100.0)
+    cost = mid_in * (1 + half)                  # lift the offer
+    out_factor = 1 - half                       # hit the bid on the way out
+    target = cost * (1 + take_pct / 100.0) / out_factor
+    stop = cost * (1 - stop_pct / 100.0) / out_factor
 
     seen = 0
     for r in rows[i + 1:i + 1 + max_hold]:
@@ -83,18 +82,17 @@ def entry_exit(rows, i, take_pct, stop_pct, max_hold, model, hard_exit):
             break
         seen += 1
         if r["low"] > 0 and r["low"] <= stop:        # both in one bar -> stop
-            return {"exit": stop, "entry": entry, "minutes": seen,
-                    "why": "stop"}
-        if _take_filled(r, target, model):
-            return {"exit": target, "entry": entry, "minutes": seen,
-                    "why": "take"}
+            return {"exit": stop * out_factor, "entry": cost,
+                    "minutes": seen, "why": "stop"}
+        if r["high"] >= target:
+            return {"exit": target * out_factor, "entry": cost,
+                    "minutes": seen, "why": "take"}
 
     if not seen:
         return None
     last = rows[i + seen]
-    out = fill_price(last["bid"], last["ask"] or last["close"], model,
-                     buying=False)
-    return {"exit": out if out > 0 else last["close"], "entry": entry,
+    mid_out = last["close"] or last["avg_price"]
+    return {"exit": max(mid_out, 0.0) * out_factor, "entry": cost,
             "minutes": seen, "why": "timeout"}
 
 
@@ -118,8 +116,8 @@ def bucket(name, value):
     if name == "price":
         cost = value * 100
         return f"budget={'$50' if cost <= 50 else '$100' if cost <= 100 else '$200' if cost <= 200 else '>$200'}"
-    if name == "spread_pct":
-        return f"spread={'<5%' if value < 5 else '5-15%' if value < 15 else '15-30%' if value < 30 else '30%+'}"
+    if name == "iv":
+        return f"iv={'<50%' if value < 0.5 else '50-100%' if value < 1.0 else '100-200%' if value < 2.0 else '200%+'}"
     if name == "minute_volume":
         return f"minvol={'<10' if value < 10 else '10-50' if value < 50 else '50-200' if value < 200 else '200+'}"
     if name == "ask_share":
@@ -129,18 +127,14 @@ def bucket(name, value):
     return f"{name}={value}"
 
 
-FEATURES = ["minute", "price", "spread_pct", "minute_volume", "ask_share",
-            "moneyness"]
+FEATURES = ["minute", "price", "minute_volume", "ask_share", "moneyness",
+            "iv"]
 
 
 def features(rows, i, meta):
     """Only what a trader could see at the moment of the buy."""
     r = rows[i]
-    price = r["ask"] or r["close"]
-    spread_pct = None
-    if r["bid"] > 0 and r["ask"] > 0:
-        mid = (r["bid"] + r["ask"]) / 2
-        spread_pct = (r["ask"] - r["bid"]) / mid * 100 if mid > 0 else None
+    price = r["close"] or r["avg_price"]
     sided = (r["ask_volume"] or 0) + (r["bid_volume"] or 0)
     spot, strike = meta.get("stock_price", 0), meta.get("strike", 0)
     moneyness = None
@@ -150,24 +144,24 @@ def features(rows, i, meta):
     return {
         "minute": minute_of(r),
         "price": price,
-        "spread_pct": spread_pct,
+        "iv": r["iv"] or None,
         "minute_volume": r["volume"],
         "ask_share": (r["ask_volume"] / sided) if sided else None,
         "moneyness": moneyness,
     }
 
 
-def scan_contract(rows, meta, args, model):
+def scan_contract(rows, meta, args, spread_pct):
     """Every minute of this session that could have been an entry."""
     out = []
     for i in range(len(rows) - 1):
-        price = rows[i]["ask"] or rows[i]["close"]
+        price = rows[i]["close"] or rows[i]["avg_price"]
         if not (args.min_price <= price <= args.max_price):
             continue
         if minute_of(rows[i]) >= args.hard_exit:
             continue
         trade = entry_exit(rows, i, args.take, args.stop, args.max_hold,
-                           model, args.hard_exit)
+                           spread_pct, args.hard_exit)
         if not trade:
             continue
         trade["multiple"] = trade["exit"] / trade["entry"]
@@ -229,12 +223,13 @@ def report_features(obs, avg):
         print()
 
 
-def run_one(date, args, model):
+def run_one(date, args, spread_pct):
     print(f"\n{'#'*64}\n# 0DTE session {date}\n{'#'*64}")
     print(f"Buy a contract expiring {date}, sell at +{args.take:.0f}%, "
           f"cut at -{args.stop:.0f}%,")
     print(f"give up after {args.max_hold} minutes, out by {args.hard_exit}.")
-    print(f"Fills: {model}. Premium ${args.min_price}-${args.max_price} "
+    print(f"Spread charged: {spread_pct:.0f}% of mid, half each way. "
+          f"Entry premium ${args.min_price}-${args.max_price} "
           f"(${args.min_price*100:.0f}-${args.max_price*100:.0f} a contract)\n")
     # expiry_dates, not min_dte/max_dte: the screener measures dte from TODAY,
     # so asking for dte 0 on a past session matched nothing on every date.
@@ -264,16 +259,17 @@ def run_one(date, args, model):
                   f"{', '.join(seen[:8])}"
                   + (f" (+{len(seen)-8} more)" if len(seen) > 8 else ""))
             print(f"  None expire on {date} itself, so that session had no "
-                  "0DTE contracts above the volume floor. Pick a date from "
-                  "the list above.")
+                  "0DTE contracts above the volume floor.")
         return None
 
-    pool = [c for c in pool
-            if args.min_price <= c["price"] <= args.max_price][:args.contracts]
-    if not pool:
-        print("None inside the premium band.")
-        return None
-    print(f"{len(pool)} inside the budget. One request each.\n")
+    # NOT filtered by the screener's price. That price is the session's
+    # snapshot, so keeping only contracts under $2 there keeps the ones that
+    # ENDED the day cheap — which is very close to keeping the ones that lost.
+    # The budget is applied minute by minute inside scan_contract instead, on
+    # the price at the moment of the buy, which is the only price Salem sees.
+    pool = pool[:args.contracts]
+    print(f"{len(pool)} contracts, taken in the screener's own order "
+          f"(volume). One request each.\n")
 
     tapes, failures, shape_shown = [], [], False
     for n, c in enumerate(pool, 1):
@@ -287,45 +283,45 @@ def run_one(date, args, model):
         if len(rows) < 5:
             continue
         if not shape_shown:
-            # UW does not publish this row shape; report what actually arrived
-            print(f"  row fields: {', '.join(rows[0]['_keys'][:14])}")
+            print(f"  row fields: {', '.join(rows[0]['_keys'])}")
             quoted = sum(1 for r in rows if r["bid"] > 0 and r["ask"] > 0)
-            print(f"  {len(rows)} minutes, {quoted} carry a bid/ask. "
-                  + ("Fills use the real quote.\n" if quoted > len(rows) / 2
-                     else "NO QUOTES — fills fall back to the trade price, so "
-                          "the spread is NOT charged and every number below "
-                          "is optimistic.\n"))
+            print(f"  {len(rows)} minutes, {quoted} carry a bid/ask."
+                  + ("" if quoted else " No NBBO is served here, which is why "
+                     "the spread is charged as a parameter."))
             shape_shown = True
         tapes.append((c, rows))
-        if n % 20 == 0:
+        if n % 25 == 0:
             print(f"  {n}/{len(pool)} contracts pulled")
 
     if failures:
         print(f"\n  {len(failures)} contracts had no intraday data")
     if not tapes:
-        print("\nNo usable tapes. Either the band is empty or intraday data "
-              "is not served on this plan.")
+        print("\nNo usable tapes.")
         return None
 
-    obs = [t for c, rows in tapes for t in scan_contract(rows, c, args, model)]
+    obs = [t for c, rows in tapes
+           for t in scan_contract(rows, c, args, spread_pct)]
     if not obs:
-        print("\nNo trades inside the premium band.")
+        print("\nNo minute fell inside the premium band.")
         return None
 
     print(f"\n{'='*64}")
     stats = summarise(obs, args.take, args.stop)
 
-    # the same entries under the other two fill assumptions, no new requests
-    print("\n  Same entries under the other fill models:")
-    for other in ("high", "mid", "bid"):
-        if other == model:
+    # The fill-model comparison is dead here: with no quotes all three models
+    # read the same trade price, and the first run printed three identical
+    # numbers. The spread is the live variable instead.
+    print("\n  The same entries at other spreads (this is the whole argument):")
+    for alt in (0.0, 5.0, 10.0, 15.0):
+        if alt == spread_pct:
             continue
-        alt = [t for c, rows in tapes for t in scan_contract(rows, c, args, other)]
-        if not alt:
+        rows_alt = [t for c, rows in tapes
+                    for t in scan_contract(rows, c, args, alt)]
+        if not rows_alt:
             continue
-        a = statistics.mean(o["multiple"] for o in alt)
-        h = sum(1 for o in alt if o["why"] == "take") / len(alt) * 100
-        print(f"    --fills {other:4s}: ${a:.3f} per $1, {h:.1f}% hit, n={len(alt)}")
+        a = statistics.mean(o["multiple"] for o in rows_alt)
+        h = sum(1 for o in rows_alt if o["why"] == "take") / len(rows_alt) * 100
+        print(f"    spread {alt:4.0f}% : ${a:.3f} per $1, {h:.1f}% hit")
 
     report_features(obs, stats["avg"])
     return {"date": date, **stats}
@@ -343,14 +339,16 @@ def main(argv=None):
     p.add_argument("--min-price", type=float, default=0.05)
     p.add_argument("--max-price", type=float, default=2.00)
     p.add_argument("--min-volume", type=int, default=200)
-    p.add_argument("--contracts", type=int, default=60)
+    p.add_argument("--contracts", type=int, default=80)
     p.add_argument("--type", default=None, choices=["call", "put"])
-    p.add_argument("--fills", default="mid", choices=["high", "mid", "bid"])
+    p.add_argument("--spread", type=float, default=5.0,
+                   help="quoted spread as %% of mid, charged half each way. "
+                        "0 assumes a free round trip, which is fictional.")
     args = p.parse_args(argv)
 
     dates = ([d.strip() for d in args.dates.split(",") if d.strip()]
              if args.dates else [args.date] if args.date else [None])
-    results = [r for r in (run_one(d, args, args.fills) for d in dates) if r]
+    results = [r for r in (run_one(d, args, args.spread) for d in dates) if r]
     if not results:
         return 1
 
