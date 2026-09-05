@@ -166,3 +166,58 @@ def test_screener_failure_raises_rather_than_returning_empty(monkeypatch):
         assert "403" in str(e)
     else:
         raise AssertionError("should have raised")
+
+
+# ── Touch rate is not profit ────────────────────────────────────
+def test_realised_credits_the_target_on_a_touch():
+    o = {"peak_multiple": 17.4, "end_multiple": 0.2}
+    assert explosion.realised(o, 5.0) == 5.0     # sold on the way up
+
+
+def test_realised_falls_back_to_the_end_value():
+    """The 69% that never touch do not return zero — they return whatever the
+    contract was worth at the end, which is the half of the arithmetic the
+    peak columns leave out."""
+    o = {"peak_multiple": 1.1, "end_multiple": 0.4}
+    assert explosion.realised(o, 5.0) == 0.4
+
+
+def test_a_high_touch_rate_can_still_lose_money():
+    """Nine near-total losses against one 5x is a 10% touch rate and a losing
+    bucket. Ranking by hit rate alone would call it a find."""
+    obs = [{"peak_multiple": 6.0, "end_multiple": 5.0, "days_to_peak": 3}] + \
+          [{"peak_multiple": 0.9, "end_multiple": 0.05, "days_to_peak": 1}] * 9
+    s = explosion.summarise(obs, 5.0)
+    assert s["explosion_rate"] == 10.0
+    assert s["realised_avg"] < 1.0               # $0.545 per $1
+
+
+def test_a_lower_touch_rate_can_win():
+    obs = [{"peak_multiple": 6.0, "end_multiple": 5.0, "days_to_peak": 3}] * 3 + \
+          [{"peak_multiple": 0.9, "end_multiple": 0.6, "days_to_peak": 1}] * 7
+    s = explosion.summarise(obs, 5.0)
+    assert s["explosion_rate"] == 30.0
+    assert s["realised_avg"] > 1.0
+
+
+# ── Pairs, because marginals cannot answer what they raise ──────
+def _o(price, dte, peak, end):
+    return {"peak_multiple": peak, "end_multiple": end, "days_to_peak": 2,
+            "features": {"price": price, "dte": dte}}
+
+
+def test_pairs_find_the_intersection():
+    """Cheap explodes and short-dated explodes; only the pair says whether
+    cheap AND short-dated does."""
+    obs = ([_o(0.05, 5, 8.0, 6.0)] * 25 +      # cheap + short: runs
+           [_o(0.05, 30, 0.5, 0.2)] * 25 +     # cheap + long: dies
+           [_o(0.80, 5, 0.6, 0.3)] * 25)       # dear + short: dies
+    pairs = dict(explosion.combinations(obs, ["price", "dte"], 5.0, 20))
+    best = max(pairs.items(), key=lambda kv: kv[1]["realised_avg"])
+    assert "price=<0.10" in best[0] and "dte=3-7" in best[0]
+    assert best[1]["explosion_rate"] == 100.0
+
+
+def test_thin_pairs_are_excluded():
+    obs = [_o(0.05, 5, 8.0, 6.0)] * 3
+    assert explosion.combinations(obs, ["price", "dte"], 5.0, 20) == []

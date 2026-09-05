@@ -99,6 +99,29 @@ def _dte(expiry, on_date):
         return None
 
 
+def combinations(obs, feats, threshold, min_n):
+    """Marginals cannot answer the question they raise.
+
+    If cheap contracts explode 31% of the time and short-dated ones 20%, the
+    cheap AND short-dated intersection could be 50% or it could be 15% —
+    nothing in the per-feature tables distinguishes those. Pairs are measured
+    directly.
+    """
+    out = []
+    for a in range(len(feats)):
+        for b in range(a + 1, len(feats)):
+            fa, fb = feats[a], feats[b]
+            groups = defaultdict(list)
+            for o in obs:
+                key = (bucket(fa, o["features"].get(fa)),
+                       bucket(fb, o["features"].get(fb)))
+                groups[key].append(o)
+            for key, rows in groups.items():
+                if len(rows) >= min_n:
+                    out.append((" + ".join(key), summarise(rows, threshold)))
+    return sorted(out, key=lambda kv: -kv[1]["realised_avg"])
+
+
 # ── Buckets: the shapes a live scanner could actually filter on ──
 def bucket(name, value):
     if value is None:
@@ -140,12 +163,34 @@ def scan_contract(symbol, meta, horizon, min_price, max_price):
     return out
 
 
-def summarise(obs, threshold):
+def realised(o, take_multiple):
+    """What a rule that sells at the first touch of `take_multiple` actually got.
+
+    This is the number the peak columns cannot give. A 31% touch rate says
+    nothing about profit on its own: the other 69% do not return zero, they
+    return whatever the contract was worth at the end of the window, and the
+    UBER contract Salem sent ended at $0.01 after touching 17x. Selling at a
+    fixed multiple is the simplest rule that closes that gap, so it is the one
+    measured.
+
+    Still optimistic — the touch is credited at the target price, and a real
+    fill on a contract this wide is worse.
+    """
+    return take_multiple if o["peak_multiple"] >= take_multiple else o["end_multiple"]
+
+
+def summarise(obs, threshold, take=None):
     if not obs:
         return {"count": 0}
     wins = [o for o in obs if o["peak_multiple"] >= threshold]
     peaks = sorted(o["peak_multiple"] for o in obs)
+    take = take or threshold
+    got = [realised(o, take) for o in obs]
     return {
+        # what a sell-at-`take` rule returned per dollar staked. Below 1.0 the
+        # bucket loses money however impressive its touch rate looks.
+        "realised_avg": round(statistics.mean(got), 3),
+        "realised_median": round(statistics.median(got), 3),
         "count": len(obs),
         "explosion_rate": round(len(wins) / len(obs) * 100, 1),
         "median_peak": round(statistics.median(peaks), 2),
@@ -233,9 +278,10 @@ def main(args):
           f"← held to the window's end, not sold at the peak")
     print(f"  median days to peak   : {overall['median_days_to_peak']}")
 
-    print(f"\nBreak-even: buying every one of these needs a "
-          f"{round(100 / args.multiple, 1)}% hit rate at {args.multiple}x "
-          f"to return the stake.")
+    print(f"\n  SELLING AT {args.multiple}x, holding the rest to the window's end:")
+    print(f"    returned per $1 staked : ${overall['realised_avg']}")
+    print(f"    break-even needs       : {round(100 / args.multiple, 1)}% "
+          f"touching {args.multiple}x")
 
     print(f"\n{'═' * 64}\nWhat separates the ones that ran:\n")
     for feat in FEATURES:
@@ -247,14 +293,29 @@ def main(args):
         if not rows:
             continue
         print(f"  {feat}")
-        for k, s in sorted(rows, key=lambda kv: -kv[1]["explosion_rate"]):
-            print(f"    {s['explosion_rate']:>5}%  n={s['count']:>5}  "
-                  f"median {s['median_peak']:>5}x  {k}")
+        for k, s in sorted(rows, key=lambda kv: -kv[1]["realised_avg"]):
+            flag = "  ← profitable" if s["realised_avg"] > 1.0 else ""
+            print(f"    ${s['realised_avg']:>5}/$1  {s['explosion_rate']:>5}% hit  "
+                  f"n={s['count']:>5}  {k}{flag}")
         print()
+
+    print(f"{'═' * 64}\nBest pairs (>= {C.BASE_RATE_MIN_SAMPLE} samples), "
+          f"by what they actually returned:\n")
+    pairs = combinations(obs, FEATURES, args.multiple, C.BASE_RATE_MIN_SAMPLE)
+    for k, s in pairs[:12]:
+        flag = "  ← profitable" if s["realised_avg"] > 1.0 else ""
+        print(f"  ${s['realised_avg']:>5}/$1  {s['explosion_rate']:>5}% hit  "
+              f"n={s['count']:>5}  {k}{flag}")
+    if not any(s["realised_avg"] > 1.0 for _, s in pairs):
+        print("\n  None returned more than the stake. On this sample there is "
+              "no pair of\n  these features that makes buying profitable at "
+              f"a {args.multiple}x exit.")
+    print()
 
     payload = {
         "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "params": vars(args), "overall": overall,
+        "pairs": {k: s for k, s in pairs[:40]},
         "by_feature": {f: {k: summarise(v, args.multiple)
                            for k, v in defaultdict(
                                list, {bucket(f, o["features"].get(f)): []
