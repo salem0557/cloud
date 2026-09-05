@@ -24,11 +24,25 @@ def _load_env():
 _load_env()
 
 # ── API keys (loaded from .env) ─────────────────────────────────
-UW_API_KEY       = os.environ.get("UW_API_KEY", "")
+# The .env.example placeholders are shipped in the repo, and Railway's
+# "Suggested Variables" panel offers to import them verbatim. A placeholder is
+# a non-empty string, so an emptiness check would pass and the first UW call
+# would fail with a bare 401 every 30 minutes instead of saying why.
+_PLACEHOLDER_MARKERS = ("ضع_", "your-token-here", "your_username", "_هنا")
+
+
+def _clean(name):
+    v = os.environ.get(name, "").strip()
+    if v and any(m in v for m in _PLACEHOLDER_MARKERS):
+        return ""
+    return v
+
+
+UW_API_KEY       = _clean("UW_API_KEY")
 UW_BASE          = "https://api.unusualwhales.com"
-FINVIZ_AUTH      = os.environ.get("FINVIZ_AUTH", "")
-TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+FINVIZ_AUTH      = _clean("FINVIZ_AUTH")
+TELEGRAM_TOKEN   = _clean("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = _clean("TELEGRAM_CHAT_ID")
 
 # ── Scoring (agreed design: 30/30/20/20, threshold 85) ──────────
 WEIGHTS = {"flow": 30, "technical": 30, "catalyst": 20, "liquidity": 20}

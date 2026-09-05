@@ -33,3 +33,36 @@ def test_contract_normalisation_maps_uw_field_names():
 def test_normalisation_falls_back_to_the_occ_symbol():
     c = uw._normalise_contract({"option_symbol": "UBER260911C00076000"})
     assert c["strike"] == 76.0 and c["type"] == "call" and c["expiry"] == "2026-09-11"
+
+
+# ── Placeholder guard ───────────────────────────────────────────
+import importlib, os
+import config as _config
+
+
+def _reload(**env):
+    for k in ("UW_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "FINVIZ_AUTH"):
+        os.environ.pop(k, None)
+    os.environ.update(env)
+    return importlib.reload(_config)
+
+
+def test_shipped_placeholders_are_treated_as_unset():
+    """Railway offers to import .env.example verbatim; a placeholder must not
+    read as a configured key, or the first UW call fails with a bare 401."""
+    c = _reload(UW_API_KEY="ضع_مفتاح_unusual_whales_هنا",
+                TELEGRAM_BOT_TOKEN="123456789:AAAA-your-token-here",
+                TELEGRAM_CHAT_ID="ضع_رقم_الشات_هنا")
+    assert c.UW_API_KEY == ""
+    assert c.TELEGRAM_TOKEN == ""
+    assert c.TELEGRAM_CHAT_ID == ""
+
+
+def test_real_values_pass_through():
+    c = _reload(UW_API_KEY="abc123realkey",
+                TELEGRAM_BOT_TOKEN="8123456789:AAHrealtoken",
+                TELEGRAM_CHAT_ID="987654321")
+    assert c.UW_API_KEY == "abc123realkey"
+    assert c.TELEGRAM_TOKEN == "8123456789:AAHrealtoken"
+    assert c.TELEGRAM_CHAT_ID == "987654321"
+    _reload()
