@@ -365,3 +365,41 @@ def test_missing_type_gives_an_empty_side_not_a_guess(monkeypatch):
     monkeypatch.setattr(explosion.uw, "contract_history", lambda *a, **k: PENNY)
     got = explosion.scan_contract("X", {}, 10, 0.01, 1.0)
     assert all(o["side"] == "" for o in got)
+
+
+# ── The side check must not bless its own result ────────────────
+def _verdict(avg, contracts):
+    if contracts < config.MIN_CONTRACTS:
+        return "too thin to read"
+    if avg >= 1.0 + config.SIDE_EDGE_MARGIN:
+        return "pays"
+    if avg >= 1.0 - config.SIDE_EDGE_MARGIN:
+        return "flat"
+    return "loses"
+
+
+import config
+
+
+def test_a_side_barely_above_the_stake_is_flat_not_paying():
+    """The real run put puts at $1.035 on 11 contracts and the first version
+    of this check called that "both sides pay". A few percent above the stake
+    on a dozen contracts is a failure to lose, not an edge."""
+    assert _verdict(1.035, 11) == "flat"
+    assert _verdict(1.254, 22) == "pays"
+
+
+def test_a_thin_side_is_unreadable_whatever_it_returns():
+    assert _verdict(2.0, 5) == "too thin to read"
+    assert _verdict(0.3, 5) == "too thin to read"
+
+
+def test_a_losing_side_is_named():
+    assert _verdict(0.7, 30) == "loses"
+
+
+def test_the_margin_is_symmetric():
+    m = config.SIDE_EDGE_MARGIN
+    assert _verdict(1.0 + m, 30) == "pays"
+    assert _verdict(1.0 - m, 30) == "flat"
+    assert _verdict(1.0 - m - 0.01, 30) == "loses"

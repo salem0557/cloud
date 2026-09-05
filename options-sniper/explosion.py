@@ -285,11 +285,15 @@ def main(args):
     print(f"Finding candidates: OTM, {args.min_dte}-{args.max_dte} DTE, "
           f"${args.min_price}-${args.max_price}")
     print(f"Fills: {model} — {label}"
-          + (f", max spread {args.max_spread}%" if args.max_spread else "") + "\n")
+          + (f", max spread {args.max_spread}%" if args.max_spread else ""))
+    if args.date:
+        print(f"Screened as of {args.date} — out-of-sample against today's run")
+    print()
     try:
         raw_pool = uw.screen_contracts(
             is_otm="true", min_dte=args.min_dte, max_dte=args.max_dte,
-            min_volume=args.min_volume, type=args.type, limit=250)
+            min_volume=args.min_volume, type=args.type, limit=250,
+            date=args.date)
     except uw.UWError as e:
         print(f"Screener failed: {e}")
         print("If this is a 403, the plan does not serve "
@@ -395,16 +399,37 @@ def main(args):
               f"touching, {cs['contracts']} contracts")
         print(f"    puts  : ${ps['realised_avg']} per $1, {ps['explosion_rate']}% "
               f"touching, {ps['contracts']} contracts")
-        if cs["realised_avg"] > 1.0 and ps["realised_avg"] > 1.0:
-            print("    Both sides pay — the result is not simply a rising market.")
-        elif cs["realised_avg"] > 1.0:
-            print("    Only calls pay. On this sample that is the market going "
-                  "up, not\n    an edge in the setup. Re-run over a different "
-                  "stretch before trusting it.")
-        elif ps["realised_avg"] > 1.0:
+        # "> 1.0" is too crude a test. A side sitting a few percent above the
+        # stake on a dozen contracts has not shown anything; it has failed to
+        # lose. Requiring a real margin and a real sample keeps the check from
+        # blessing its own result.
+        def verdict(s):
+            if s["contracts"] < C.MIN_CONTRACTS:
+                return "too thin to read"
+            if s["realised_avg"] >= 1.0 + C.SIDE_EDGE_MARGIN:
+                return "pays"
+            if s["realised_avg"] >= 1.0 - C.SIDE_EDGE_MARGIN:
+                return "flat — not losing, but not an edge"
+            return "loses"
+
+        cv, pv = verdict(cs), verdict(ps)
+        print(f"    calls: {cv}   puts: {pv}")
+        if cv == "pays" and pv == "pays":
+            print("    Both sides pay — not simply a rising market.")
+        elif cv == "pays" and pv.startswith("flat"):
+            print("    Calls carry the result and puts merely hold their value.\n"
+                  "    In a rising stretch buying puts should LOSE, so flat puts "
+                  "say the\n    result is not pure drift — but the edge that is "
+                  "measurable here is\n    in calls alone. Suggestive, not "
+                  "settled. Re-run with --date over an\n    earlier stretch to "
+                  "test it out of sample.")
+        elif cv == "pays":
+            print("    Only calls pay while puts lose: on this sample that is "
+                  "the market\n    going up, not an edge in the setup.")
+        elif pv == "pays":
             print("    Only puts pay — the mirror of the same problem.")
         else:
-            print("    Neither side pays.")
+            print("    Neither side shows an edge.")
 
     base = overall["realised_avg"]
     print(f"\n{'═' * 64}\nWhat separates the ones that ran")
@@ -495,6 +520,11 @@ if __name__ == "__main__":
                          "bid: hit the bid, the floor. Default mid.")
     ap.add_argument("--max-spread", type=float, default=None,
                     help="skip entries wider than this %% spread at entry")
+    ap.add_argument("--date", default=None,
+                    help="screen as of this date (YYYY-MM-DD) instead of today. "
+                         "Every result so far comes from ONE screen of what is "
+                         "interesting now; an earlier date gives a different "
+                         "population and is the out-of-sample test.")
     a = ap.parse_args()
     try:
         sys.exit(main(a))
