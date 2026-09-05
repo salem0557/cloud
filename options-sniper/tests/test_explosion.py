@@ -28,7 +28,7 @@ def test_it_finds_the_multiple_the_chart_shows():
     """0.05 into a 0.87 print is the 17x Salem is asking to catch — but only
     at the print. Selling into the bid that day gets about half of it, and
     that gap is the difference between the chart and a fill."""
-    printed = explosion.forward_multiple(UBER, 0, horizon=10, realistic=False)
+    printed = explosion.forward_multiple(UBER, 0, horizon=10, model="high")
     assert printed["entry"] == 0.05
     assert printed["peak_multiple"] == 17.4
 
@@ -54,9 +54,13 @@ def test_a_short_horizon_misses_the_move():
     assert f["peak_multiple"] < 2          # nothing has happened yet
 
 
-def test_entry_is_the_ask_not_the_last():
-    rows = [row("2026-08-01", 0.10, last=0.06), row("2026-08-02", 0.10, high=0.50)]
-    assert explosion.forward_multiple(rows, 0, 5)["entry"] == 0.10
+def test_entry_prices_by_the_fill_model_not_the_last_trade():
+    """`last` is where somebody else traded. What you pay is the ask, or a
+    tick-rounded mid if the book allows one."""
+    rows = [row("2026-08-01", 0.10, last=0.06, bid=0.08),
+            row("2026-08-02", 0.10, high=0.50, bid=0.08)]
+    assert explosion.forward_multiple(rows, 0, 5, model="bid")["entry"] == 0.10
+    assert explosion.forward_multiple(rows, 0, 5, model="mid")["entry"] == 0.09
 
 
 def test_worthless_and_final_rows_are_skipped():
@@ -236,11 +240,30 @@ PENNY = [row("d1", 0.02, high=0.02, last=0.02, bid=0.01),
          row("d4", 0.03, high=0.11, last=0.03, bid=0.02)]
 
 
-def test_the_high_overstates_what_you_could_exit_at():
-    hi = explosion.forward_multiple(PENNY, 0, 10, realistic=False)
-    bid = explosion.forward_multiple(PENNY, 0, 10, realistic=True)
-    assert hi["peak_multiple"] > bid["peak_multiple"]
-    assert hi["end_multiple"] > bid["end_multiple"]
+def test_the_three_fill_models_are_ordered():
+    hi = explosion.forward_multiple(PENNY, 0, 10, model="high")
+    mid = explosion.forward_multiple(PENNY, 0, 10, model="mid")
+    bid = explosion.forward_multiple(PENNY, 0, 10, model="bid")
+    assert hi["peak_multiple"] >= mid["peak_multiple"] >= bid["peak_multiple"]
+
+
+def test_a_mid_off_the_tick_grid_is_not_available():
+    """Quoted 0.01 x 0.02 the mid is 0.015, and no exchange takes that order.
+    This is why a penny contract gains nothing from limit orders — the very
+    contracts the first result called profitable."""
+    assert explosion.fill_price(0.01, 0.02, "mid", buying=True) == 0.02
+    assert explosion.fill_price(0.01, 0.02, "mid", buying=False) == 0.01
+
+
+def test_a_real_book_does_gain_from_the_mid():
+    assert explosion.fill_price(1.90, 1.98, "mid", buying=True) == 1.94
+    assert explosion.fill_price(1.90, 1.98, "mid", buying=False) == 1.94
+
+
+def test_the_tick_widens_above_three_dollars():
+    assert explosion.tick(0.50) == 0.01
+    assert explosion.tick(5.00) == 0.05
+    assert explosion.fill_price(4.90, 5.10, "mid", buying=True) == 5.00
 
 
 def test_the_spread_at_entry_is_recorded():
@@ -260,8 +283,8 @@ def test_entries_with_no_bid_are_not_tradeable(monkeypatch):
     not an entry the backtest should count."""
     rows = [dict(r, bid=0.0) for r in PENNY]
     monkeypatch.setattr(explosion.uw, "contract_history", lambda *a, **k: rows)
-    assert explosion.scan_contract("X", {}, 10, 0.01, 1.0, realistic=True) == []
-    assert explosion.scan_contract("X", {}, 10, 0.01, 1.0, realistic=False) != []
+    assert explosion.scan_contract("X", {}, 10, 0.01, 1.0, model="bid") == []
+    assert explosion.scan_contract("X", {}, 10, 0.01, 1.0, model="high") != []
 
 
 def test_wide_spreads_can_be_excluded(monkeypatch):
