@@ -347,6 +347,54 @@ def spot(ticker):
     return c[-1]["close"] if c else 0.0
 
 
+def contract_history(option_symbol, limit=500):
+    """GET /api/option-contract/{id}/historic — one contract's own daily tape.
+
+    This is what makes explosion.py possible: the contract's price, IV, open
+    interest and ask/bid volume split for every day it traded. The stock-level
+    backtest could only ask whether price reached a level; this asks the
+    question Salem actually cares about — what a contract bought that day went
+    on to be worth.
+    """
+    try:
+        raw = _get(f"/api/option-contract/{option_symbol}/historic", {"limit": limit})
+    except UWError:
+        return []
+    rows = []
+    for r in raw or []:
+        bid, ask = _num(r.get("nbbo_bid")), _num(r.get("nbbo_ask"))
+        rows.append({
+            "date": r.get("date", ""),
+            "open": _num(r.get("open_price")), "high": _num(r.get("high_price")),
+            "low": _num(r.get("low_price")), "last": _num(r.get("last_price")),
+            "bid": bid, "ask": ask,
+            "iv": _num(r.get("implied_volatility")),
+            "iv_high": _num(r.get("iv_high")), "iv_low": _num(r.get("iv_low")),
+            "open_interest": _num(r.get("open_interest")),
+            "volume": _num(r.get("volume")),
+            "ask_volume": _num(r.get("ask_volume")),
+            "bid_volume": _num(r.get("bid_volume")),
+            "sweep_volume": _num(r.get("sweep_volume")),
+            "premium": _num(r.get("total_premium")),
+        })
+    return sorted([r for r in rows if r["date"]], key=lambda r: r["date"])
+
+
+def screen_contracts(**filters):
+    """GET /api/screener/option-contracts — the candidate pool.
+
+    Used to find the shape of contract Salem is after: cheap, out of the money,
+    with volume that is unusual against its own open interest.
+    """
+    params = {k: v for k, v in filters.items() if v is not None}
+    params.setdefault("limit", 250)
+    try:
+        raw = _get("/api/screener/option-contracts", params)
+    except UWError:
+        return []
+    return [_normalise_contract(c) for c in raw if isinstance(c, dict)]
+
+
 def contract_quote(option_symbol):
     """GET /api/option-contract/{id}/intraday — latest price for one contract.
     Used by monitor.py for exit alerts (replaces the delayed yfinance quote)."""
