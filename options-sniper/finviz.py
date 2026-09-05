@@ -30,7 +30,6 @@ import config as C
 SCREEN = "sh_avgvol_o500,sh_relvol_o2,sh_price_o5,geo_usa"
 
 VIEW_OVERVIEW = "111"       # name, sector, price, volume
-VIEW_TECHNICAL = "171"      # ATR, RSI, SMA distances, gap, beta, 52w position
 
 # Finviz's current export path. The legacy .ashx URL still works but answers
 # with a 301, and a client that does not follow redirects gets an empty body.
@@ -81,62 +80,6 @@ def movers(limit=None):
         out.append({"ticker": ticker,
                     "change_pct": _num(row.get("Change")),
                     "volume": _int(row.get("Volume"))})
-        if limit and len(out) >= limit:
-            break
-    return out
-
-
-# ── Technical: stock state ──────────────────────────────────────
-# Finviz's column headers mapped to the names used here.
-_TECH_COLUMNS = {
-    "Beta": "beta", "ATR": "atr", "RSI": "rsi",
-    "SMA20": "vs_sma20", "SMA50": "vs_sma50", "SMA200": "vs_sma200",
-    "52W High": "vs_52w_high", "52W Low": "vs_52w_low",
-    "Rel Volume": "rel_volume", "Avg Volume": "avg_volume",
-    "Price": "price", "Change": "change_pct", "from Open": "from_open",
-    "Gap": "gap", "Volatility W": "vol_week", "Volatility M": "vol_month",
-}
-
-
-def technicals(tickers=None, screen=None, limit=None):
-    """Finviz Technical view -> {TICKER: {...}}.
-
-    Carries whatever of _TECH_COLUMNS the response actually returned, plus
-    `_columns` naming them, so a changed view shows up as a short list rather
-    than as quietly missing features. Percent strings like "-3.24%" become
-    floats; SMA columns are the stock's distance from that average.
-    """
-    params = {"v": VIEW_TECHNICAL, "auth": C.FINVIZ_AUTH}
-    if tickers:
-        params["t"] = ",".join(t.upper() for t in tickers)
-    else:
-        params["f"] = screen or SCREEN
-
-    text = _fetch(params)
-    if not text:
-        return {}
-
-    reader = csv.DictReader(io.StringIO(text))
-    headers = reader.fieldnames or []
-    if "Ticker" not in headers:
-        print(f"[finviz] technical view has no Ticker column "
-              f"(got: {', '.join(headers[:8])})")
-        return {}
-    found = [c for c in headers if c in _TECH_COLUMNS]
-    if not found:
-        print(f"[finviz] none of the expected technical columns are present "
-              f"(got: {', '.join(headers[:10])})")
-
-    out = {}
-    for row in reader:
-        t = (row.get("Ticker") or "").strip().upper()
-        if not t:
-            continue
-        rec = {"ticker": t, "_columns": found}
-        for col, name in _TECH_COLUMNS.items():
-            if col in row:
-                rec[name] = _num(row[col])
-        out[t] = rec
         if limit and len(out) >= limit:
             break
     return out

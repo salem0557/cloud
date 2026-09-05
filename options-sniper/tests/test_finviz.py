@@ -106,66 +106,6 @@ def test_finviz_never_contributes_to_a_score():
     assert scoring.total_score({}, tech_no_break, [], None, "call") == 0.0
 
 
-# ── Technical view: the stock state UW does not serve ───────────
-TECH_CSV = (
-    'No.,Ticker,Beta,ATR,SMA20,SMA50,SMA200,52W High,52W Low,RSI,Price,Change,'
-    'from Open,Gap,Volume\n'
-    '1,"NVDA","2.11","4.52","-1.24%","3.80%","18.50%","-6.20%","112.40%",'
-    '"48.30","230.36","1.20%","0.40%","0.80%","5,458,992"\n'
-    '2,"TSLA","2.45","11.03","2.10%","-4.50%","9.20%","-15.30%","78.10%",'
-    '"61.70","354.08","-0.90%","-1.10%","0.20%","3,944,033"\n'
-)
-
-
-def test_technical_view_is_parsed_by_column_name(monkeypatch):
-    """A view's column order is Finviz's to change; a positional parser would
-    mis-read it silently."""
-    monkeypatch.setattr(C, "FINVIZ_AUTH", "token")
-    monkeypatch.setattr(finviz.requests, "get", lambda *a, **k: FakeResp(TECH_CSV))
-    rows = finviz.technicals()
-    assert set(rows) == {"NVDA", "TSLA"}
-    assert rows["NVDA"]["rsi"] == 48.30
-    assert rows["NVDA"]["atr"] == 4.52
-    assert rows["NVDA"]["vs_sma20"] == -1.24        # percent, sign preserved
-    assert rows["TSLA"]["beta"] == 2.45
-
-
-def test_it_requests_the_technical_view_not_overview(monkeypatch):
-    """v=111 returns a name and a price — almost none of what the subscription
-    is for. The stock state lives in v=171."""
-    monkeypatch.setattr(C, "FINVIZ_AUTH", "token")
-    seen = {}
-    monkeypatch.setattr(finviz.requests, "get",
-                        lambda url, params=None, **k: (seen.update(params or {}),
-                                                       FakeResp(TECH_CSV))[1])
-    finviz.technicals()
-    assert seen["v"] == finviz.VIEW_TECHNICAL
-
-
-def test_specific_tickers_can_be_requested(monkeypatch):
-    monkeypatch.setattr(C, "FINVIZ_AUTH", "token")
-    seen = {}
-    monkeypatch.setattr(finviz.requests, "get",
-                        lambda url, params=None, **k: (seen.update(params or {}),
-                                                       FakeResp(TECH_CSV))[1])
-    finviz.technicals(tickers=["nvda", "tsla"])
-    assert seen["t"] == "NVDA,TSLA"
-
-
-def test_a_changed_view_is_reported_not_silently_empty(monkeypatch):
-    monkeypatch.setattr(C, "FINVIZ_AUTH", "token")
-    monkeypatch.setattr(finviz.requests, "get",
-                        lambda *a, **k: FakeResp('No.,Company,Sector\n1,"X","Tech"\n'))
-    assert finviz.technicals() == {}        # no Ticker column
-
-
-def test_columns_actually_returned_are_recorded(monkeypatch):
-    monkeypatch.setattr(C, "FINVIZ_AUTH", "token")
-    monkeypatch.setattr(finviz.requests, "get", lambda *a, **k: FakeResp(TECH_CSV))
-    cols = finviz.technicals()["NVDA"]["_columns"]
-    assert "RSI" in cols and "ATR" in cols
-
-
 def test_percent_and_comma_formats():
     assert finviz._num("-3.24%") == -3.24
     assert finviz._num("5,458,992") == 5458992.0
@@ -178,5 +118,4 @@ def test_no_token_means_no_request(monkeypatch):
     def boom(*a, **k):
         raise AssertionError("must not call Finviz without a token")
     monkeypatch.setattr(finviz.requests, "get", boom)
-    assert finviz.technicals() == {}
     assert finviz.movers() == []

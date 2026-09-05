@@ -13,6 +13,12 @@ import requests
 
 import config as C
 
+try:
+    from zoneinfo import ZoneInfo
+    _ET = ZoneInfo("America/New_York")
+except Exception:                                   # pragma: no cover
+    _ET = None
+
 _SESSION = requests.Session()
 _SESSION.headers.update({
     "Authorization": f"Bearer {C.UW_API_KEY}",
@@ -310,12 +316,18 @@ def option_contracts(ticker):
 def candles(ticker, candle_size=None, timeframe="5D", limit=500, end_date=None):
     """GET /api/stock/{ticker}/ohlc/{candle_size}
 
-    Returns candles ASCENDING in time (UW serves them newest-first).
+    Returns candles ASCENDING in time (UW serves intraday newest-first).
     Fields open/high/low/close arrive as strings -> floats here.
     `market_time` is 'r' (regular), 'pr' (pre) or 'po' (post); technical
     levels are computed on regular-hours candles only.
+
+    Daily and weekly candles are a different shape: UW documents that 1d and
+    1w rows carry no start_time and no end_time at all, only `date`. Judging
+    them with the intraday `end_time` rule dropped every one of them, which is
+    what silently made daily_atr() return 0 for months.
     """
     size = candle_size or C.CANDLE_SIZE
+    daily = size in ("1d", "1w")
     try:
         params = {"timeframe": timeframe, "limit": limit}
         if end_date:
@@ -325,21 +337,44 @@ def candles(ticker, candle_size=None, timeframe="5D", limit=500, end_date=None):
         return []
     rows = []
     for c in raw:
-        if C.REGULAR_HOURS_ONLY and c.get("market_time") not in (None, "r"):
+        if not daily and C.REGULAR_HOURS_ONLY and c.get("market_time") not in (None, "r"):
             continue
+        date = c.get("date", "") or ""
         rows.append({
             "open": _num(c.get("open")),
             "high": _num(c.get("high")),
             "low": _num(c.get("low")),
             "close": _num(c.get("close")),
             "volume": _num(c.get("volume")),
-            "start_time": c.get("start_time", ""),
-            "end_time": c.get("end_time", ""),
-            "closed": _is_closed(c.get("end_time", "")),
+            "date": date,
+            "start_time": c.get("start_time", "") or "",
+            "end_time": c.get("end_time", "") or "",
+            "closed": (_session_done(date, size) if daily
+                       else _is_closed(c.get("end_time", ""))),
         })
-    rows.sort(key=lambda r: r["start_time"])          # UW returns newest-first
+    # daily rows sort by date, intraday by start_time; UW's order differs per size
+    rows.sort(key=lambda r: (r["start_time"] or r["date"]))
     rows = [r for r in rows if r["close"] > 0]
     return [r for r in rows if r["closed"]]
+
+
+def _session_done(date, size):
+    """True once a daily/weekly bar's session has finished.
+
+    Today's daily bar is still forming until the close, and this week's weekly
+    bar until Friday, so both are excluded the same way a half-formed 15m
+    candle is.
+    """
+    if not date:
+        return False
+    today = (datetime.datetime.now(_ET) if _ET else
+             datetime.datetime.utcnow() - datetime.timedelta(hours=5)).date()
+    try:
+        d = datetime.date.fromisoformat(date[:10])
+    except ValueError:
+        return False
+    span = 7 if size == "1w" else 1     # 1w dates the Monday of the ISO week
+    return (today - d).days >= span
 
 
 def _is_closed(end_time):
@@ -447,7 +482,7 @@ def screen_contracts(**filters):
     return [_normalise_screener_row(c) for c in raw if isinstance(c, dict)]
 
 
-_gex_cache, _atr_cache = {}, {}
+_gex_cache, _tech_cache = {}, {}
 
 
 def gex_levels(ticker, date=None):
@@ -476,24 +511,73 @@ def gex_levels(ticker, date=None):
     return out
 
 
-def daily_atr(ticker, period=14):
-    """Average true range on daily bars — the unit a move is measured in.
+def stock_technicals(ticker, as_of=None, period=14):
+    """Daily ATR, RSI and distance from the 20-day average, from one pull.
 
-    A contract explodes when the stock reaches its strike. How far that is, in
-    ATRs, is the one stock-level fact that decides whether it can.
+    All three describe whether the stock is stretched or coiled, and whether it
+    can travel to the strike at all — the one thing a contract's own tape can
+    never say. They are computed here rather than read off Finviz for two
+    reasons: Finviz serves only *today's* value, which is lookahead in a
+    backtest of last year's entries, and one daily OHLC request already carries
+    everything needed.
+
+    `as_of` (YYYY-MM-DD) walks the window back, so a backtest sees what was
+    knowable on the entry date and nothing after it.
     """
-    if ticker in _atr_cache:
-        return _atr_cache[ticker]
-    bars = candles(ticker, candle_size="1d", timeframe="3M", limit=60)
-    atr = 0.0
+    key = (ticker, as_of or "", period)
+    if key in _tech_cache:
+        return _tech_cache[key]
+    bars = candles(ticker, candle_size="1d", timeframe="6M", limit=120,
+                   end_date=as_of)
+    out = {"atr": 0.0, "rsi": None, "sma20": None, "vs_sma20": None,
+           "close": bars[-1]["close"] if bars else 0.0}
     if len(bars) > period:
-        trs = [max(b["high"] - b["low"], abs(b["high"] - a["close"]),
-                   abs(b["low"] - a["close"]))
-               for a, b in zip(bars, bars[1:])]
-        w = trs[-period:]
-        atr = sum(w) / len(w) if w else 0.0
-    _atr_cache[ticker] = atr
-    return atr
+        out["atr"] = _wilder_atr(bars, period)
+        out["rsi"] = _wilder_rsi([b["close"] for b in bars], period)
+    if len(bars) >= 20:
+        sma = sum(b["close"] for b in bars[-20:]) / 20
+        out["sma20"] = round(sma, 2)
+        if sma > 0:
+            out["vs_sma20"] = round((bars[-1]["close"] - sma) / sma * 100, 2)
+    _tech_cache[key] = out
+    return out
+
+
+def _wilder_atr(bars, period=14):
+    """Wilder's smoothed ATR — the same definition UW and Finviz publish, so a
+    number here can be checked against either."""
+    trs = [max(b["high"] - b["low"], abs(b["high"] - a["close"]),
+               abs(b["low"] - a["close"]))
+           for a, b in zip(bars, bars[1:])]
+    if len(trs) < period:
+        return 0.0
+    atr = sum(trs[:period]) / period
+    for tr in trs[period:]:
+        atr = (atr * (period - 1) + tr) / period
+    return round(atr, 4)
+
+
+def _wilder_rsi(closes, period=14):
+    """Wilder's RSI on daily closes. None when there is not enough history."""
+    if len(closes) <= period:
+        return None
+    deltas = [b - a for a, b in zip(closes, closes[1:])]
+    gains = [max(d, 0.0) for d in deltas]
+    losses = [max(-d, 0.0) for d in deltas]
+    avg_g = sum(gains[:period]) / period
+    avg_l = sum(losses[:period]) / period
+    for g, l in zip(gains[period:], losses[period:]):
+        avg_g = (avg_g * (period - 1) + g) / period
+        avg_l = (avg_l * (period - 1) + l) / period
+    if avg_l == 0:
+        return 100.0 if avg_g > 0 else None
+    rs = avg_g / avg_l
+    return round(100 - 100 / (1 + rs), 2)
+
+
+def daily_atr(ticker, as_of=None, period=14):
+    """Average true range on daily bars — the unit a move is measured in."""
+    return stock_technicals(ticker, as_of=as_of, period=period)["atr"]
 
 
 def contract_quote(option_symbol):

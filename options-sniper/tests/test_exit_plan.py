@@ -63,3 +63,75 @@ def test_hard_exit_fires_after_the_cutoff():
 def test_hard_exit_is_only_during_the_session():
     assert not market.past_hard_exit(_at(16, 30))      # closed
     assert not market.past_hard_exit(_at(9, 45))       # too early
+
+
+# ── Daily candles carry no start/end time at all ────────────────
+def _daily(monkeypatch, rows):
+    monkeypatch.setattr(uw, "_get", lambda path, params=None: rows)
+
+
+def test_daily_bars_survive_the_closed_filter(monkeypatch):
+    """UW documents that 1d and 1w rows have no start_time and no end_time,
+    only `date`. Judging them by the intraday end_time rule dropped every one
+    of them, which is what made daily_atr() silently return 0 — and left
+    atr_to_strike blank on all 5,295 rows of the replication run."""
+    rows = [{"date": "2026-08-2%d" % d, "open": "10", "high": "11",
+             "low": "9", "close": "10.5", "volume": "1000"} for d in range(1, 8)]
+    _daily(monkeypatch, rows)
+    got = uw.candles("NVDA", candle_size="1d", timeframe="3M", limit=60)
+    assert len(got) == 7
+    assert got[0]["date"] < got[-1]["date"]          # ascending
+
+
+def test_todays_daily_bar_is_still_forming(monkeypatch):
+    """The same reason a half-formed 15m candle is excluded."""
+    today = uw.datetime.date.today().isoformat()
+    _daily(monkeypatch, [{"date": today, "open": "1", "high": "1",
+                          "low": "1", "close": "1", "volume": "1"}])
+    assert uw.candles("X", candle_size="1d") == []
+
+
+def test_daily_bars_keep_premarket_field_from_dropping_them(monkeypatch):
+    """Daily rows have no market_time either; the regular-hours filter must
+    not apply to them."""
+    rows = [{"date": "2026-08-1%d" % d, "open": "5", "high": "6", "low": "4",
+             "close": "5.5", "volume": "1"} for d in range(1, 6)]
+    _daily(monkeypatch, rows)
+    assert len(uw.candles("X", candle_size="1d")) == 5
+
+
+def test_atr_is_wilder_and_matches_a_hand_computed_window(monkeypatch):
+    """Ten bars with a true range of exactly 2.0 every day -> ATR 2.0."""
+    rows = [{"date": "2026-07-%02d" % d, "open": "100", "high": "101",
+             "low": "99", "close": "100", "volume": "1"} for d in range(1, 21)]
+    _daily(monkeypatch, rows)
+    uw._tech_cache.clear()
+    assert uw.daily_atr("X") == 2.0
+
+
+def test_rsi_of_an_unbroken_rally_pins_at_100(monkeypatch):
+    rows = [{"date": "2026-07-%02d" % d, "open": "100", "high": "101",
+             "low": "99", "close": str(100 + d), "volume": "1"}
+            for d in range(1, 21)]
+    _daily(monkeypatch, rows)
+    uw._tech_cache.clear()
+    assert uw.stock_technicals("X")["rsi"] == 100.0
+
+
+def test_technicals_are_cached_per_as_of_date_not_per_ticker(monkeypatch):
+    """A backtest asks for the same ticker on four screen dates. Caching by
+    ticker alone would hand May's entries September's ATR."""
+    calls = []
+
+    def fake(path, params=None):
+        calls.append((params or {}).get("end_date"))
+        return [{"date": "2026-07-%02d" % d, "open": "100", "high": "101",
+                 "low": "99", "close": "100", "volume": "1"}
+                for d in range(1, 21)]
+
+    monkeypatch.setattr(uw, "_get", fake)
+    uw._tech_cache.clear()
+    uw.stock_technicals("X", as_of="2026-05-15")
+    uw.stock_technicals("X", as_of="2026-07-15")
+    uw.stock_technicals("X", as_of="2026-05-15")
+    assert calls == ["2026-05-15", "2026-07-15"]

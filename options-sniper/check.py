@@ -161,6 +161,22 @@ else:
   except Exception as e:
       report("option chain", BAD, str(e))
 
+  # Daily bars carry no start/end time; they were silently dropped for months.
+  try:
+      t = uw.stock_technicals("AAPL")
+      if t["atr"] > 0 and t["rsi"] is not None:
+          report("daily technicals", OK,
+                 f"ATR {t['atr']} | RSI {t['rsi']} | vs SMA20 {t['vs_sma20']}%")
+      elif t["atr"] > 0:
+          report("daily technicals", WARN,
+                 f"ATR {t['atr']} but no RSI — fewer than 15 daily bars returned")
+      else:
+          report("daily technicals", BAD,
+                 f"ATR 0 ({why('/api/stock/AAPL/ohlc/1d', {'timeframe': '6M'})}) "
+                 "— atr_to_strike would be blank on every row")
+  except Exception as e:
+      report("daily technicals", BAD, str(e))
+
 # ── 4. Finviz ───────────────────────────────────────────────────
 section("5. Finviz (candidate discovery only)")
 if not C.FINVIZ_AUTH:

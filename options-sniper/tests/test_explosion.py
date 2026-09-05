@@ -429,10 +429,14 @@ def test_the_cutoff_is_on_spread_not_price():
 
 
 # ── Stock context: the variable that was deliberately removed ───
+def _tech(atr, rsi=None, vs_sma20=None):
+    return lambda t, **k: {"atr": atr, "rsi": rsi, "vs_sma20": vs_sma20,
+                           "sma20": None, "close": 0.0}
+
 def test_atr_distance_measures_what_the_stock_must_travel(monkeypatch):
     """Every feature so far described the contract. None said the STOCK would
     move, and a contract only explodes because it does."""
-    monkeypatch.setattr(explosion.uw, "daily_atr", lambda t, **k: 4.5)
+    monkeypatch.setattr(explosion.uw, "stock_technicals", _tech(4.5))
     monkeypatch.setattr(explosion.uw, "gex_levels", lambda t, **k: None)
     ctx = explosion.stock_context({"ticker": "NVDA", "stock_price": 230.36,
                                    "strike": 240.0, "type": "call"})
@@ -440,7 +444,7 @@ def test_atr_distance_measures_what_the_stock_must_travel(monkeypatch):
 
 
 def test_puts_measure_the_distance_downward(monkeypatch):
-    monkeypatch.setattr(explosion.uw, "daily_atr", lambda t, **k: 4.0)
+    monkeypatch.setattr(explosion.uw, "stock_technicals", _tech(4.0))
     monkeypatch.setattr(explosion.uw, "gex_levels", lambda t, **k: None)
     ctx = explosion.stock_context({"ticker": "X", "stock_price": 100.0,
                                    "strike": 92.0, "type": "put"})
@@ -450,7 +454,7 @@ def test_puts_measure_the_distance_downward(monkeypatch):
 def test_gex_side_records_which_way_dealers_hedge(monkeypatch):
     """Below the flip dealers sell rallies and buy dips, damping movement.
     Above it they add to it. Nothing in a contract's own tape contains this."""
-    monkeypatch.setattr(explosion.uw, "daily_atr", lambda t, **k: 4.5)
+    monkeypatch.setattr(explosion.uw, "stock_technicals", _tech(4.5))
     monkeypatch.setattr(explosion.uw, "gex_levels",
                         lambda t, **k: {"gamma_flip": 231.69})
     below = explosion.stock_context({"ticker": "NVDA", "stock_price": 230.36,
@@ -462,10 +466,11 @@ def test_gex_side_records_which_way_dealers_hedge(monkeypatch):
 
 
 def test_missing_stock_data_gives_none_not_a_guess(monkeypatch):
-    monkeypatch.setattr(explosion.uw, "daily_atr", lambda t, **k: 0.0)
+    monkeypatch.setattr(explosion.uw, "stock_technicals", _tech(0.0))
     monkeypatch.setattr(explosion.uw, "gex_levels", lambda t, **k: None)
     ctx = explosion.stock_context({"ticker": "X", "stock_price": 0, "strike": 0})
-    assert ctx == {"atr_to_strike": None, "gex_side": None}
+    assert ctx == {"atr_to_strike": None, "gex_side": None, "rsi": None,
+                   "vs_sma20": None}
 
 
 def test_atr_distance_buckets_separate_reachable_from_hopeless():
