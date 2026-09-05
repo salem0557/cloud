@@ -93,6 +93,12 @@ MAX_CANDIDATES_PER_SCAN = 25   # tickers we spend chain/candle calls on
 FLOW_ALERT_LIMIT        = 200
 MIN_TICKER_PREMIUM      = 250_000   # skip tickers below this daily premium
 
+# ── Finviz Elite (candidate discovery only — never scored) ──────
+MAX_FINVIZ_MOVERS  = 40     # rows to pull from the screener
+MAX_FINVIZ_LOOKUPS = 15     # of those, how many get a UW per-ticker flow call.
+                            # Each is one request; the trial allows 30,000/day,
+                            # so 15 x ~14 scans/day is comfortably inside it.
+
 # ── Message composition ─────────────────────────────────────────
 # True  = `claude -p` writes the Arabic message (Salem's original design)
 # False = deterministic Python formatter (no LLM, zero fabrication risk)
