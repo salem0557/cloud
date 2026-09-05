@@ -25,9 +25,9 @@ def test_weekend_is_closed():
     assert not market.is_open(et(2026, 9, 6, 12, 0))   # Sunday
 
 
-def test_actions_cron_window_covers_both_dst_offsets():
-    """The workflow runs 13:00-21:59 UTC; the guard must let EDT and EST
-    sessions through and reject the hours that only exist in one of them."""
+def test_guard_follows_daylight_saving():
+    """09:30 ET is 13:30 UTC in summer and 14:30 UTC in winter. The guard must
+    open at the right moment in both, with no seasonal edit."""
     utc = datetime.timezone.utc
     edt_open = datetime.datetime(2026, 7, 7, 13, 30, tzinfo=utc)   # 09:30 EDT
     est_open = datetime.datetime(2026, 1, 6, 14, 30, tzinfo=utc)   # 09:30 EST

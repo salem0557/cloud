@@ -1,9 +1,9 @@
 """US market-hours guard.
 
-GitHub Actions cron only understands UTC and cannot follow US daylight saving,
-so the workflows run over a window wide enough for both EST and EDT and this
-check ends the run early outside real trading hours. Cheaper than a wrong alert
-on a stale quote.
+The scheduler ticks continuously, so this decides when the market is actually
+open. It follows US daylight saving through the America/New_York zone rather
+than a fixed offset, so no seasonal edit is ever needed: the session is always
+09:30-16:00 ET, whatever that maps to in Riyadh.
 """
 import datetime
 
