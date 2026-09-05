@@ -183,6 +183,10 @@ ANALYST_CAN_BLOCK = os.environ.get("ANALYST_CAN_BLOCK", "1").lower() in ("1", "t
 
 # ── Backtest / base rates ───────────────────────────────────────
 BASE_RATE_MIN_SAMPLE = 20
+WIDE_SPREAD_PCT      = 30   # past this the quote is a placeholder, not a book.
+                            # A mid fill inside a 50%-wide spread is the same
+                            # fiction as a mid on a penny contract, and it put
+                            # spread=50%+ at the top of three out-of-sample runs.
 SIDE_EDGE_MARGIN     = 0.10 # a side must clear the stake by this much to count
                             # as paying. $1.035 on 11 contracts is not an edge,
                             # it is a failure to lose.

@@ -403,3 +403,24 @@ def test_the_margin_is_symmetric():
     assert _verdict(1.0 + m, 30) == "pays"
     assert _verdict(1.0 - m, 30) == "flat"
     assert _verdict(1.0 - m - 0.01, 30) == "loses"
+
+
+# ── A mid is only reachable when there is a book ────────────────
+def test_a_wide_quote_gives_no_mid():
+    """spread=50%+ topped three out-of-sample runs while the same entries
+    returned $0.78 hitting the bid. A limit halfway across a 100%-wide quote
+    is the same fiction as a mid on a penny contract."""
+    assert explosion.fill_price(0.50, 1.50, "mid", buying=True) == 1.50
+    assert explosion.fill_price(0.50, 1.50, "mid", buying=False) == 0.50
+
+
+def test_a_workable_quote_still_gets_its_mid():
+    assert explosion.fill_price(1.20, 1.60, "mid", buying=True) == 1.40
+    assert explosion.fill_price(1.90, 1.98, "mid", buying=True) == 1.94
+
+
+def test_the_cutoff_is_on_spread_not_price():
+    """A cheap contract with a tight quote keeps its mid; an expensive one
+    with a wide quote loses it."""
+    assert explosion.fill_price(0.20, 0.22, "mid", buying=True) == 0.21
+    assert explosion.fill_price(4.00, 6.00, "mid", buying=True) == 6.00

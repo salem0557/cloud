@@ -67,11 +67,19 @@ def fill_price(bid, ask, model, buying):
     mid   a limit at the midpoint, rounded to a tradeable tick — against you,
           because a mid that is not on the tick grid is not available.
     bid   hit the bid to sell, lift the ask to buy. The floor, not the norm.
+
+    The mid is only reachable when there is a book to work inside. Past
+    WIDE_SPREAD_PCT the quote is a placeholder, and pretending a limit fills
+    halfway across it is how "spread=50%+" came out on top in three separate
+    out-of-sample runs while the same entries returned $0.78 hitting the bid.
+    Beyond that width the mid degrades to the bid/ask it actually is.
     """
     if model == "bid":
         return ask if buying else bid
     if model == "mid":
         mid = (bid + ask) / 2
+        if mid > 0 and (ask - bid) / mid * 100 > C.WIDE_SPREAD_PCT:
+            return ask if buying else bid       # no book to work inside
         return to_tick(mid, up=buying)
     return ask if buying else max(bid, ask)
 
