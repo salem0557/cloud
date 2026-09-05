@@ -123,6 +123,39 @@ def forward_multiple(rows, i, horizon, model="mid"):
     }
 
 
+def stock_context(meta):
+    """The stock-level facts a contract's own tape cannot contain.
+
+    Every feature measured so far describes the contract. None of them says
+    the STOCK will move, and a contract only explodes because it does. Salem
+    said the stock did not matter to him; removing it is why the feature set
+    could not predict anything out of sample.
+
+      atr_to_strike  how many daily ATRs the stock must travel to reach the
+                     strike. Three ATRs in five days is a different proposition
+                     from half of one.
+      gex_side       where spot sits against the gamma flip. Below it dealers
+                     damp movement, above it they add to it.
+    """
+    ticker = meta.get("ticker") or (uw.parse_occ(meta.get("option_symbol", ""))
+                                    or {}).get("ticker")
+    spot, strike = meta.get("stock_price", 0), meta.get("strike", 0)
+    out = {"atr_to_strike": None, "gex_side": None}
+    if not (ticker and spot > 0 and strike > 0):
+        return out
+
+    atr = uw.daily_atr(ticker)
+    if atr > 0:
+        distance = (strike - spot) if meta.get("type") == "call" else (spot - strike)
+        out["atr_to_strike"] = round(distance / atr, 2)
+
+    gex = uw.gex_levels(ticker)
+    flip = (gex or {}).get("gamma_flip")
+    if flip:
+        out["gex_side"] = "above_flip" if spot >= flip else "below_flip"
+    return out
+
+
 def features(rows, i, meta):
     """Only what was visible on the entry day — no future leakage."""
     r = rows[i]
@@ -144,6 +177,7 @@ def features(rows, i, meta):
         "dte": dte,
         "spread_pct": round((r["ask"] - r["bid"]) / r["ask"] * 100, 1)
         if r["ask"] else None,
+        **(meta.get("_stock") or {}),
     }
 
 
@@ -194,6 +228,10 @@ def bucket(name, value):
         return f"dte={'0-2' if value <= 2 else '3-7' if value <= 7 else '8-21' if value <= 21 else '22+'}"
     if name == "iv":
         return f"iv={'<50%' if value < 0.5 else '50-100%' if value < 1.0 else '100%+'}"
+    if name == "atr_to_strike":
+        return f"atr2strike={'<1' if value < 1 else '1-2' if value < 2 else '2-4' if value < 4 else '4+'}"
+    if name == "gex_side":
+        return f"gex={value}"
     if name == "spread_pct":
         return f"spread={'<10%' if value < 10 else '10-25%' if value < 25 else '25-50%' if value < 50 else '50%+'}"
     if name == "vol_vs_avg":
@@ -202,7 +240,7 @@ def bucket(name, value):
 
 
 FEATURES = ["price", "spread_pct", "vol_oi", "ask_share", "sweep_share",
-            "dte", "iv", "vol_vs_avg"]
+            "dte", "iv", "vol_vs_avg", "atr_to_strike", "gex_side"]
 
 
 def scan_contract(symbol, meta, horizon, min_price, max_price,
@@ -285,7 +323,7 @@ def summarise(obs, threshold, take=None):
     }
 
 
-def main(args):
+def main(args, collect=None):
     model = args.fills
     label = {"high": "the day's print (not an order you can place)",
              "mid": "a tick-rounded limit at the midpoint",
@@ -328,6 +366,9 @@ def main(args):
 
     obs, failures, empties = [], [], 0
     for n, c in enumerate(pool, 1):
+        if not args.no_stock:
+            c["ticker"] = (uw.parse_occ(c["option_symbol"]) or {}).get("ticker")
+            c["_stock"] = stock_context(c)
         try:
             got = scan_contract(c["option_symbol"], c, args.horizon,
                                 args.min_price, args.max_price,
@@ -482,6 +523,20 @@ def main(args):
               "a handful of events\n  than to the sample size shown.")
     print()
 
+    if collect is not None:
+        collect["buckets"] = {}
+        for feat in FEATURES:
+            groups = defaultdict(list)
+            for o in obs:
+                groups[bucket(feat, o["features"].get(feat))].append(o)
+            for k, v in groups.items():
+                if len(v) >= C.BASE_RATE_MIN_SAMPLE:
+                    s = summarise(v, args.multiple)
+                    collect["buckets"][k] = {"lift": s["realised_avg"] / base
+                                             if base else 0,
+                                             "contracts": s["contracts"]}
+        collect["overall"] = overall
+
     payload = {
         "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "params": vars(args), "overall": overall,
@@ -508,6 +563,69 @@ def main(args):
     return 0
 
 
+def replicate(args):
+    """Run several screens and report only what holds on all of them.
+
+    Every wrong answer in this project came from one screen. iv<50% led the
+    in-sample run at 1.12x the average and came back 1.02x, 1.00x and 0.99x on
+    three earlier dates. spread=50%+ topped all three and turned out to be a
+    fill artifact. A feature that wins once is noise; the machinery to tell
+    the difference has to be in the tool, not in remembering to check.
+
+    A feature is reported only if it beats each run's own average on EVERY
+    date, so a single flattering window cannot carry it.
+    """
+    dates = [d.strip() for d in args.dates.split(",") if d.strip()]
+    runs = []
+    for d in dates:
+        print(f"\n{'#' * 64}\n# Screen as of {d}\n{'#' * 64}")
+        one = argparse.Namespace(**vars(args))
+        one.date, one.dates = d, None
+        payload = {}
+        if main(one, collect=payload) != 0:
+            print(f"  (skipped {d})")
+            continue
+        runs.append((d, payload))
+
+    if len(runs) < 2:
+        print("\nNeed at least two usable screens to test replication.")
+        return 1
+
+    print(f"\n{'═' * 64}\nREPLICATION across {len(runs)} screens: "
+          f"{', '.join(d for d, _ in runs)}\n")
+    common = None
+    for _, p in runs:
+        keys = {k for k, s in p["buckets"].items()
+                if s["lift"] >= 1.0 + C.REPLICATION_MARGIN
+                and s["contracts"] >= C.MIN_CONTRACTS}
+        common = keys if common is None else (common & keys)
+
+    if not common:
+        print("  NOTHING replicates. No feature beat its own run's average on\n"
+              "  every screen. On this evidence there is no filter here worth\n"
+              "  putting in front of an alert.")
+    else:
+        print(f"  {len(common)} feature(s) beat the average on every screen:\n")
+        for k in sorted(common):
+            line = "  ".join(f"{d}: {p['buckets'][k]['lift']:.2f}x"
+                             for d, p in runs)
+            print(f"    {k:34} {line}")
+        print("\n  These are the only ones the evidence supports. Anything else\n"
+              "  that looked good on a single screen did not survive.")
+
+    # And what looked good once but did not hold — worth naming, since these
+    # are exactly the ones that would otherwise get built into the scanner.
+    once = set()
+    for _, p in runs:
+        once |= {k for k, s in p["buckets"].items()
+                 if s["lift"] >= 1.0 + C.REPLICATION_MARGIN}
+    failed = once - (common or set())
+    if failed:
+        print(f"\n  {len(failed)} beat the average on some screens but not all "
+              f"— noise:\n    " + ", ".join(sorted(failed)[:12]))
+    return 0
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--multiple", type=float, default=5.0,
@@ -528,6 +646,15 @@ if __name__ == "__main__":
                          "bid: hit the bid, the floor. Default mid.")
     ap.add_argument("--max-spread", type=float, default=None,
                     help="skip entries wider than this %% spread at entry")
+    ap.add_argument("--dates", default=None,
+                    help="comma-separated screen dates. Runs each and reports "
+                         "only the features that beat their own run's average "
+                         "on EVERY one — the check that would have caught "
+                         "iv<50%% and spread=50%%+.")
+    ap.add_argument("--no-stock", action="store_true",
+                    help="skip the stock-level features (ATR distance, GEX). "
+                         "They cost two requests per ticker but are the only "
+                         "inputs that describe whether the stock can move.")
     ap.add_argument("--date", default=None,
                     help="screen as of this date (YYYY-MM-DD) instead of today. "
                          "Every result so far comes from ONE screen of what is "
@@ -535,7 +662,7 @@ if __name__ == "__main__":
                          "population and is the out-of-sample test.")
     a = ap.parse_args()
     try:
-        sys.exit(main(a))
+        sys.exit(replicate(a) if a.dates else main(a))
     except uw.UWError as e:
         print("UW error:", e, file=sys.stderr)
         sys.exit(2)

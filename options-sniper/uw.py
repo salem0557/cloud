@@ -447,6 +447,55 @@ def screen_contracts(**filters):
     return [_normalise_screener_row(c) for c in raw if isinstance(c, dict)]
 
 
+_gex_cache, _atr_cache = {}, {}
+
+
+def gex_levels(ticker, date=None):
+    """GET /api/stock/{ticker}/gex-levels — where dealer hedging changes sign.
+
+    Below the gamma flip dealers are short gamma: they sell rallies and buy
+    dips, which suppresses movement. Above it they buy strength, which
+    amplifies it. That is a mechanical reason a breakout continues or dies,
+    and nothing in a contract's own tape contains it.
+    """
+    key = (ticker, date)
+    if key in _gex_cache:
+        return _gex_cache[key]
+    try:
+        raw = _get(f"/api/stock/{ticker}/gex-levels",
+                   {"source": "vol", **({"date": date} if date else {})})
+    except UWError:
+        _gex_cache[key] = None
+        return None
+    row = raw[0] if isinstance(raw, list) and raw else raw
+    out = None
+    if isinstance(row, dict):
+        out = {k: _num(row.get(k)) or None for k in
+               ("call_wall", "put_wall", "gamma_flip", "gamma_magnet")}
+    _gex_cache[key] = out
+    return out
+
+
+def daily_atr(ticker, period=14):
+    """Average true range on daily bars — the unit a move is measured in.
+
+    A contract explodes when the stock reaches its strike. How far that is, in
+    ATRs, is the one stock-level fact that decides whether it can.
+    """
+    if ticker in _atr_cache:
+        return _atr_cache[ticker]
+    bars = candles(ticker, candle_size="1d", timeframe="3M", limit=60)
+    atr = 0.0
+    if len(bars) > period:
+        trs = [max(b["high"] - b["low"], abs(b["high"] - a["close"]),
+                   abs(b["low"] - a["close"]))
+               for a, b in zip(bars, bars[1:])]
+        w = trs[-period:]
+        atr = sum(w) / len(w) if w else 0.0
+    _atr_cache[ticker] = atr
+    return atr
+
+
 def contract_quote(option_symbol):
     """GET /api/option-contract/{id}/intraday — latest price for one contract.
     Used by monitor.py for exit alerts (replaces the delayed yfinance quote)."""

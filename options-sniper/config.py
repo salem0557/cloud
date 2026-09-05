@@ -183,6 +183,8 @@ ANALYST_CAN_BLOCK = os.environ.get("ANALYST_CAN_BLOCK", "1").lower() in ("1", "t
 
 # ── Backtest / base rates ───────────────────────────────────────
 BASE_RATE_MIN_SAMPLE = 20
+REPLICATION_MARGIN   = 0.10 # a feature must beat its own run's average by this
+                            # much, on every screen, to count as replicating
 WIDE_SPREAD_PCT      = 30   # past this the quote is a placeholder, not a book.
                             # A mid fill inside a 50%-wide spread is the same
                             # fiction as a mid on a penny contract, and it put
