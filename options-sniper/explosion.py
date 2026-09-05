@@ -161,14 +161,30 @@ def summarise(obs, threshold):
 def main(args):
     print(f"Finding candidates: OTM, {args.min_dte}-{args.max_dte} DTE, "
           f"${args.min_price}-${args.max_price}\n")
-    pool = uw.screen_contracts(
-        is_otm="true", min_dte=args.min_dte, max_dte=args.max_dte,
-        min_volume=args.min_volume, type=args.type, limit=args.contracts)
-    pool = [c for c in pool
-            if args.min_price <= (c["ask"] or 0) <= args.max_price][:args.contracts]
+    try:
+        raw_pool = uw.screen_contracts(
+            is_otm="true", min_dte=args.min_dte, max_dte=args.max_dte,
+            min_volume=args.min_volume, type=args.type, limit=250)
+    except uw.UWError as e:
+        print(f"Screener failed: {e}")
+        print("If this is a 403, the plan does not serve "
+              "/api/screener/option-contracts.")
+        return 2
+    print(f"Screener returned {len(raw_pool)} contracts")
+    if not raw_pool:
+        print("Nothing matched the screen itself. Loosen --min-volume or widen "
+              "the DTE range. Note the screener reflects the last session, so "
+              "a long weekend can thin it out.")
+        return 1
+
+    pool = [c for c in raw_pool
+            if args.min_price <= c["price"] <= args.max_price][:args.contracts]
     if not pool:
-        print("Screener returned nothing in that price band. Widen --max-price "
-              "or --min-dte, or check the plan serves /api/screener/option-contracts.")
+        prices = sorted(c["price"] for c in raw_pool if c["price"] > 0)
+        band = (f"cheapest ${prices[0]:.2f}, median ${prices[len(prices)//2]:.2f}, "
+                f"dearest ${prices[-1]:.2f}") if prices else "all zero"
+        print(f"None priced ${args.min_price}-${args.max_price} ({band}). "
+              f"Adjust --min-price/--max-price.")
         return 1
     print(f"{len(pool)} contracts. Pulling each one's own history "
           f"(this is one request each)\n")

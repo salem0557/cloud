@@ -380,19 +380,52 @@ def contract_history(option_symbol, limit=500):
     return sorted([r for r in rows if r["date"]], key=lambda r: r["date"])
 
 
+def _normalise_screener_row(c):
+    """The screener speaks a different dialect from the chain endpoints.
+
+    It reports `close` rather than an NBBO pair, `ask_side_volume` rather than
+    `ask_volume`, and carries no greeks at all. Running it through
+    _normalise_contract produced ask=0 on every row, so a price filter of
+    $0.02-$1.00 rejected the entire result and the run reported "returned
+    nothing in that price band" for a screener that had answered fine.
+    """
+    sym = c.get("option_symbol") or ""
+    occ = parse_occ(sym) or {}
+    ask_v, bid_v = _num(c.get("ask_side_volume")), _num(c.get("bid_side_volume"))
+    return {
+        "option_symbol": sym,
+        "strike": _num(c.get("strike", occ.get("strike"))),
+        "type": str(c.get("option_type") or occ.get("type") or "").lower(),
+        "expiry": c.get("expiry") or occ.get("expiry") or "",
+        "price": _num(c.get("close")),          # what the contract last traded at
+        "high": _num(c.get("high")), "low": _num(c.get("low")),
+        "open": _num(c.get("open")),
+        "prev_close": _num(c.get("chain_prev_close")),
+        "volume": _num(c.get("volume")),
+        "open_interest": _num(c.get("open_interest")),
+        "ask_volume": ask_v, "bid_volume": bid_v,
+        "sweep_volume": _num(c.get("sweep_volume")),
+        "premium": _num(c.get("premium")),
+        "stock_price": _num(c.get("stock_price")),
+        "next_earnings_date": c.get("next_earnings_date") or "",
+        "sector": c.get("sector") or "",
+    }
+
+
 def screen_contracts(**filters):
     """GET /api/screener/option-contracts — the candidate pool.
 
-    Used to find the shape of contract Salem is after: cheap, out of the money,
-    with volume that is unusual against its own open interest.
+    Finds the shape of contract Salem is after: cheap, out of the money, with
+    volume that is unusual against its own open interest.
+
+    Raises rather than returning [] on failure: an empty list from a plan that
+    does not serve this endpoint is indistinguishable from an empty result,
+    and the caller cannot tell the user which one happened.
     """
     params = {k: v for k, v in filters.items() if v is not None}
     params.setdefault("limit", 250)
-    try:
-        raw = _get("/api/screener/option-contracts", params)
-    except UWError:
-        return []
-    return [_normalise_contract(c) for c in raw if isinstance(c, dict)]
+    raw = _get("/api/screener/option-contracts", params)
+    return [_normalise_screener_row(c) for c in raw if isinstance(c, dict)]
 
 
 def contract_quote(option_symbol):
