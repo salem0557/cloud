@@ -405,10 +405,24 @@ ANALYST_CAN_BLOCK=1                # 0 = يعلّق رأيه دون إلغاء �
 `history.py` يجلب من **ياهو مجاناً** افتراضياً.
 
 ```bash
-python backtest.py --days 365                    # ياهو، فريم 15د
-python backtest.py --interval 1h --days 730      # عينة أطول بكثير
-python backtest.py --source uw --days 90         # من UW (يستهلك حصتك)
+python backtest.py --days 365                    # auto: ياهو ثم UW
+python backtest.py --source uw --days 90         # UW مباشرةً (يستهلك حصتك)
+python backtest.py --interval 1h --days 730      # عينة أطول (لو ياهو متاح)
 ```
+
+### ⚠️ ياهو يحجب سيرفرات السحابة
+Railway يشارك عنوان IP مع آلاف الخدمات، وياهو يخنقه بـ **429**:
+```
+[history] Yahoo is rate-limiting this host (429). Skipping it for the
+          rest of this run — use --source uw.
+```
+لا يمكن إصلاحه من طرفنا. لذلك الافتراضي `auto`: يجرّب ياهو، وبعد **3
+رفضات** يتوقف عن سؤاله لبقية التشغيل وينتقل لـ UW.
+
+بدون هذا الحاجز كان يرسل 210 طلباً (30 رمز × 7 نوافذ) كلها مرفوضة —
+تزيد الحجب وتدفن السبب الحقيقي تحت 30 سطر خطأ.
+
+**على جهازك الشخصي ياهو يعمل عادة.** الحجب على عناوين مراكز البيانات.
 
 | | الحي | الباك-تست |
 |---|---|---|

@@ -160,8 +160,12 @@ def main(days, tickers, out_path, interval, source):
         print(f"  {ticker:6} {len(bars):>6} bars  {span}  {len(trades):>4} setups")
 
     if not all_trades:
-        print("\nNo setups found. Either the plan serves too little history, "
-              "or the filters are too tight for this sample.")
+        if history.yahoo_blocked():
+            print("\nYahoo rate-limited this host, so no bars were read. "
+                  "Re-run with --source uw to use the paid subscription.")
+        else:
+            print("\nNo setups found. Either the source serves too little "
+                  "history, or the filters are too tight for this sample.")
         return 1
 
     oldest = min(c["span"][:10] for c in coverage.values())
@@ -220,8 +224,10 @@ if __name__ == "__main__":
     ap.add_argument("--interval", default="15m",
                     choices=["15m", "30m", "1h", "1d"],
                     help="15m is the live strategy; 1h reaches much further back")
-    ap.add_argument("--source", default="yahoo", choices=["yahoo", "uw", "auto"],
-                    help="yahoo is free and deeper; uw costs quota")
+    ap.add_argument("--source", default="auto", choices=["yahoo", "uw", "auto"],
+                    help="auto tries Yahoo (free) and falls back to UW when "
+                         "Yahoo rate-limits this host, which cloud IPs usually "
+                         "are")
     a = ap.parse_args()
     tick = [t.strip().upper() for t in a.tickers.split(",")] if a.tickers else UNIVERSE
     out = __import__("pathlib").Path(a.out) if a.out else C.BACKTEST_FILE
