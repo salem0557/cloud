@@ -90,10 +90,12 @@ def test_missing_expiry_gives_no_dte_rather_than_a_guess():
 
 
 # ── Buckets ─────────────────────────────────────────────────────
-def test_price_buckets_separate_lottery_tickets():
-    assert explosion.bucket("price", 0.05) == "price=<0.10"
-    assert explosion.bucket("price", 0.30) == "price=0.10-0.50"
-    assert explosion.bucket("price", 2.00) == "price=1.50+"
+def test_price_buckets_read_as_budgets():
+    """Superseded by the budget-tier buckets: the boundaries are Salem's
+    $50/$100/$200, not numbers I picked."""
+    assert explosion.bucket("price", 0.05) == "budget=$50"
+    assert explosion.bucket("price", 0.30) == "budget=$50"
+    assert explosion.bucket("price", 2.00) == "budget=$200"
 
 
 def test_unknown_values_are_marked_not_bucketed():
@@ -223,7 +225,7 @@ def test_pairs_find_the_intersection():
            [_o(0.80, 5, 0.6, 0.3)] * 25)       # dear + short: dies
     pairs = dict(explosion.combinations(obs, ["price", "dte"], 5.0, 20))
     best = max(pairs.items(), key=lambda kv: kv[1]["realised_avg"])
-    assert "price=<0.10" in best[0] and "dte=3-7" in best[0]
+    assert "budget=$50" in best[0] and "dte=3-7" in best[0]
     assert best[1]["explosion_rate"] == 100.0
 
 
