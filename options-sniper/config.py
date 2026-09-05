@@ -6,8 +6,8 @@ BASE_DIR = Path(__file__).parent
 
 # Writable location for state and the journal. On Railway this points at the
 # mounted volume (set SNIPER_DATA_DIR=/data); everywhere else it is the project
-# folder. Without it a container restart would wipe the daily counter and the
-# whole paper-trading history.
+# folder. Railway containers have an ephemeral filesystem, so without the volume
+# every redeploy would wipe the daily counter and the paper-trading history.
 DATA_DIR = Path(os.environ.get("SNIPER_DATA_DIR") or Path(__file__).parent)
 
 
@@ -83,8 +83,8 @@ MIN_TICKER_PREMIUM      = 250_000   # skip tickers below this daily premium
 # True  = `claude -p` writes the Arabic message (Salem's original design)
 # False = deterministic Python formatter (no LLM, zero fabrication risk)
 # Either way every number comes from the computed JSON.
-# Overridable per-environment: GitHub Actions runners have no `claude` CLI, so
-# the workflows set USE_CLAUDE_COMPOSER=0.
+# Overridable per-environment: a Railway container has no `claude` CLI, so set
+# USE_CLAUDE_COMPOSER=0 there.
 USE_CLAUDE_COMPOSER = os.environ.get("USE_CLAUDE_COMPOSER", "1").lower() not in ("0", "false", "no")
 CLAUDE_TIMEOUT_SEC  = 300
 

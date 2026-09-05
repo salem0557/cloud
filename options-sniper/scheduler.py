@@ -1,9 +1,9 @@
-"""Always-on scheduler for a single long-lived host (Railway, Fly, a VPS).
+"""Always-on scheduler — the entrypoint Railway runs.
 
-Why a loop instead of cron: GitHub's scheduled workflows are best-effort and
-commonly fire 5-20 minutes late, which is useless for a 15-minute breakout.
-This process stays resident and fires on the minute, so the 5-minute monitor
-cadence is real rather than nominal.
+One resident process dispatches scanner and monitor on their own intervals,
+so both fire within seconds of their slot rather than whenever a external
+scheduler gets around to it. That precision is the whole point for a
+15-minute breakout.
 
 Cost note: between runs the process sleeps, so measured CPU is near zero.
 Railway bills actual usage, not the allocation.

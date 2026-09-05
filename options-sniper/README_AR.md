@@ -95,80 +95,29 @@ crontab crontab.txt               # عدّل SNIPER= لمسارك أولاً
 
 ---
 
-# التشغيل على GitHub Actions (بدون جهاز)
-
-`.github/workflows/sniper.yml` يشغّل النظام على سيرفرات GitHub مجاناً.
-
-## الإعداد (مرة واحدة)
-
-**1. أضف المفاتيح كـ Secrets**
-`https://github.com/salem0557/cloud/settings/secrets/actions` → **New repository secret**
-
-أضف أربعة، كل واحد لحاله:
-
-| Name | Secret |
-|---|---|
-| `UW_API_KEY` | مفتاح Unusual Whales |
-| `TELEGRAM_BOT_TOKEN` | توكن البوت |
-| `TELEGRAM_CHAT_ID` | رقم الشات |
-| `FINVIZ_AUTH` | توكن Finviz (اختياري) |
-
-**2. فعّل صلاحية الكتابة**
-`Settings → Actions → General → Workflow permissions` → اختر **Read and write permissions**
-(بدونها ما يقدر يحفظ `state.json` و `journal.csv`)
-
-**3. جرّبه يدوياً**
-`Actions → Options Sniper → Run workflow` → اختر `scanner` و `dry_run: true`
-راجع السجل. إذا طلع تنبيه صحيح، أعده بـ `dry_run: false` ليصلك على تيليجرام.
-
-## كيف تُحفظ البيانات
-سيرفرات Actions تُمسح بعد كل تشغيل. لذلك الوركفلو يحفظ `state.json` و
-`shortlist.json` و `positions.json` و `journal.csv` في فرع منفصل اسمه
-**`sniper-state`**. لا تعدّل هذا الفرع يدوياً — يُكتب فوقه في كل تشغيل.
-
-**لتحميل سجل تجربتك:** افتح فرع `sniper-state` في GitHub ونزّل `journal.csv`.
-
-**لإضافة صفقة مفتوحة:** عدّل `positions.json` في فرع `sniper-state` مباشرةً
-من واجهة GitHub، وسيقرأه التشغيل التالي.
-
-## ⚠️ ثلاثة قيود لازم تعرفها
-
-**1. التوقيت غير مضبوط.** جدولة GitHub *أفضل جهد* لا وعد — التأخير 5 إلى 20
-دقيقة شائع وقت الذروة. لذلك المراقبة كل **10** دقائق لا 5؛ الأقصر لا يفيد.
-**النتيجة: قد يصلك تنبيه كسر متأخراً 15 دقيقة.** فلتر "الدخول المتأخر"
-يحميك من الشراء في القمة، لكنك ستفوّت فرصاً.
-
-**2. حصة الدقائق.** المستودع الخاص له 2000 دقيقة مجانية شهرياً. الجدولة
-الحالية ≈ 61 تشغيلة/يوم × ~1 دقيقة × 22 يوم ≈ **1340 دقيقة** — داخل الحد
-لكن بلا فائض كبير. حلّان إن تجاوزت: اجعل المستودع **عاماً** (دقائق غير
-محدودة، والكود ما فيه أسرار — `.env` محجوب و Secrets مشفّرة)، أو خفّف
-المراقبة إلى كل 15 دقيقة.
-
-**3. لا يوجد `claude` على السيرفر.** الوركفلو يضبط `USE_CLAUDE_COMPOSER=0`
-فتُصاغ الرسالة ببايثون. المخرج مطابق — نفس القالب ونفس الأرقام.
-
-## الأصدق: متى تحتاج VPS
-Actions ممتاز للفاحص (كل 30 دقيقة يتحمّل التأخير). لكن لو جدّيت في
-المراقبة اللحظية، **VPS بـ 4–5$ شهرياً** يعطيك cron مضبوطاً بالثانية.
-ابدأ بـ Actions مجاناً، وانتقل لو أزعجك التأخير بعد أسبوعين.
-
----
-
-# التشغيل على Railway (موصى به — $5 شهرياً)
+# النشر على Railway
 
 `scheduler.py` عملية واحدة تبقى شغّالة وتطلق المهام في وقتها بالضبط.
-لا إقلاع بارد، ولا تأخير مثل GitHub Actions.
 
 ## الخطوات
 
 **1. اربط المستودع**
-`https://railway.com/new` → **Deploy from GitHub repo** → اختر `salem0557/cloud`
+`https://railway.com/new` → **Deploy from GitHub repo** → `salem0557/cloud`
 
 **2. اضبط جذر الخدمة**
-`Settings → Source → Root Directory` → اكتب: `options-sniper`
-(بدونها يحاول يبني المستودع كله)
+`Settings → Source → Root Directory` → **`/options-sniper`**
 
-**3. أضف المتغيرات**
+⚠️ انتبه: `/options_scanner` (شرطة سفلية) مشروع قديم مختلف. الصحيح
+`/options-sniper` بشرطة عادية.
+
+**3. احذف أي خدمة أخرى**
+جذر المستودع فيه `Procfile` قديم (`worker: python bot.py`) قد يجعل Railway
+ينشئ خدمة ثانية اسمها `worker`. **كل خدمة تُحاسب لحالها** — احذفها:
+`الخدمة → Settings → Delete Service`.
+
+المطلوب: **خدمة واحدة فقط**.
+
+**4. أضف المتغيرات**
 `Variables → New Variable` — خمسة:
 
 | Variable | Value |
@@ -179,19 +128,24 @@ Actions ممتاز للفاحص (كل 30 دقيقة يتحمّل التأخير)
 | `USE_CLAUDE_COMPOSER` | `0` |
 | `SNIPER_DATA_DIR` | `/data` |
 
-**4. أضف القرص الدائم** ← لا تتخطاها
-`Settings → Volumes → Add Volume` → Mount path: `/data` → الحجم: **1 GB**
+`USE_CLAUDE_COMPOSER=0` ضروري: الحاوية ما فيها `claude` CLI، فتُصاغ الرسالة
+ببايثون — نفس القالب ونفس الأرقام.
 
-بدون القرص، كل إعادة نشر تمسح عدّاد التنبيهات و `journal.csv` كاملاً.
+**5. أضف القرص الدائم** ← لا تتخطَّ هذه
+`Settings → Volumes → Add Volume` → Mount path: `/data` → **1 GB**
 
-**5. انشر**
-Railway يبني ويشغّل تلقائياً. افتح **Deploy Logs**، لازم تشوف:
+قرص الحاوية مؤقت. بدون القرص الدائم، كل إعادة نشر تمسح عدّاد التنبيهات
+و `journal.csv` كاملاً — أي تفقد بيانات معايرة العتبة.
+
+**6. تحقق**
+`Deployments → View Logs`، لازم تشوف:
 ```
 scheduler up — scan every 30m, monitor every 5m, data in /data
 market closed — weekend (Sat 08:04 ET)
 ```
+لو ظهر `data in /app` بدل `/data`، فمتغير `SNIPER_DATA_DIR` ما انضبط.
 
-## التكلفة الفعلية
+## التكلفة
 | المورد | الاستهلاك | التكلفة |
 |---|---|---|
 | RAM | ~154 MB × 24/7 | $1.50 |
@@ -200,21 +154,22 @@ market closed — weekend (Sat 08:04 ET)
 | **المجموع** | | **$2.25** |
 
 اشتراك Hobby ($5) يشمل $5 رصيد → **فاتورتك $5.00 بالضبط**.
-الفائض $2.75 لا يُرحّل ولا يُسترد.
+الفائض لا يُرحّل ولا يُسترد.
 
-**ما الذي قد يرفع الفاتورة فوق $5:**
-- إضافة خدمة ثانية (Postgres، Redis) — كل خدمة تُحاسب لحالها. **لا تضف شيئاً.**
-- قرص أكبر من 1 GB — `journal.csv` لن يتجاوز بضعة ميغابايت في سنة.
-- تسريب ذاكرة. راقب **Metrics** أول أسبوع؛ الذاكرة لازم تبقى مستقرة.
+**ما قد يرفعها فوق $5:**
+- خدمة ثانية (Postgres، Redis، أو خدمة `worker` القديمة) — لا تضف شيئاً
+- قرص أكبر من 1 GB — `journal.csv` لن يتجاوز بضعة ميغابايت في سنة
+- تسريب ذاكرة — راقب **Metrics** أول أسبوع، لازم تبقى ثابتة ~150MB
 
-## قراءة بياناتك
-البيانات داخل القرص `/data` لا في git.
-`Railway → خدمتك → Data` يعرض محتوى القرص، أو من الطرفية:
+## بياناتك
+داخل القرص `/data` لا في git.
+
 ```bash
-railway run cat /data/journal.csv > journal.csv
+railway run cat /data/journal.csv > journal.csv    # تنزيل سجل التجربة
+railway run cat /data/state.json                   # عدّاد التنبيهات اليوم
 ```
 
-لإضافة صفقة مفتوحة:
+لإضافة صفقة مفتوحة يراقبها للخروج:
 ```bash
 railway run python -c "
 import json,pathlib
@@ -222,22 +177,28 @@ p=pathlib.Path('/data/positions.json')
 rows=json.loads(p.read_text()) if p.exists() else []
 rows.append({'ticker':'UBER','contract':'UBER 260911 C76',
              'entry_price':0.85,'option_symbol':'UBER260911C00076000'})
-p.write_text(json.dumps(rows,indent=2))
-print(rows)"
+p.write_text(json.dumps(rows,indent=2)); print(rows)"
 ```
 
-## مقارنة صريحة
+## أوقات التشغيل
+`market.py` يتبع `America/New_York`، فالتوقيت الصيفي يُضبط تلقائياً ولا
+تحتاج تعديلاً موسمياً. الجلسة دائماً 09:30–16:00 بتوقيت نيويورك:
 
-| | GitHub Actions | Railway |
-|---|---|---|
-| التكلفة | مجاني | $5/شهر |
-| **دقة التوقيت** | تأخير 5–20 دقيقة | **بالثانية** |
-| المراقبة الفعلية | كل 10 دقائق | **كل 5 دقائق** |
-| حفظ البيانات | فرع `sniper-state` | قرص دائم |
-| حد شهري | 2000 دقيقة | لا يوجد |
+| | بتوقيت الرياض |
+|---|---|
+| صيفاً | 16:30 – 23:00 |
+| شتاءً | 17:30 – 00:00 |
 
-الطريقتان موجودتان في المستودع. شغّل واحدة **فقط** — لو شغّلتهما معاً
-سيتنافسان على سقف الـ 5 تنبيهات بحالتين منفصلتين وستصلك تنبيهات مكررة.
+خارج هذه الأوقات وفي الإجازات الأسبوعية يسجّل `market closed` ولا يفعل شيئاً.
 
-لإيقاف Actions عند الانتقال لـ Railway:
-`Actions → Options Sniper → ⋯ → Disable workflow`
+## تشغيل يدوي للاختبار
+```bash
+railway run python telegram_send.py              # رسالة اختبار
+railway run python scanner.py --dry-run --limit 5  # فحص بلا إرسال
+railway run python -m pytest tests -q            # 32 اختبار
+```
+`--dry-run` يطبع الرسالة بدل إرسالها ويتجاهل سقف الـ 5 اليومي.
+
+## ملف crontab.txt
+موجود للرجوع فقط إن انتقلت لاحقاً إلى VPS عادي. **Railway لا يحتاجه** —
+الجدولة داخل `scheduler.py`.
