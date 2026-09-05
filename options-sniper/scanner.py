@@ -12,6 +12,7 @@ import json
 import sys
 
 import config as C
+import finviz
 import journal
 import market
 import state
@@ -145,6 +146,18 @@ def main(dry_run=False, limit_tickers=None):
     alerts = uw.flow_alerts()
     print(f"UW flow alerts: {len(alerts)}")
     agg = aggregate_flow(alerts)
+
+    # Finviz movers that the capped market-wide feed did not return. For each,
+    # ask UW for that ticker's own flow — Finviz decides who gets looked at,
+    # UW still supplies every number that is scored.
+    movers = finviz.movers(limit=C.MAX_FINVIZ_MOVERS)
+    if movers:
+        extra = [m["ticker"] for m in movers if m["ticker"] not in agg]
+        print(f"Finviz movers: {len(movers)} ({len(extra)} not in the UW feed)")
+        for ticker in extra[:C.MAX_FINVIZ_LOOKUPS]:
+            t_alerts = uw.ticker_flow_alerts(ticker)
+            if t_alerts:
+                agg.update(aggregate_flow(t_alerts))
 
     already = set(state.read().get("alerted_tickers", []))
     ranked = sorted(

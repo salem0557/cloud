@@ -115,6 +115,40 @@ def flow_alerts(limit=None):
     return [a for a in out if a["ticker"]]
 
 
+def ticker_flow_alerts(ticker, limit=100):
+    """GET /api/stock/{ticker}/flow-alerts — one ticker's own flow.
+
+    The market-wide feed is capped, so a ticker with real flow can miss the
+    window entirely. scanner.py uses this to fill in Finviz movers that the
+    market-wide call did not return, then scores them identically.
+    """
+    try:
+        raw = _get(f"/api/stock/{ticker}/flow-alerts", {"limit": limit})
+    except UWError:
+        return []
+    out = []
+    for a in raw:
+        occ = parse_occ(a.get("option_chain", ""))
+        out.append({
+            "ticker": (a.get("ticker") or (occ or {}).get("ticker") or ticker).upper(),
+            "alert_rule": a.get("alert_rule", ""),
+            "type": (a.get("type") or (occ or {}).get("type") or "").lower(),
+            "total_premium": _num(a.get("total_premium")),
+            "ask_side_premium": _num(a.get("total_ask_side_prem")),
+            "bid_side_premium": _num(a.get("total_bid_side_prem")),
+            "has_sweep": bool(a.get("has_sweep")),
+            "has_floor": bool(a.get("has_floor")),
+            "all_opening": bool(a.get("all_opening_trades")),
+            "volume_oi_ratio": _num(a.get("volume_oi_ratio")),
+            "open_interest": _num(a.get("open_interest")),
+            "underlying_price": _num(a.get("underlying_price")),
+            "strike": _num(a.get("strike")),
+            "expiry": a.get("expiry", ""),
+            "option_symbol": a.get("option_chain", ""),
+        })
+    return out
+
+
 # ── 2) News headlines ───────────────────────────────────────────
 def news(ticker, limit=20):
     """GET /api/news/headlines?ticker=..."""
