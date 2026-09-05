@@ -57,10 +57,30 @@ def _get(path, params=None, retries=3):
             time.sleep(2 ** attempt)
             continue
         try:
-            return r.json().get("data", [])
+            return _unwrap(r.json(), path)
         except ValueError as e:
             raise UWError(f"{path}: bad JSON") from e
     raise UWError(f"{path}: exhausted retries")
+
+
+def _unwrap(payload, path):
+    """Pull the rows out of UW's envelope.
+
+    Almost every endpoint wraps its rows in "data". /option-contract/{id}/
+    historic wraps them in "chains" instead, so a plain .get("data", []) read
+    it as empty — 147 contracts in a row returned nothing and the run blamed
+    the subscription. Accept either, and a bare list.
+    """
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        raise UWError(f"{path}: unexpected response type {type(payload).__name__}")
+    for key in ("data", "chains", "results"):
+        if key in payload:
+            rows = payload[key]
+            return rows if isinstance(rows, list) else [rows]
+    raise UWError(f"{path}: no rows in response (keys: "
+                  f"{', '.join(sorted(payload)[:6]) or 'none'})")
 
 
 # ── OCC symbol parsing (AAPL240202P00185000) ────────────────────
@@ -356,10 +376,7 @@ def contract_history(option_symbol, limit=500):
     question Salem actually cares about — what a contract bought that day went
     on to be worth.
     """
-    try:
-        raw = _get(f"/api/option-contract/{option_symbol}/historic", {"limit": limit})
-    except UWError:
-        return []
+    raw = _get(f"/api/option-contract/{option_symbol}/historic", {"limit": limit})
     rows = []
     for r in raw or []:
         bid, ask = _num(r.get("nbbo_bid")), _num(r.get("nbbo_ask"))

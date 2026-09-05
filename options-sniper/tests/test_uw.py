@@ -107,3 +107,57 @@ def test_contracts_without_delta_are_dropped():
 def test_unparseable_expiry_is_dropped():
     assert not uw._in_window({"expiry": "", "delta": 0.5})
     assert not uw._in_window({"expiry": "not-a-date", "delta": 0.5})
+
+
+# ── The response envelope is not uniform across UW ──────────────
+def test_data_envelope():
+    assert uw._unwrap({"data": [{"a": 1}]}, "/x") == [{"a": 1}]
+
+
+def test_chains_envelope():
+    """/option-contract/{id}/historic wraps rows in "chains", not "data".
+    Reading only "data" returned empty for 147 contracts in a row, and the run
+    blamed the subscription for a key-name difference."""
+    assert uw._unwrap({"chains": [{"b": 2}]}, "/x") == [{"b": 2}]
+
+
+def test_bare_list_and_single_object():
+    assert uw._unwrap([{"c": 3}], "/x") == [{"c": 3}]
+    assert uw._unwrap({"data": {"d": 4}}, "/x") == [{"d": 4}]
+
+
+def test_an_envelope_with_no_rows_raises_and_names_the_keys():
+    try:
+        uw._unwrap({"message": "not entitled"}, "/x")
+    except uw.UWError as e:
+        assert "message" in str(e)
+    else:
+        raise AssertionError("should have raised")
+
+
+def test_contract_history_surfaces_its_error(monkeypatch):
+    """Swallowing this hid the real cause three separate times."""
+    def denied(path, params=None, retries=3):
+        raise uw.UWError(f"{path}: auth failed (403)")
+    monkeypatch.setattr(uw, "_get", denied)
+    try:
+        uw.contract_history("UBER260904C00076000")
+    except uw.UWError as e:
+        assert "403" in str(e)
+    else:
+        raise AssertionError("should have raised")
+
+
+def test_contract_history_parses_the_historic_row_shape(monkeypatch):
+    monkeypatch.setattr(uw, "_get", lambda *a, **k: [{
+        "date": "2026-08-07", "open_price": "0.45", "high_price": "0.87",
+        "low_price": "0.40", "last_price": "0.55", "nbbo_bid": "0.53",
+        "nbbo_ask": "0.57", "implied_volatility": "0.62", "open_interest": 15907,
+        "volume": 4200, "ask_volume": 3000, "bid_volume": 1200,
+        "sweep_volume": 900, "total_premium": "231000.00",
+    }])
+    rows = uw.contract_history("UBER260904C00076000")
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["high"] == 0.87 and r["ask"] == 0.57 and r["iv"] == 0.62
+    assert r["ask_volume"] == 3000 and r["open_interest"] == 15907
