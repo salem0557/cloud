@@ -46,11 +46,22 @@ import config as C
 import uw
 
 
-def forward_multiple(rows, i, horizon):
-    """Best multiple a buy at row i's ask reached within `horizon` days.
+def forward_multiple(rows, i, horizon, realistic=True):
+    """What a buy at row i's ask was worth over the next `horizon` days.
 
-    Entry at the ask because that is what a taker pays; the ask is also what
-    the budget filter prices contracts on, so the two agree.
+    Two ways to price the exit, and they disagree enormously on cheap
+    contracts:
+
+      optimistic  credit the day's HIGH. That is a print somebody got, not a
+                  price you could have sold into.
+      realistic   credit the BID, because selling means hitting the bid. On a
+                  $0.02 contract quoted 0.01 x 0.02 that halves the entry
+                  before anything moves, and when the bid is 0.00 there is no
+                  exit at all.
+
+    The gap between them is the whole question about the "cheap contracts
+    explode" result: a 5x on a $0.02 contract is an 8-cent move, less than two
+    ticks, and entirely inside a spread that is 50-100% of the price.
     """
     entry = rows[i]["ask"] or rows[i]["last"]
     if entry <= 0:
@@ -58,14 +69,21 @@ def forward_multiple(rows, i, horizon):
     window = rows[i + 1:i + 1 + horizon]
     if not window:
         return None
-    peak = max((r["high"] or r["last"]) for r in window)
-    end = window[-1]["last"] or window[-1]["bid"]
+
+    def exit_price(r):
+        return (r["bid"] if realistic else (r["high"] or r["last"])) or 0.0
+
+    peak = max(exit_price(r) for r in window)
+    end = exit_price(window[-1])
+    spread = rows[i]["ask"] - rows[i]["bid"]
     return {
         "entry": entry,
+        "entry_bid": rows[i]["bid"],
+        "spread_pct": round(spread / entry * 100, 1) if entry else 0.0,
         "peak_multiple": round(peak / entry, 2),
         "end_multiple": round(end / entry, 2) if end else 0.0,
         "days_to_peak": next((n for n, r in enumerate(window, 1)
-                              if (r["high"] or r["last"]) >= peak), len(window)),
+                              if exit_price(r) >= peak), len(window)),
     }
 
 
@@ -88,6 +106,8 @@ def features(rows, i, meta):
         "sweep_share": round((r["sweep_volume"] or 0) / vol, 2) if vol else 0.0,
         "open_interest": oi,
         "dte": dte,
+        "spread_pct": round((r["ask"] - r["bid"]) / r["ask"] * 100, 1)
+        if r["ask"] else None,
     }
 
 
@@ -138,15 +158,19 @@ def bucket(name, value):
         return f"dte={'0-2' if value <= 2 else '3-7' if value <= 7 else '8-21' if value <= 21 else '22+'}"
     if name == "iv":
         return f"iv={'<50%' if value < 0.5 else '50-100%' if value < 1.0 else '100%+'}"
+    if name == "spread_pct":
+        return f"spread={'<10%' if value < 10 else '10-25%' if value < 25 else '25-50%' if value < 50 else '50%+'}"
     if name == "vol_vs_avg":
         return f"vol/avg={'<1x' if value < 1 else '1-3x' if value < 3 else '3-10x' if value < 10 else '10x+'}"
     return f"{name}={value}"
 
 
-FEATURES = ["price", "vol_oi", "ask_share", "sweep_share", "dte", "iv", "vol_vs_avg"]
+FEATURES = ["price", "spread_pct", "vol_oi", "ask_share", "sweep_share",
+            "dte", "iv", "vol_vs_avg"]
 
 
-def scan_contract(symbol, meta, horizon, min_price, max_price):
+def scan_contract(symbol, meta, horizon, min_price, max_price,
+                  realistic=True, max_spread_pct=None):
     rows = uw.contract_history(symbol)      # raises; the caller reports why
     if len(rows) < 3:
         return []
@@ -155,8 +179,12 @@ def scan_contract(symbol, meta, horizon, min_price, max_price):
         price = rows[i]["ask"] or rows[i]["last"]
         if not (min_price <= price <= max_price):
             continue
-        fwd = forward_multiple(rows, i, horizon)
+        if realistic and rows[i]["bid"] <= 0:
+            continue                # no bid means no exit; not a tradeable entry
+        fwd = forward_multiple(rows, i, horizon, realistic)
         if not fwd:
+            continue
+        if max_spread_pct is not None and fwd["spread_pct"] > max_spread_pct:
             continue
         out.append({"symbol": symbol, "date": rows[i]["date"],
                     **fwd, "features": features(rows, i, meta)})
@@ -204,8 +232,12 @@ def summarise(obs, threshold, take=None):
 
 
 def main(args):
+    fills = "OPTIMISTIC (exits at the high)" if args.optimistic \
+        else "realistic (exits at the bid)"
     print(f"Finding candidates: OTM, {args.min_dte}-{args.max_dte} DTE, "
-          f"${args.min_price}-${args.max_price}\n")
+          f"${args.min_price}-${args.max_price}")
+    print(f"Fills: {fills}"
+          + (f", max spread {args.max_spread}%" if args.max_spread else "") + "\n")
     try:
         raw_pool = uw.screen_contracts(
             is_otm="true", min_dte=args.min_dte, max_dte=args.max_dte,
@@ -238,7 +270,9 @@ def main(args):
     for n, c in enumerate(pool, 1):
         try:
             got = scan_contract(c["option_symbol"], c, args.horizon,
-                                args.min_price, args.max_price)
+                                args.min_price, args.max_price,
+                                realistic=not args.optimistic,
+                                max_spread_pct=args.max_spread)
         except uw.UWError as err:
             failures.append(f"{c['option_symbol']}: {err}")
             if len(failures) == 1:
@@ -331,10 +365,14 @@ def main(args):
                                     if len(v) >= C.BASE_RATE_MIN_SAMPLE}
     C.EXPLOSION_FILE.write_text(json.dumps(payload, indent=2))
     print(f"Wrote {C.EXPLOSION_FILE}")
-    print("\nTwo caveats this cannot measure: every multiple above is a PEAK "
-          "reached along the way, not what you would have got — the UBER "
-          "contract ended at $0.01 — and entries are priced at the ask with "
-          "exits credited at the high, which no real fill matches.")
+    if args.optimistic:
+        print("\nOPTIMISTIC fills: exits credited at the day's high, a print "
+              "somebody got rather than a price you could sell into. Re-run "
+              "without --optimistic for bid-based exits.")
+    else:
+        print("\nExits are credited at the bid, and entries without a bid are "
+              "skipped. Still optimistic in one way: it assumes the whole "
+              "position fills at the touch, and size moves a thin book.")
     return 0
 
 
@@ -352,6 +390,12 @@ if __name__ == "__main__":
     ap.add_argument("--contracts", type=int, default=150,
                     help="how many contracts to pull history for (1 request each)")
     ap.add_argument("--type", choices=["call", "put"], default=None)
+    ap.add_argument("--optimistic", action="store_true",
+                    help="credit exits at the day's high instead of the bid. "
+                         "Shows the number the first run reported; not "
+                         "reachable by any real order.")
+    ap.add_argument("--max-spread", type=float, default=None,
+                    help="skip entries wider than this %% spread at entry")
     a = ap.parse_args()
     try:
         sys.exit(main(a))
