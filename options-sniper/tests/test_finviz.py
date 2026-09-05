@@ -36,6 +36,40 @@ def test_no_key_means_no_call(monkeypatch):
     assert finviz.movers() == []
 
 
+def test_falls_back_when_the_modern_path_404s(monkeypatch):
+    """/export/screener is tried first; a 404 there must fall through to the
+    legacy .ashx path rather than aborting the scan."""
+    monkeypatch.setattr(C, "FINVIZ_AUTH", "token")
+    seen = []
+
+    def fake_get(url, **k):
+        seen.append(url)
+        return FakeResp("", ok=False, status=404) if "export/screener" in url \
+            else FakeResp(CSV)
+
+    monkeypatch.setattr(finviz.requests, "get", fake_get)
+    assert [r["ticker"] for r in finviz.movers()] == ["NVDA", "UBER"]
+    assert len(seen) == 2 and seen[0].endswith("/export/screener")
+
+
+def test_empty_body_falls_through(monkeypatch):
+    """An unfollowed 301 returns 200 with nothing in it — not a valid answer."""
+    monkeypatch.setattr(C, "FINVIZ_AUTH", "token")
+    monkeypatch.setattr(finviz.requests, "get",
+                        lambda url, **k: FakeResp("") if "export/screener" in url
+                        else FakeResp(CSV))
+    assert [r["ticker"] for r in finviz.movers()] == ["NVDA", "UBER"]
+
+
+def test_modern_path_is_preferred(monkeypatch):
+    monkeypatch.setattr(C, "FINVIZ_AUTH", "token")
+    seen = []
+    monkeypatch.setattr(finviz.requests, "get",
+                        lambda url, **k: (seen.append(url), FakeResp(CSV))[1])
+    finviz.movers()
+    assert seen == ["https://elite.finviz.com/export/screener"]
+
+
 def test_failures_degrade_to_uw_only(monkeypatch):
     """A Finviz outage must never take the scan down."""
     monkeypatch.setattr(C, "FINVIZ_AUTH", "token")

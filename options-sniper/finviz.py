@@ -23,7 +23,15 @@ import config as C
 # relative volume > 2, average volume > 500k, price > $5, US common stock.
 # Deliberately loose: this is a net, not a filter — scoring does the rejecting.
 SCREEN = "sh_avgvol_o500,sh_relvol_o2,sh_price_o5,geo_usa"
-EXPORT = "https://elite.finviz.com/export.ashx"
+
+# Finviz's current export path is /export/<section>. The legacy .ashx URL still
+# works but answers with a 301, and a client that does not follow redirects gets
+# an empty body. requests does follow them, so the fallback stays safe either
+# way; the modern path is tried first so we are not relying on that redirect.
+EXPORT_URLS = (
+    "https://elite.finviz.com/export/screener",
+    "https://elite.finviz.com/export.ashx",
+)
 
 
 def movers(limit=None):
@@ -34,21 +42,35 @@ def movers(limit=None):
     """
     if not C.FINVIZ_AUTH:
         return []
-    try:
-        r = requests.get(EXPORT, params={"v": "111", "f": SCREEN,
-                                         "auth": C.FINVIZ_AUTH}, timeout=30)
-    except requests.RequestException as e:
-        print("[finviz] network error:", e)
-        return []
-    if not r.ok:
-        print(f"[finviz] HTTP {r.status_code} — check FINVIZ_AUTH")
-        return []
-    if "<html" in r.text[:200].lower():
-        print("[finviz] got HTML, not CSV — FINVIZ_AUTH is wrong or expired")
+
+    text = None
+    for url in EXPORT_URLS:
+        try:
+            r = requests.get(url, params={"v": "111", "f": SCREEN,
+                                          "auth": C.FINVIZ_AUTH},
+                             timeout=30, allow_redirects=True)
+        except requests.RequestException as e:
+            print(f"[finviz] network error on {url}: {e}")
+            continue
+        if r.status_code == 404:
+            continue                      # path not served — try the other one
+        if not r.ok:
+            print(f"[finviz] HTTP {r.status_code} — check FINVIZ_AUTH")
+            return []
+        if "<html" in r.text[:200].lower():
+            print("[finviz] got HTML, not CSV — FINVIZ_AUTH is wrong or expired")
+            return []
+        if not r.text.strip():
+            continue                      # empty body: an unfollowed redirect
+        text = r.text
+        break
+
+    if text is None:
+        print("[finviz] no usable response from either export path")
         return []
 
     out = []
-    for row in csv.DictReader(io.StringIO(r.text)):
+    for row in csv.DictReader(io.StringIO(text)):
         ticker = (row.get("Ticker") or "").strip().upper()
         if not ticker:
             continue
