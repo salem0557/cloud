@@ -1,3 +1,13 @@
+# Live path — the scheduler imports only these.
 requests>=2.31
-pytest>=8.0
+
+# Backtest only. history.py imports yfinance lazily inside the fetch, so the
+# resident scheduler never loads pandas and its memory stays where the Railway
+# cost estimate assumed.
+yfinance>=0.2.40
+
+# Analyst layer only (USE_ANALYST=1); analyst.py imports it lazily too.
 anthropic>=1.0
+
+# Tests.
+pytest>=8.0

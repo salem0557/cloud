@@ -68,8 +68,24 @@ for name, value in (("UW_API_KEY", C.UW_API_KEY),
 report("FINVIZ_AUTH", OK if C.FINVIZ_AUTH else WARN,
        f"{C.FINVIZ_AUTH[:6]}…" if C.FINVIZ_AUTH else "not set — scans run UW-only")
 
-# ── 2. Storage ──────────────────────────────────────────────────
-section("2. Storage")
+# ── 2. Dependencies ─────────────────────────────────────────────
+# Two of these are imported lazily, deep inside a code path, so a missing one
+# surfaces only when Salem runs the backtest or turns the analyst on — long
+# after the deploy that dropped it. Checked up front instead.
+section("2. Dependencies")
+for mod, need, why in (("requests", True, "live scanning"),
+                       ("yfinance", False, "backtest history — python backtest.py"),
+                       ("anthropic", False, "analyst layer — USE_ANALYST=1")):
+    try:
+        __import__(mod)
+        report(mod, OK, why)
+    except ImportError:
+        report(mod, BAD if need else WARN,
+               f"missing — {why} unavailable. Fix: pip install {mod}")
+
+
+# ── 3. Storage ──────────────────────────────────────────────────
+section("3. Storage")
 if str(C.DATA_DIR) == "/data":
     report("volume mounted", OK, str(C.DATA_DIR))
 elif str(C.DATA_DIR).startswith("/app"):
@@ -89,7 +105,7 @@ except OSError as e:
 import technical  # noqa: E402
 import uw  # noqa: E402
 
-section("3. Unusual Whales")
+section("4. Unusual Whales")
 
 
 def why(path, params=None):
@@ -171,7 +187,7 @@ else:
       report("option chain", BAD, str(e))
 
 # ── 4. Finviz ───────────────────────────────────────────────────
-section("4. Finviz (candidate discovery only)")
+section("5. Finviz (candidate discovery only)")
 if not C.FINVIZ_AUTH:
     report("screener", WARN, "no token — skipped")
 else:
@@ -186,7 +202,7 @@ else:
                "line above for 'got HTML, not CSV'")
 
 # ── 5. Telegram ─────────────────────────────────────────────────
-section("5. Telegram")
+section("6. Telegram")
 if "--no-telegram" in sys.argv:
     report("send", WARN, "skipped (--no-telegram)")
 elif not (C.TELEGRAM_TOKEN and C.TELEGRAM_CHAT_ID):
