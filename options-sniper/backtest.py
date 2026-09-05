@@ -31,6 +31,14 @@ import statistics
 import sys
 from collections import defaultdict
 
+import venv_boot
+
+# yfinance, not just requests: the default source is Yahoo, and checking only
+# requests would pass on an interpreter that has it and still fail on the very
+# first ticker — which is exactly the loop this is here to prevent.
+venv_boot.ensure(["requests", "yfinance"],
+                 hint="--source uw needs only requests, if yfinance is a problem")
+
 import config as C
 import history
 import technical
