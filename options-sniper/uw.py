@@ -467,6 +467,55 @@ def _normalise_screener_row(c):
     }
 
 
+def contract_intraday(option_symbol, date=None):
+    """GET /api/option-contract/{id}/intraday — one contract, minute by minute.
+
+    The daily tape in contract_history() cannot describe a same-day trade: a
+    0DTE contract has one row there, and Salem's trade is bought and sold
+    inside a single session. This is the only endpoint that can measure it.
+
+    UW does not publish the row shape, so field names are taken defensively
+    and the raw keys of the first row are exposed as `_keys` for the caller to
+    report. Rows are returned ASCENDING in time.
+    """
+    params = {"date": date} if date else {}
+    raw = _get(f"/api/option-contract/{option_symbol}/intraday", params)
+    rows = []
+    for r in raw:
+        if not isinstance(r, dict):
+            continue
+        close = _num(_first(r, "close", "price", "last", "last_price"))
+        rows.append({
+            "time": _first(r, "tape_time", "start_time", "timestamp", "time",
+                           default=""),
+            "open": _num(_first(r, "open", "price")),
+            "high": _num(_first(r, "high", "price")),
+            "low": _num(_first(r, "low", "price")),
+            "close": close,
+            # NBBO if the row carries one; otherwise the trade price stands in
+            # and the caller must say so rather than pretend to a spread.
+            "bid": _num(_first(r, "nbbo_bid", "bid", "bid_price")),
+            "ask": _num(_first(r, "nbbo_ask", "ask", "ask_price")),
+            "volume": _num(_first(r, "volume", "total_volume")),
+            "ask_volume": _num(_first(r, "ask_volume", "ask_side_volume")),
+            "bid_volume": _num(_first(r, "bid_volume", "bid_side_volume")),
+            "iv": _num(_first(r, "implied_volatility", "iv")),
+            "delta": _num(_first(r, "delta")),
+            "_keys": sorted(r.keys()),
+        })
+    rows.sort(key=lambda r: r["time"])
+    return [r for r in rows if r["close"] > 0 or r["ask"] > 0]
+
+
+def _first(row, *names, default=None):
+    """The first of `names` the row actually carries — UW's field naming
+    differs between endpoints and guessing wrong reads as a zero."""
+    for n in names:
+        if n in row and row[n] not in (None, ""):
+            return row[n]
+    return default
+
+
 def screen_contracts(**filters):
     """GET /api/screener/option-contracts — the candidate pool.
 
