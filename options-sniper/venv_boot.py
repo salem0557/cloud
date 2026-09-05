@@ -52,16 +52,26 @@ def ensure(modules, hint=""):
     absent = missing(modules)
     if not absent:
         return
+    # Report per interpreter rather than "no interpreter has them". A venv that
+    # has two of three packages is a different problem from one that has none,
+    # and collapsing both into one sentence sent the last diagnosis the wrong
+    # way for two rounds.
+    surveyed = []
     for python in CANDIDATES:
         if _has(python, modules):
             print(f"(re-running under {python} — this shell's python is missing "
                   f"{', '.join(absent)})\n", flush=True)
             os.execv(python, [python] + sys.argv)
-    print(f"FAIL: cannot import {', '.join(absent)}, and no interpreter on this "
-          f"machine has them.\n"
-          f"      Install into the venv the service uses:\n"
+        if os.path.exists(python) and python != sys.executable:
+            gaps = [m for m in modules if not _has(python, [m])]
+            surveyed.append(f"        {python}: missing {', '.join(gaps)}")
+    print(f"FAIL: cannot import {', '.join(absent)} here ({sys.executable}).\n"
+          + ("      Other interpreters on this machine:\n"
+             + "\n".join(surveyed) + "\n" if surveyed else "")
+          + f"      Fix:\n"
           f"        /opt/venv/bin/pip install {' '.join(absent)}\n"
-          f"      then run with that same interpreter:\n"
-          f"        /opt/venv/bin/python {os.path.basename(sys.argv[0])}"
+          f"        /opt/venv/bin/python {os.path.basename(sys.argv[0])}\n"
+          f"      Note: a pip install run in the web console lives only in that\n"
+          f"      container. Declare it in requirements.txt and redeploy."
           + (f"\n      {hint}" if hint else ""), file=sys.stderr)
     sys.exit(2)

@@ -22,6 +22,8 @@ prints that coverage rather than implying it got what it asked for.
 import datetime
 import sys
 
+import requests
+
 import config as C
 
 _ET = None
@@ -42,31 +44,91 @@ class HistoryError(RuntimeError):
 # next shorter window instead of returning nothing.
 _YF_PERIODS = ["2y", "1y", "6mo", "3mo", "60d", "1mo", "5d"]
 
+# Yahoo's chart endpoint is one GET returning JSON. It is read directly with
+# requests — already required by the live path — rather than through yfinance,
+# which drags in pandas, numpy and curl_cffi to do the same thing. That
+# dependency repeatedly failed to reach the running container while requests
+# was always there, and none of its machinery was being used: the DataFrame was
+# immediately unpacked back into plain dicts.
+_CHART = "https://query1.finance.yahoo.com/v8/finance/chart/{}"
+_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+       "(KHTML, like Gecko) Chrome/120.0 Safari/537.36")
+
 
 def _yahoo(ticker, interval, days):
-    try:
-        import yfinance as yf
-    except ImportError as e:
-        raise HistoryError(
-            "yfinance is not importable by this interpreter "
-            f"({sys.executable}). Either it is not installed, or this is the "
-            "system python and the packages are in the venv — run "
-            "/opt/venv/bin/python instead.") from e
-
     wanted = [p for p in _YF_PERIODS if _period_days(p) >= days] or ["60d"]
-    tried = []
-    for period in wanted + [p for p in _YF_PERIODS if p not in wanted]:
+    order = wanted + [p for p in _YF_PERIODS if p not in wanted]
+    tried, last_error = [], None
+    for period in order:
         tried.append(period)
         try:
-            df = yf.Ticker(ticker).history(period=period, interval=interval,
-                                           auto_adjust=False)
-        except Exception:
+            bars = _chart_request(ticker, interval, period)
+        except Exception as e:
+            last_error = e
             continue
-        if df is None or df.empty:
-            continue
-        return _from_dataframe(df, interval)
+        if bars:
+            return bars
+    detail = f" (last error: {last_error})" if last_error else ""
     raise HistoryError(f"Yahoo returned nothing for {ticker} {interval} "
-                       f"(tried {', '.join(tried)})")
+                       f"(tried {', '.join(tried)}){detail}")
+
+
+def _chart_request(ticker, interval, period):
+    r = requests.get(_CHART.format(ticker),
+                     params={"interval": interval, "range": period,
+                             "includePrePost": "false"},
+                     headers={"User-Agent": _UA, "Accept": "application/json"},
+                     timeout=30)
+    if r.status_code == 404:
+        raise HistoryError(f"Yahoo does not know the ticker {ticker}")
+    if not r.ok:
+        raise HistoryError(f"Yahoo HTTP {r.status_code} for {ticker} {period}")
+    payload = r.json().get("chart") or {}
+    if payload.get("error"):
+        raise HistoryError(f"Yahoo: {payload['error']}")
+    results = payload.get("result") or []
+    if not results:
+        return []
+    return _from_chart(results[0], interval)
+
+
+def _from_chart(result, interval):
+    """Yahoo's column-major JSON -> the same candle dicts uw.candles() makes."""
+    stamps = result.get("timestamp") or []
+    quote = ((result.get("indicators") or {}).get("quote") or [{}])[0]
+    o, h, l, c = (quote.get(k) or [] for k in ("open", "high", "low", "close"))
+    v = quote.get("volume") or []
+    minutes = _interval_minutes(interval)
+    out = []
+    for i, ts in enumerate(stamps):
+        # Yahoo pads gaps with nulls; a bar missing any leg is not a bar
+        row = [_f(x, i) for x in (o, h, l, c)]
+        if any(x is None for x in row) or row[3] <= 0:
+            continue
+        start = datetime.datetime.fromtimestamp(ts, datetime.timezone.utc)
+        out.append({
+            "open": row[0], "high": row[1], "low": row[2], "close": row[3],
+            "volume": _f(v, i) or 0.0,
+            "start_time": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "end_time": (start + datetime.timedelta(minutes=minutes)
+                         ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "closed": True,                     # all history is closed
+        })
+    return sorted(out, key=lambda b: b["start_time"])
+
+
+def _f(seq, i):
+    try:
+        val = seq[i]
+    except (IndexError, TypeError):
+        return None
+    if val is None:
+        return None
+    try:
+        val = float(val)
+    except (TypeError, ValueError):
+        return None
+    return None if val != val else val          # NaN
 
 
 def _period_days(p):
@@ -76,27 +138,6 @@ def _period_days(p):
     if p.endswith("mo"):
         return n * 30
     return n
-
-
-def _from_dataframe(df, interval):
-    """DataFrame -> the same candle dicts uw.candles() produces."""
-    minutes = _interval_minutes(interval)
-    out = []
-    for ts, row in df.iterrows():
-        start = ts.tz_convert("UTC") if ts.tzinfo else ts.tz_localize("UTC")
-        end = start + datetime.timedelta(minutes=minutes)
-        close = float(row["Close"])
-        if close <= 0 or close != close:                # NaN guard
-            continue
-        out.append({
-            "open": float(row["Open"]), "high": float(row["High"]),
-            "low": float(row["Low"]), "close": close,
-            "volume": float(row.get("Volume", 0) or 0),
-            "start_time": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "end_time": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "closed": True,                             # all history is closed
-        })
-    return sorted(out, key=lambda b: b["start_time"])
 
 
 def _interval_minutes(interval):

@@ -1,10 +1,8 @@
-# Live path — the scheduler imports only these.
+# Everything except the analyst runs on this one package. history.py reads
+# Yahoo's chart endpoint with it directly, so backtesting needs no extra
+# dependency — pandas and numpy were being pulled in to unpack a DataFrame
+# straight back into dicts.
 requests>=2.31
-
-# Backtest only. history.py imports yfinance lazily inside the fetch, so the
-# resident scheduler never loads pandas and its memory stays where the Railway
-# cost estimate assumed.
-yfinance>=0.2.40
 
 # Analyst layer only (USE_ANALYST=1); analyst.py imports it lazily too.
 anthropic>=1.0
