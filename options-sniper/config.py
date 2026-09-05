@@ -132,6 +132,18 @@ MAX_FINVIZ_LOOKUPS = 15     # of those, how many get a UW per-ticker flow call.
                             # Each is one request; the trial allows 30,000/day,
                             # so 15 x ~14 scans/day is comfortably inside it.
 
+# ── Risk checks (risk.py) — deductions only, never bonuses ──────
+# These exist because a summed score cannot see a setup that is internally
+# incoherent. Each penalty is subtracted after scoring and named in the alert.
+EARNINGS_BLOCK_DAYS  = 3     # earnings this close: full penalty
+EARNINGS_PENALTY     = 15.0
+REGIME_TICKER        = "SPY"
+REGIME_MOVE_PCT      = 1.0   # broad-market move that counts as a real tide
+REGIME_PENALTY       = 8.0
+MIN_ASK_SIDE_RATIO   = 0.55  # below this the premium was mostly sold, not bought
+CONVICTION_PENALTY   = 10.0
+MAX_RISK_PENALTY     = 20.0  # a setup is rejected on its own merits, not buried
+
 # ── Message composition ─────────────────────────────────────────
 # True  = `claude -p` writes the Arabic message (Salem's original design)
 # False = deterministic Python formatter (no LLM, zero fabrication risk)
@@ -142,10 +154,32 @@ USE_CLAUDE_COMPOSER = os.environ.get("USE_CLAUDE_COMPOSER", "1").lower() not in 
 CLAUDE_TIMEOUT_SEC  = 300
 
 # ── Scheduler (used by scheduler.py on an always-on host) ───────
-SCAN_EVERY_MIN    = 30
+# Discovery runs on the same clock as the bars it judges. 15m candles close at
+# :00/:15/:30/:45, so a 30-minute scan only ever evaluated half of them for
+# tickers not yet on the shortlist — a ticker whose flow started at :32 and
+# broke at :45 was not looked at until the next hour. At 15 minutes every bar
+# close gets a discovery pass. Costs ~3,150 UW requests a day against a 30,000
+# allowance.
+SCAN_EVERY_MIN    = 15
 MONITOR_EVERY_MIN = 5
 HEARTBEAT_MIN     = 60      # a line in the log so a healthy idle service is
                             # distinguishable from a dead one over a weekend
+
+# ── Analyst layer (analyst.py) ──────────────────────────────────
+# A final read on a setup before it is recommended. Requires an Anthropic API
+# key — a Pro/Max subscription is for interactive use and cannot authenticate a
+# container. Roughly $3.30/month at 5 alerts a day on Opus 5.
+# Off by default: without backtest.json its conviction has nothing to anchor to.
+USE_ANALYST    = os.environ.get("USE_ANALYST", "0").lower() in ("1", "true", "yes")
+ANALYST_MODEL  = os.environ.get("ANALYST_MODEL", "claude-opus-5")
+ANALYST_EFFORT = os.environ.get("ANALYST_EFFORT", "high")
+# A SKIP verdict removes the alert entirely. Off means the analyst's read is
+# attached to the message but Salem still sees the setup.
+ANALYST_CAN_BLOCK = os.environ.get("ANALYST_CAN_BLOCK", "1").lower() in ("1", "true", "yes")
+
+# ── Backtest / base rates ───────────────────────────────────────
+BASE_RATE_MIN_SAMPLE = 20   # a setup type below this is not a base rate, it is
+                            # an anecdote — the analyst is told so explicitly
 
 # ── State / data files ──────────────────────────────────────────
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -154,3 +188,4 @@ POSITIONS_FILE = DATA_DIR / "positions.json"
 STATE_FILE     = DATA_DIR / "state.json"
 LOCK_FILE      = DATA_DIR / ".state.lock"
 JOURNAL_FILE   = DATA_DIR / "journal.csv"
+BACKTEST_FILE  = DATA_DIR / "backtest.json"

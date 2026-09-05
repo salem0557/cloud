@@ -167,6 +167,33 @@ def news(ticker, limit=20):
     } for n in raw]
 
 
+def next_earnings_days(ticker):
+    """GET /api/stock/{ticker}/earnings -> days until the next report, or None.
+
+    Implied volatility collapses the moment earnings are released. A contract
+    bought the day before can be right about direction and still lose money,
+    because the IV it was priced with disappears. Nothing in a 15m breakout
+    chart shows this coming.
+    """
+    try:
+        raw = _get(f"/api/stock/{ticker}/earnings")
+    except UWError:
+        return None
+    today = datetime.date.today()
+    upcoming = []
+    for r in raw or []:
+        d = r.get("report_date")
+        if not d:
+            continue
+        try:
+            day = datetime.date.fromisoformat(d)
+        except ValueError:
+            continue
+        if day >= today:
+            upcoming.append((day - today).days)
+    return min(upcoming) if upcoming else None
+
+
 # ── 3) Option chain with greeks ─────────────────────────────────
 def _normalise_contract(c):
     """UW field names -> the names scoring.py expects."""
@@ -260,7 +287,7 @@ def option_contracts(ticker):
 
 
 # ── 4) Real-time intraday candles ───────────────────────────────
-def candles(ticker, candle_size=None, timeframe="5D", limit=500):
+def candles(ticker, candle_size=None, timeframe="5D", limit=500, end_date=None):
     """GET /api/stock/{ticker}/ohlc/{candle_size}
 
     Returns candles ASCENDING in time (UW serves them newest-first).
@@ -270,9 +297,10 @@ def candles(ticker, candle_size=None, timeframe="5D", limit=500):
     """
     size = candle_size or C.CANDLE_SIZE
     try:
-        raw = _get(f"/api/stock/{ticker}/ohlc/{size}", {
-            "timeframe": timeframe, "limit": limit,
-        })
+        params = {"timeframe": timeframe, "limit": limit}
+        if end_date:
+            params["end_date"] = end_date       # walk backwards for backtests
+        raw = _get(f"/api/stock/{ticker}/ohlc/{size}", params)
     except UWError:
         return []
     rows = []

@@ -11,17 +11,20 @@ import datetime
 import json
 import sys
 
+import analyst
 import config as C
 import finviz
 import journal
 import market
+import risk
 import state
 import technical
 import uw
 from compose import compose, NO_TRADE
-from scoring import (best_contract, contract_cost, exit_rule, expected_profit_pct,
-                     flow_direction, flow_score, technical_score,
-                     catalyst_score, liquidity_score, pick_contracts_by_budget)
+from scoring import (ask_side_ratio, best_contract, contract_cost, exit_rule,
+                     expected_profit_pct, flow_direction, flow_score,
+                     technical_score, catalyst_score, liquidity_score,
+                     pick_contracts_by_budget)
 from telegram_send import send
 
 
@@ -36,17 +39,24 @@ def aggregate_flow(alerts):
         t = a["ticker"]
         d = agg.setdefault(t, {"premium_usd": 0.0, "sweep_count": 0,
                                "call_premium": 0.0, "put_premium": 0.0,
+                               "call_ask_premium": 0.0, "put_ask_premium": 0.0,
+                               "ask_premium": 0.0, "bid_premium": 0.0,
                                "vol_oi_ratio": 0.0, "alerts": 0,
                                "underlying_price": 0.0, "rules": set()})
         prem = a["total_premium"]
+        ask, bid = a["ask_side_premium"], a["bid_side_premium"]
         d["premium_usd"] += prem
+        d["ask_premium"] += ask
+        d["bid_premium"] += bid
         d["alerts"] += 1
         if a["has_sweep"]:
             d["sweep_count"] += 1
         if a["type"] == "call":
             d["call_premium"] += prem
+            d["call_ask_premium"] += ask
         else:
             d["put_premium"] += prem
+            d["put_ask_premium"] += ask
         d["vol_oi_ratio"] = max(d["vol_oi_ratio"], a["volume_oi_ratio"])
         if a["underlying_price"]:
             d["underlying_price"] = a["underlying_price"]
@@ -62,6 +72,9 @@ def flow_reason(flow, direction):
     prem = flow["premium_usd"]
     bits = [f"{side} بـ ${prem/1e6:.1f}M علاوة" if prem >= 1e6
             else f"{side} بـ ${prem/1e3:.0f}K علاوة"]
+    ratio = ask_side_ratio(flow)
+    if ratio:
+        bits.append(f"{ratio*100:.0f}% عند الطلب")
     if flow["sweep_count"]:
         bits.append(f"{flow['sweep_count']} سويب")
     if flow["vol_oi_ratio"] >= 1:
@@ -100,9 +113,22 @@ def evaluate(ticker, flow, dry_run=False):
         "catalyst": catalyst_score(news, direction),
         "liquidity": liquidity_score(best),
     }
-    score = round(sum(breakdown.values()), 1)
+    raw_score = round(sum(breakdown.values()), 1)
 
-    return {"ticker": ticker, "score": score, "score_breakdown": breakdown,
+    # Risk checks run only on candidates that would otherwise qualify — each
+    # costs API calls, and there is no point pricing the risk of a setup that
+    # is not a setup.
+    assessment = {"penalty": 0.0, "flags": []}
+    if raw_score >= C.THRESHOLD:
+        assessment = risk.assess(ticker, direction, flow, chain)
+    score = round(raw_score - assessment["penalty"], 1)
+    if assessment["flags"]:
+        print(f"  {ticker}: {raw_score} − {assessment['penalty']} risk = {score}")
+        for f in assessment["flags"]:
+            print(f"      ⚠ {f}")
+
+    return {"ticker": ticker, "score": score, "raw_score": raw_score,
+            "score_breakdown": breakdown, "risk": assessment,
             "direction": direction, "spot": round(spot, 2), "flow": flow,
             "flow_reason": flow_reason(flow, direction), "technical": tech,
             "news": [n["headline"] for n in news[:3]], "chain": chain}
@@ -150,8 +176,9 @@ def build_tiers(cand):
 
 
 def to_payload(cand):
-    p = {k: cand[k] for k in ("ticker", "score", "score_breakdown", "direction",
-                              "spot", "flow_reason", "technical", "news")}
+    p = {k: cand[k] for k in ("ticker", "score", "raw_score", "score_breakdown",
+                              "risk", "direction", "spot", "flow_reason",
+                              "technical", "news")}
     p["tiers"] = build_tiers(cand)
     p["time_riyadh"] = now_riyadh()
     return p
@@ -222,6 +249,20 @@ def main(dry_run=False, limit_tickers=None):
         if cand["score"] < C.THRESHOLD:
             break
         payload = to_payload(cand)
+
+        # Final read. An unreachable analyst returns None and the alert goes
+        # out on the arithmetic — the layer may reject a setup, never silently
+        # swallow one because a request failed.
+        note = analyst.review(payload)
+        if note:
+            payload["analyst"] = note
+            print(f"  {cand['ticker']} analyst: {note.get('verdict')} "
+                  f"({note.get('conviction')}, {note.get('vs_base_rate')} من المعدل)")
+            if C.ANALYST_CAN_BLOCK and note.get("verdict") == "SKIP":
+                print(f"    ↳ rejected: {note.get('reading', '')[:120]}")
+                journal.log_alert(payload, kind="analyst_skip")
+                continue
+
         msg = compose("entry", payload)
         if msg.startswith(NO_TRADE):
             print(cand["ticker"], msg)
