@@ -1,0 +1,8 @@
+.env
+state.json
+shortlist.json
+positions.json
+.state.lock
+log.txt
+__pycache__/
+*.pyc
