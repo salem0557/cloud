@@ -183,6 +183,9 @@ ANALYST_CAN_BLOCK = os.environ.get("ANALYST_CAN_BLOCK", "1").lower() in ("1", "t
 
 # ── Backtest / base rates ───────────────────────────────────────
 BASE_RATE_MIN_SAMPLE = 20
+SIDE_EDGE_MARGIN     = 0.10 # a side must clear the stake by this much to count
+                            # as paying. $1.035 on 11 contracts is not an edge,
+                            # it is a failure to lose.
 MIN_CONTRACTS        = 10   # distinct contracts below which a bucket is a
                             # handful of events, not a rate — entry days on one
                             # contract share almost all of their forward window   # a setup type below this is not a base rate, it is
