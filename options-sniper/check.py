@@ -161,6 +161,36 @@ else:
   except Exception as e:
       report("option chain", BAD, str(e))
 
+  # Daily bars carry no start/end time; they were silently dropped for months.
+  try:
+      t = uw.stock_technicals("AAPL")
+      if t["atr"] > 0 and t["rsi"] is not None:
+          report("daily technicals", OK,
+                 f"ATR {t['atr']} | RSI {t['rsi']} | vs SMA20 {t['vs_sma20']}%")
+      elif t["atr"] > 0:
+          report("daily technicals", WARN,
+                 f"ATR {t['atr']} but no RSI — fewer than 15 daily bars returned")
+      else:
+          report("daily technicals", BAD,
+                 f"ATR 0 ({why('/api/stock/AAPL/ohlc/1d', {'timeframe': '6M'})}) "
+                 "— atr_to_strike would be blank on every row")
+  except Exception as e:
+      report("daily technicals", BAD, str(e))
+
+  # The frame the alerts are actually read on, and the one a 0DTE move fits in.
+  try:
+      t = uw.intraday_technicals("AAPL")
+      if t["session_move"] > 0:
+          report("15m technicals", OK,
+                 f"{t['bars']} bars | ATR15 {t['atr15']} | RSI {t['rsi']} | "
+                 f"session move ${t['session_move']}")
+      else:
+          report("15m technicals", BAD,
+                 f"no usable 15m bars ({t['bars']} returned) — distance to "
+                 "strike would fall back to the daily ATR")
+  except Exception as e:
+      report("15m technicals", BAD, str(e))
+
 # ── 4. Finviz ───────────────────────────────────────────────────
 section("5. Finviz (candidate discovery only)")
 if not C.FINVIZ_AUTH:

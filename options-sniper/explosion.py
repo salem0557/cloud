@@ -43,7 +43,6 @@ import venv_boot
 venv_boot.ensure(["requests"])
 
 import config as C
-import finviz
 import uw
 
 
@@ -124,7 +123,7 @@ def forward_multiple(rows, i, horizon, model="mid"):
     }
 
 
-def stock_context(meta):
+def stock_context(meta, as_of=None):
     """The stock-level facts a contract's own tape cannot contain.
 
     Every feature measured so far describes the contract. None of them says
@@ -132,52 +131,45 @@ def stock_context(meta):
     said the stock did not matter to him; removing it is why the feature set
     could not predict anything out of sample.
 
-      atr_to_strike  how many daily ATRs the stock must travel to reach the
-                     strike. Three ATRs in five days is a different proposition
-                     from half of one.
+      atr_to_strike  how many full SESSIONS of expected movement the stock
+                     must travel to reach the strike, from 15m volatility.
+                     Salem trades same-day contracts: a daily ATR answers the
+                     wrong question, because the contract does not have days.
       gex_side       where spot sits against the gamma flip. Below it dealers
                      damp movement, above it they add to it.
+      rsi/vs_sma20   whether the stock is stretched or coiled going in — RSI on
+                     the 15m frame he actually reads, the 20-day average as the
+                     slower backdrop.
+
+    `as_of` is the screen date. Every number here is taken as of that date and
+    not one day later: asking for today's volatility while scoring an entry
+    from last May is lookahead, and it would have made any edge found this way
+    fake.
     """
     ticker = meta.get("ticker") or (uw.parse_occ(meta.get("option_symbol", ""))
                                     or {}).get("ticker")
     spot, strike = meta.get("stock_price", 0), meta.get("strike", 0)
-    out = {"atr_to_strike": None, "gex_side": None}
+    out = {"atr_to_strike": None, "gex_side": None, "rsi": None,
+           "vs_sma20": None}
     if not (ticker and spot > 0 and strike > 0):
         return out
 
-    atr = uw.daily_atr(ticker)
-    if atr > 0:
+    intraday = uw.intraday_technicals(ticker, as_of=as_of)
+    daily = uw.stock_technicals(ticker, as_of=as_of)
+    # 15m is the frame the alerts are read on; the daily ATR is the fallback
+    # for a date whose intraday bars UW no longer serves.
+    unit = intraday["session_move"] or daily["atr"]
+    if unit > 0:
         distance = (strike - spot) if meta.get("type") == "call" else (spot - strike)
-        out["atr_to_strike"] = round(distance / atr, 2)
+        out["atr_to_strike"] = round(distance / unit, 2)
+    out["rsi"] = intraday["rsi"] if intraday["rsi"] is not None else daily["rsi"]
+    out["vs_sma20"] = daily["vs_sma20"]
 
-    gex = uw.gex_levels(ticker)
+    gex = uw.gex_levels(ticker, date=as_of)
     flip = (gex or {}).get("gamma_flip")
     if flip:
         out["gex_side"] = "above_flip" if spot >= flip else "below_flip"
-
-    # Finviz's technical view. UW serves no RSI and no distance-from-average,
-    # and both describe whether the stock is stretched or coiled — the state
-    # that decides whether it can travel to the strike at all.
-    tech = _finviz_technicals().get(ticker)
-    if tech:
-        out["rsi"] = tech.get("rsi")
-        out["vs_sma20"] = tech.get("vs_sma20")
     return out
-
-
-_fv_cache = {}
-
-
-def _finviz_technicals():
-    """One screener-wide pull, cached: per-ticker requests would be hundreds."""
-    if "rows" not in _fv_cache:
-        _fv_cache["rows"] = finviz.technicals() or {}
-        n = len(_fv_cache["rows"])
-        cols = next(iter(_fv_cache["rows"].values()), {}).get("_columns", [])
-        print(f"[finviz] technical view: {n} tickers"
-              + (f", columns: {', '.join(cols[:6])}" if cols else
-                 " — no technical columns, features will be blank"))
-    return _fv_cache["rows"]
 
 
 def features(rows, i, meta):
@@ -262,7 +254,8 @@ def bucket(name, value):
     if name == "vs_sma20":
         return f"vs20={'below' if value < 0 else '0-5%' if value < 5 else '5%+'}"
     if name == "atr_to_strike":
-        return f"atr2strike={'<1' if value < 1 else '1-2' if value < 2 else '2-4' if value < 4 else '4+'}"
+        # sessions of expected 15m movement, not days
+        return f"sess2strike={'<0.5' if value < 0.5 else '0.5-1' if value < 1 else '1-2' if value < 2 else '2+'}"
     if name == "gex_side":
         return f"gex={value}"
     if name == "spread_pct":
@@ -415,7 +408,7 @@ def main(args, collect=None):
     for n, c in enumerate(pool, 1):
         if not args.no_stock:
             c["ticker"] = (uw.parse_occ(c["option_symbol"]) or {}).get("ticker")
-            c["_stock"] = stock_context(c)
+            c["_stock"] = stock_context(c, as_of=args.date)
         try:
             got = scan_contract(c["option_symbol"], c, args.horizon,
                                 args.min_price, args.max_price,

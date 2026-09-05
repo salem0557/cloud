@@ -138,6 +138,8 @@ MIN_MINUTES_TO_CLOSE = 45   # no new 0DTE alert inside this window before 16:00 
 # bars; raise it if you hold longer.
 HOLD_HOURS = 2.0
 TRADING_HOURS_PER_DAY = 6.5
+# 15m bars in one regular session — the unit a same-day move is measured in
+BARS_PER_SESSION = int(TRADING_HOURS_PER_DAY * 60 / 15)      # 26
 
 # ── Scan limits (UW trial = 30,000 requests/day) ────────────────
 MAX_CANDIDATES_PER_SCAN = 25   # tickers we spend chain/candle calls on
