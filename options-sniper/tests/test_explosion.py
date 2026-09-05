@@ -403,3 +403,73 @@ def test_the_margin_is_symmetric():
     assert _verdict(1.0 + m, 30) == "pays"
     assert _verdict(1.0 - m, 30) == "flat"
     assert _verdict(1.0 - m - 0.01, 30) == "loses"
+
+
+# ── A mid is only reachable when there is a book ────────────────
+def test_a_wide_quote_gives_no_mid():
+    """spread=50%+ topped three out-of-sample runs while the same entries
+    returned $0.78 hitting the bid. A limit halfway across a 100%-wide quote
+    is the same fiction as a mid on a penny contract."""
+    assert explosion.fill_price(0.50, 1.50, "mid", buying=True) == 1.50
+    assert explosion.fill_price(0.50, 1.50, "mid", buying=False) == 0.50
+
+
+def test_a_workable_quote_still_gets_its_mid():
+    assert explosion.fill_price(1.20, 1.60, "mid", buying=True) == 1.40
+    assert explosion.fill_price(1.90, 1.98, "mid", buying=True) == 1.94
+
+
+def test_the_cutoff_is_on_spread_not_price():
+    """A cheap contract with a tight quote keeps its mid; an expensive one
+    with a wide quote loses it."""
+    assert explosion.fill_price(0.20, 0.22, "mid", buying=True) == 0.21
+    assert explosion.fill_price(4.00, 6.00, "mid", buying=True) == 6.00
+
+
+# ── Stock context: the variable that was deliberately removed ───
+def test_atr_distance_measures_what_the_stock_must_travel(monkeypatch):
+    """Every feature so far described the contract. None said the STOCK would
+    move, and a contract only explodes because it does."""
+    monkeypatch.setattr(explosion.uw, "daily_atr", lambda t, **k: 4.5)
+    monkeypatch.setattr(explosion.uw, "gex_levels", lambda t, **k: None)
+    ctx = explosion.stock_context({"ticker": "NVDA", "stock_price": 230.36,
+                                   "strike": 240.0, "type": "call"})
+    assert ctx["atr_to_strike"] == 2.14      # 9.64 / 4.5
+
+
+def test_puts_measure_the_distance_downward(monkeypatch):
+    monkeypatch.setattr(explosion.uw, "daily_atr", lambda t, **k: 4.0)
+    monkeypatch.setattr(explosion.uw, "gex_levels", lambda t, **k: None)
+    ctx = explosion.stock_context({"ticker": "X", "stock_price": 100.0,
+                                   "strike": 92.0, "type": "put"})
+    assert ctx["atr_to_strike"] == 2.0
+
+
+def test_gex_side_records_which_way_dealers_hedge(monkeypatch):
+    """Below the flip dealers sell rallies and buy dips, damping movement.
+    Above it they add to it. Nothing in a contract's own tape contains this."""
+    monkeypatch.setattr(explosion.uw, "daily_atr", lambda t, **k: 4.5)
+    monkeypatch.setattr(explosion.uw, "gex_levels",
+                        lambda t, **k: {"gamma_flip": 231.69})
+    below = explosion.stock_context({"ticker": "NVDA", "stock_price": 230.36,
+                                     "strike": 240.0, "type": "call"})
+    above = explosion.stock_context({"ticker": "NVDA", "stock_price": 233.0,
+                                     "strike": 240.0, "type": "call"})
+    assert below["gex_side"] == "below_flip"
+    assert above["gex_side"] == "above_flip"
+
+
+def test_missing_stock_data_gives_none_not_a_guess(monkeypatch):
+    monkeypatch.setattr(explosion.uw, "daily_atr", lambda t, **k: 0.0)
+    monkeypatch.setattr(explosion.uw, "gex_levels", lambda t, **k: None)
+    ctx = explosion.stock_context({"ticker": "X", "stock_price": 0, "strike": 0})
+    assert ctx == {"atr_to_strike": None, "gex_side": None}
+
+
+def test_atr_distance_buckets_separate_reachable_from_hopeless():
+    """SPY 775C sits 0.9 ATR from its strike and NVDA 252.5C 4.9 — same price
+    tier, entirely different propositions."""
+    assert explosion.bucket("atr_to_strike", 0.9) == "atr2strike=<1"
+    assert explosion.bucket("atr_to_strike", 2.1) == "atr2strike=2-4"
+    assert explosion.bucket("atr_to_strike", 4.9) == "atr2strike=4+"
+    assert explosion.bucket("atr_to_strike", None) == "atr_to_strike=?"
