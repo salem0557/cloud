@@ -56,6 +56,30 @@ def run(name, fn):
         log(f"{name} finished in {time.monotonic() - started:.1f}s")
 
 
+def park(problem):
+    """Stay alive, doing nothing, until the operator fixes the configuration.
+
+    Exiting non-zero here is the tidier signal, but it strands the operator:
+    Railway's Console attaches to a *running* container, so a crash-looped
+    service answers every diagnostic command with "container is not running"
+    and the real cause is only visible in the deploy log. Parking keeps the
+    shell reachable so `python telegram_send.py` and the rest can be run to
+    find out why. Nothing is scanned and no alert is sent while parked, and
+    the reason is reprinted every 5 minutes so it cannot scroll away.
+    """
+    log(f"NOT RUNNING: {problem}")
+    log("Fix it in the service variables, then redeploy. The container stays "
+        "up so the Console works — no scanning and no alerts until then.")
+    while not _stop:
+        for _ in range(300):
+            if _stop:
+                break
+            time.sleep(1)
+        if not _stop:
+            log(f"still parked: {problem}")
+    return 0
+
+
 def main():
     log(f"scheduler up — scan every {C.SCAN_EVERY_MIN}m, "
         f"monitor every {C.MONITOR_EVERY_MIN}m, data in {C.DATA_DIR}")
@@ -63,9 +87,8 @@ def main():
                               ("TELEGRAM_BOT_TOKEN", C.TELEGRAM_TOKEN),
                               ("TELEGRAM_CHAT_ID", C.TELEGRAM_CHAT_ID)) if not v]
     if missing:
-        log(f"FATAL: {', '.join(missing)} not set (or still holding the "
-            f".env.example placeholder). Fix it in the host's variables.")
-        return 1
+        return park(f"{', '.join(missing)} not set (or still holding the "
+                    f".env.example placeholder)")
 
     last_scan = last_monitor = None
     was_open = None
