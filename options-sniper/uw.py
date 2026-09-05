@@ -592,7 +592,11 @@ def intraday_technicals(ticker, as_of=None, period=14):
     key = (ticker, as_of or "", period)
     if key in _intraday_cache:
         return _intraday_cache[key]
-    bars = candles(ticker, candle_size="15m", timeframe="5D", limit=200,
+    # limit=500, not 200: UW applies the limit to the raw rows, which include
+    # pre- and post-market bars, and REGULAR_HOURS_ONLY drops those afterwards.
+    # 200 raw rows is about three sessions of extended hours -> only 78 usable
+    # bars, against the 130 the rest of the code reads on the same request.
+    bars = candles(ticker, candle_size="15m", timeframe="5D", limit=500,
                    end_date=as_of)
     out = {"atr15": 0.0, "rsi": None, "session_move": 0.0,
            "close": bars[-1]["close"] if bars else 0.0, "bars": len(bars)}
