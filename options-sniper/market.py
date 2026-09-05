@@ -30,6 +30,15 @@ def is_open(now=None):
     return OPEN <= now.time() <= CLOSE
 
 
+def minutes_to_close(now=None):
+    """Minutes left in the regular session; 0 once it is over."""
+    now = now or now_et()
+    if not is_open(now):
+        return 0
+    close = now.replace(hour=CLOSE.hour, minute=CLOSE.minute, second=0, microsecond=0)
+    return max(0, int((close - now).total_seconds() // 60))
+
+
 def reason():
     n = now_et()
     if n.weekday() >= 5:

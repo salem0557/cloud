@@ -85,8 +85,19 @@ MAX_SPREAD_ABS    = 0.06    # ...OR this many dollars wide, whichever is kinder.
 MIN_OPEN_INTEREST = 300
 
 # ── Contract selection window ───────────────────────────────────
-MIN_DTE = 2                 # avoid same-day gamma roulette
+MIN_DTE = 0                 # 0 = same-day expiry (0DTE) allowed — Salem's call
 MAX_DTE = 45
+
+# 0DTE-specific. A same-day contract loses its remaining value into the close,
+# so an entry taken late in the session needs the move to happen almost at once.
+# Set to 0 to disable the cutoff entirely.
+MIN_MINUTES_TO_CLOSE = 45   # no new 0DTE alert inside this window before 16:00 ET
+
+# Assumed holding time, in trading hours, used only to price theta into the
+# profit estimate. The 15m breakout is expected to resolve within a couple of
+# bars; raise it if you hold longer.
+HOLD_HOURS = 2.0
+TRADING_HOURS_PER_DAY = 6.5
 
 # ── Scan limits (UW trial = 30,000 requests/day) ────────────────
 MAX_CANDIDATES_PER_SCAN = 25   # tickers we spend chain/candle calls on

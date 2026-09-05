@@ -188,6 +188,7 @@ def _normalise_contract(c):
         "implied_volatility": _num(c.get("implied_volatility")),
         "open_interest": _num(c.get("open_interest")),
         "volume": _num(c.get("volume")),
+        "dte": _dte(expiry),
     }
 
 

@@ -85,9 +85,10 @@ def test_far_dated_leaps_are_excluded():
     assert not uw._in_window(_c(C2.MAX_DTE + 1))
 
 
-def test_same_day_expiry_is_excluded():
-    assert not uw._in_window(_c(0))
-    assert not uw._in_window(_c(C2.MIN_DTE - 1))
+def test_same_day_expiry_is_allowed():
+    """Salem trades 0DTE; the window starts at 0, not 2."""
+    assert C2.MIN_DTE == 0
+    assert uw._in_window(_c(0))
 
 
 def test_contracts_inside_the_window_pass():
