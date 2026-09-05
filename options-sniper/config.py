@@ -4,9 +4,15 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
 
+# Writable location for state and the journal. On Railway this points at the
+# mounted volume (set SNIPER_DATA_DIR=/data); everywhere else it is the project
+# folder. Without it a container restart would wipe the daily counter and the
+# whole paper-trading history.
+DATA_DIR = Path(os.environ.get("SNIPER_DATA_DIR") or Path(__file__).parent)
+
 
 def _load_env():
-    env = BASE_DIR / ".env"
+    env = Path(__file__).parent / ".env"
     if env.exists():
         for line in env.read_text().splitlines():
             line = line.strip()
@@ -82,9 +88,14 @@ MIN_TICKER_PREMIUM      = 250_000   # skip tickers below this daily premium
 USE_CLAUDE_COMPOSER = os.environ.get("USE_CLAUDE_COMPOSER", "1").lower() not in ("0", "false", "no")
 CLAUDE_TIMEOUT_SEC  = 300
 
+# ── Scheduler (used by scheduler.py on an always-on host) ───────
+SCAN_EVERY_MIN    = 30
+MONITOR_EVERY_MIN = 5
+
 # ── State / data files ──────────────────────────────────────────
-SHORTLIST_FILE = BASE_DIR / "shortlist.json"
-POSITIONS_FILE = BASE_DIR / "positions.json"
-STATE_FILE     = BASE_DIR / "state.json"
-LOCK_FILE      = BASE_DIR / ".state.lock"
-JOURNAL_FILE   = BASE_DIR / "journal.csv"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+SHORTLIST_FILE = DATA_DIR / "shortlist.json"
+POSITIONS_FILE = DATA_DIR / "positions.json"
+STATE_FILE     = DATA_DIR / "state.json"
+LOCK_FILE      = DATA_DIR / ".state.lock"
+JOURNAL_FILE   = DATA_DIR / "journal.csv"

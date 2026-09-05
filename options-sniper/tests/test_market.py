@@ -36,3 +36,31 @@ def test_actions_cron_window_covers_both_dst_offsets():
     # 13:30 UTC in January is 08:30 EST — premarket, must be rejected
     too_early = datetime.datetime(2026, 1, 6, 13, 30, tzinfo=utc)
     assert not market.is_open(too_early.astimezone(market._ET))
+
+
+# ── scheduler slot keys ─────────────────────────────────────────
+import scheduler
+
+
+def test_slot_is_stable_inside_its_window():
+    """Two ticks in the same 30-minute window must not scan twice."""
+    a = scheduler.slot(et(2026, 9, 8, 10, 0), 30)
+    b = scheduler.slot(et(2026, 9, 8, 10, 29), 30)
+    assert a == b
+
+
+def test_slot_changes_at_the_window_boundary():
+    a = scheduler.slot(et(2026, 9, 8, 10, 29), 30)
+    b = scheduler.slot(et(2026, 9, 8, 10, 30), 30)
+    assert a != b
+
+
+def test_slot_does_not_collide_across_days():
+    a = scheduler.slot(et(2026, 9, 8, 10, 0), 30)
+    b = scheduler.slot(et(2026, 9, 9, 10, 0), 30)
+    assert a != b
+
+
+def test_five_minute_slots_are_distinct():
+    keys = {scheduler.slot(et(2026, 9, 8, 10, m), 5) for m in range(0, 30)}
+    assert len(keys) == 6

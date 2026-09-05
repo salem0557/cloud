@@ -151,3 +151,93 @@ crontab crontab.txt               # عدّل SNIPER= لمسارك أولاً
 Actions ممتاز للفاحص (كل 30 دقيقة يتحمّل التأخير). لكن لو جدّيت في
 المراقبة اللحظية، **VPS بـ 4–5$ شهرياً** يعطيك cron مضبوطاً بالثانية.
 ابدأ بـ Actions مجاناً، وانتقل لو أزعجك التأخير بعد أسبوعين.
+
+---
+
+# التشغيل على Railway (موصى به — $5 شهرياً)
+
+`scheduler.py` عملية واحدة تبقى شغّالة وتطلق المهام في وقتها بالضبط.
+لا إقلاع بارد، ولا تأخير مثل GitHub Actions.
+
+## الخطوات
+
+**1. اربط المستودع**
+`https://railway.com/new` → **Deploy from GitHub repo** → اختر `salem0557/cloud`
+
+**2. اضبط جذر الخدمة**
+`Settings → Source → Root Directory` → اكتب: `options-sniper`
+(بدونها يحاول يبني المستودع كله)
+
+**3. أضف المتغيرات**
+`Variables → New Variable` — خمسة:
+
+| Variable | Value |
+|---|---|
+| `UW_API_KEY` | مفتاح Unusual Whales |
+| `TELEGRAM_BOT_TOKEN` | توكن البوت |
+| `TELEGRAM_CHAT_ID` | رقم الشات |
+| `USE_CLAUDE_COMPOSER` | `0` |
+| `SNIPER_DATA_DIR` | `/data` |
+
+**4. أضف القرص الدائم** ← لا تتخطاها
+`Settings → Volumes → Add Volume` → Mount path: `/data` → الحجم: **1 GB**
+
+بدون القرص، كل إعادة نشر تمسح عدّاد التنبيهات و `journal.csv` كاملاً.
+
+**5. انشر**
+Railway يبني ويشغّل تلقائياً. افتح **Deploy Logs**، لازم تشوف:
+```
+scheduler up — scan every 30m, monitor every 5m, data in /data
+market closed — weekend (Sat 08:04 ET)
+```
+
+## التكلفة الفعلية
+| المورد | الاستهلاك | التكلفة |
+|---|---|---|
+| RAM | ~154 MB × 24/7 | $1.50 |
+| CPU | ~0.03 vCPU متوسط | $0.60 |
+| قرص 1 GB | — | $0.15 |
+| **المجموع** | | **$2.25** |
+
+اشتراك Hobby ($5) يشمل $5 رصيد → **فاتورتك $5.00 بالضبط**.
+الفائض $2.75 لا يُرحّل ولا يُسترد.
+
+**ما الذي قد يرفع الفاتورة فوق $5:**
+- إضافة خدمة ثانية (Postgres، Redis) — كل خدمة تُحاسب لحالها. **لا تضف شيئاً.**
+- قرص أكبر من 1 GB — `journal.csv` لن يتجاوز بضعة ميغابايت في سنة.
+- تسريب ذاكرة. راقب **Metrics** أول أسبوع؛ الذاكرة لازم تبقى مستقرة.
+
+## قراءة بياناتك
+البيانات داخل القرص `/data` لا في git.
+`Railway → خدمتك → Data` يعرض محتوى القرص، أو من الطرفية:
+```bash
+railway run cat /data/journal.csv > journal.csv
+```
+
+لإضافة صفقة مفتوحة:
+```bash
+railway run python -c "
+import json,pathlib
+p=pathlib.Path('/data/positions.json')
+rows=json.loads(p.read_text()) if p.exists() else []
+rows.append({'ticker':'UBER','contract':'UBER 260911 C76',
+             'entry_price':0.85,'option_symbol':'UBER260911C00076000'})
+p.write_text(json.dumps(rows,indent=2))
+print(rows)"
+```
+
+## مقارنة صريحة
+
+| | GitHub Actions | Railway |
+|---|---|---|
+| التكلفة | مجاني | $5/شهر |
+| **دقة التوقيت** | تأخير 5–20 دقيقة | **بالثانية** |
+| المراقبة الفعلية | كل 10 دقائق | **كل 5 دقائق** |
+| حفظ البيانات | فرع `sniper-state` | قرص دائم |
+| حد شهري | 2000 دقيقة | لا يوجد |
+
+الطريقتان موجودتان في المستودع. شغّل واحدة **فقط** — لو شغّلتهما معاً
+سيتنافسان على سقف الـ 5 تنبيهات بحالتين منفصلتين وستصلك تنبيهات مكررة.
+
+لإيقاف Actions عند الانتقال لـ Railway:
+`Actions → Options Sniper → ⋯ → Disable workflow`
