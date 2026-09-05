@@ -90,10 +90,12 @@ def test_missing_expiry_gives_no_dte_rather_than_a_guess():
 
 
 # ── Buckets ─────────────────────────────────────────────────────
-def test_price_buckets_separate_lottery_tickets():
-    assert explosion.bucket("price", 0.05) == "price=<0.10"
-    assert explosion.bucket("price", 0.30) == "price=0.10-0.50"
-    assert explosion.bucket("price", 2.00) == "price=1.50+"
+def test_price_buckets_read_as_budgets():
+    """Superseded by the budget-tier buckets: the boundaries are Salem's
+    $50/$100/$200, not numbers I picked."""
+    assert explosion.bucket("price", 0.05) == "budget=$50"
+    assert explosion.bucket("price", 0.30) == "budget=$50"
+    assert explosion.bucket("price", 2.00) == "budget=$200"
 
 
 def test_unknown_values_are_marked_not_bucketed():
@@ -223,7 +225,7 @@ def test_pairs_find_the_intersection():
            [_o(0.80, 5, 0.6, 0.3)] * 25)       # dear + short: dies
     pairs = dict(explosion.combinations(obs, ["price", "dte"], 5.0, 20))
     best = max(pairs.items(), key=lambda kv: kv[1]["realised_avg"])
-    assert "price=<0.10" in best[0] and "dte=3-7" in best[0]
+    assert "budget=$50" in best[0] and "dte=3-7" in best[0]
     assert best[1]["explosion_rate"] == 100.0
 
 
@@ -473,3 +475,32 @@ def test_atr_distance_buckets_separate_reachable_from_hopeless():
     assert explosion.bucket("atr_to_strike", 2.1) == "atr2strike=2-4"
     assert explosion.bucket("atr_to_strike", 4.9) == "atr2strike=4+"
     assert explosion.bucket("atr_to_strike", None) == "atr_to_strike=?"
+
+
+# ── Price buckets are Salem's budgets, not arbitrary boundaries ──
+def test_price_buckets_are_the_budget_tiers():
+    """A contract costs price x 100, so $50/$100/$200 are $0.50/$1.00/$2.00 of
+    premium. One run then answers which budget works, instead of three runs
+    whose boundaries lined up with none of them."""
+    assert explosion.bucket("price", 0.05) == "budget=$50"
+    assert explosion.bucket("price", 0.50) == "budget=$50"
+    assert explosion.bucket("price", 0.51) == "budget=$100"
+    assert explosion.bucket("price", 1.00) == "budget=$100"
+    assert explosion.bucket("price", 1.01) == "budget=$200"
+    assert explosion.bucket("price", 2.00) == "budget=$200"
+
+
+def test_above_every_tier_is_named_as_such():
+    assert explosion.budget_tier(2.50) == ">$200"
+
+
+def test_tiers_follow_config_not_hardcoded_numbers(monkeypatch):
+    monkeypatch.setattr(config, "BUDGET_TIERS", [("a", 25), ("b", 300)])
+    assert explosion.budget_tier(0.20) == "$25"
+    assert explosion.budget_tier(1.00) == "$300"
+    assert explosion.budget_tier(4.00) == ">$300"
+
+
+def test_the_boundary_belongs_to_the_cheaper_tier():
+    """$0.50 costs exactly $50 — it fits the $50 budget, not the next one up."""
+    assert explosion.budget_tier(0.50) == "$50"

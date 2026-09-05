@@ -241,7 +241,12 @@ def bucket(name, value):
     if value is None:
         return f"{name}=?"
     if name == "price":
-        return f"price={'<0.10' if value < 0.10 else '0.10-0.50' if value < 0.50 else '0.50-1.50' if value < 1.5 else '1.50+'}"
+        # Salem's own budget tiers, not arbitrary boundaries. A contract costs
+        # price x 100, so $50/$100/$200 are $0.50/$1.00/$2.00 of premium. The
+        # price table then answers the question he actually has — which of my
+        # three budgets works — instead of needing three separate runs whose
+        # boundaries did not line up with any of them.
+        return f"budget={budget_tier(value)}"
     if name == "vol_oi":
         return f"vol/OI={'<0.5' if value < 0.5 else '0.5-2' if value < 2 else '2-5' if value < 5 else '5+'}"
     if name == "ask_share":
@@ -265,6 +270,15 @@ def bucket(name, value):
     if name == "vol_vs_avg":
         return f"vol/avg={'<1x' if value < 1 else '1-3x' if value < 3 else '3-10x' if value < 10 else '10x+'}"
     return f"{name}={value}"
+
+
+def budget_tier(price):
+    """-> the budget label a contract at this premium falls in."""
+    cost = price * 100
+    for label, cap in sorted(C.BUDGET_TIERS, key=lambda t: t[1]):
+        if cost <= cap:
+            return f"${cap:.0f}"
+    return f">${max(c for _, c in C.BUDGET_TIERS):.0f}"
 
 
 FEATURES = ["price", "spread_pct", "vol_oi", "ask_share", "sweep_share",
@@ -357,8 +371,11 @@ def main(args, collect=None):
     label = {"high": "the day's print (not an order you can place)",
              "mid": "a tick-rounded limit at the midpoint",
              "bid": "hitting the bid (the floor)"}[model]
+    tiers = ", ".join(f"${c:.0f} (<=${c/100:.2f})"
+                      for _, c in sorted(C.BUDGET_TIERS, key=lambda t: t[1]))
     print(f"Finding candidates: OTM, {args.min_dte}-{args.max_dte} DTE, "
-          f"${args.min_price}-${args.max_price}")
+          f"${args.min_price}-${args.max_price} premium")
+    print(f"Budget tiers: {tiers}")
     print(f"Fills: {model} — {label}"
           + (f", max spread {args.max_spread}%" if args.max_spread else ""))
     if args.date:
@@ -661,8 +678,12 @@ if __name__ == "__main__":
                     help="what counts as an explosion (default 5x)")
     ap.add_argument("--horizon", type=int, default=10,
                     help="trading days allowed to reach it")
+    # Covers every budget tier by default. One run answers which of the three
+    # works; three runs with different flags cannot be compared against each
+    # other, because each is measured against its own average.
     ap.add_argument("--min-price", type=float, default=0.02)
-    ap.add_argument("--max-price", type=float, default=1.00)
+    ap.add_argument("--max-price", type=float, default=2.00,
+                    help="default spans all three budget tiers ($50/$100/$200)")
     ap.add_argument("--min-dte", type=int, default=1)
     ap.add_argument("--max-dte", type=int, default=45)
     ap.add_argument("--min-volume", type=int, default=500)
