@@ -59,8 +59,12 @@ def run(name, fn):
 def main():
     log(f"scheduler up — scan every {C.SCAN_EVERY_MIN}m, "
         f"monitor every {C.MONITOR_EVERY_MIN}m, data in {C.DATA_DIR}")
-    if not C.UW_API_KEY:
-        log("FATAL: UW_API_KEY is empty — set it in the host's variables")
+    missing = [n for n, v in (("UW_API_KEY", C.UW_API_KEY),
+                              ("TELEGRAM_BOT_TOKEN", C.TELEGRAM_TOKEN),
+                              ("TELEGRAM_CHAT_ID", C.TELEGRAM_CHAT_ID)) if not v]
+    if missing:
+        log(f"FATAL: {', '.join(missing)} not set (or still holding the "
+            f".env.example placeholder). Fix it in the host's variables.")
         return 1
 
     last_scan = last_monitor = None
