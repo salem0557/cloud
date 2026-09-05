@@ -185,3 +185,19 @@ def test_no_intraday_bars_means_zero_not_a_guess(monkeypatch):
     uw._intraday_cache.clear()
     t = uw.intraday_technicals("X")
     assert t["session_move"] == 0.0 and t["rsi"] is None
+
+
+def test_the_intraday_window_matches_what_the_rest_of_the_code_reads(monkeypatch):
+    """UW applies `limit` to the raw rows, which include pre- and post-market
+    bars; the regular-hours filter runs afterwards. limit=200 left 78 usable
+    bars where every other 15m call in the codebase reads 130."""
+    seen = {}
+
+    def fake(path, params=None):
+        seen.update(params or {})
+        return []
+
+    monkeypatch.setattr(uw, "_get", fake)
+    uw._intraday_cache.clear()
+    uw.intraday_technicals("AAPL")
+    assert seen["limit"] == 500
