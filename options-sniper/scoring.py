@@ -187,49 +187,61 @@ def _moneyness(c, spot):
     return c["strike"] - spot
 
 
-def pick_contracts_by_budget(chain: list, direction: str, spot: float) -> list:
-    """One contract per budget tier, strictly (ask * 100) <= tier.
+def contract_quality(contract, spot, expected_move, atr=0.0):
+    """How worth buying this contract is, 0..1 — the basis for the pick.
 
-    Two fixes over the first version:
-      * the tiers are nested (a $45 contract passes all three), so the same
-        contract used to be returned for two or three tiers. Picks are now
-        de-duplicated — a contract already taken cannot fill another tier.
-      * the OTM picker's key returned 1 for any delta < 0.10, which made `min`
-        pick an arbitrary contract when the whole side was low-delta. Those
-        contracts are now filtered out before selecting.
+    The first version chose by character: deepest in the money for one tier,
+    nearest the money for another, cheapest out of the money for the third.
+    None of that asks whether the contract is worth buying. Three things do:
+
+      profit     the delta/gamma/theta estimate, capped — a 900% figure on a
+                 far-OTM contract is arithmetic, not an opportunity
+      liquidity  spread and open interest. A contract nobody trades back to
+                 you is worth its headline number only on paper.
+      reach      how many ATRs the stock must travel to the strike. A strike
+                 four ATRs away is not a cheaper version of one that is close;
+                 it is a different bet, and usually a losing one.
+    """
+    profit = min(expected_profit_pct(contract, expected_move),
+                 C.MAX_PROFIT_CREDIT) / C.MAX_PROFIT_CREDIT
+    liq = liquidity_score(contract) / WEIGHTS["liquidity"]
+
+    reach = 0.5
+    if atr > 0 and spot > 0:
+        gap = abs(contract.get("strike", 0) - spot) / atr
+        reach = max(0.0, min(1.0, 1.0 - (gap / (C.REACHABLE_ATR * 2))))
+
+    w = C.QUALITY_WEIGHTS
+    return round(w["profit"] * profit + w["liquidity"] * liq + w["reach"] * reach, 4)
+
+
+def pick_contracts_by_budget(chain: list, direction: str, spot: float,
+                             expected_move: float = 0.0, atr: float = 0.0) -> list:
+    """The best contract in each budget BAND, by quality.
+
+    Bands are disjoint ranges, not nested caps: $100-$200, $50-$100, under $50.
+    Under the old nested caps a $45 contract qualified for all three tiers, so
+    which one it landed in depended on the order they were checked rather than
+    on what it cost — and Salem's budgets are ranges he chooses between, not
+    three names for the same contract.
+
+    Inside a band the pick is by contract_quality, so a cheaper contract with a
+    reachable strike and a real book beats a dearer one with neither.
     """
     side = [c for c in chain
             if c.get("type") == direction and passes_liquidity(c)]
 
-    def pick_itm(ok):     # safest: deepest ITM affordable
-        itm = [c for c in ok if _moneyness(c, spot) > 0]
-        pool = itm or ok
-        return max(pool, key=lambda c: (_moneyness(c, spot), abs(c.get("delta", 0))))
-
-    def pick_atm(ok):     # balanced: strike closest to spot
-        return min(ok, key=lambda c: abs(c["strike"] - spot))
-
-    def pick_otm(ok):     # lottery: cheapest OTM still carrying delta >= 0.10
-        otm = [c for c in ok
-               if _moneyness(c, spot) < 0 and abs(c.get("delta", 0)) >= 0.10]
-        if not otm:
-            return None
-        return min(otm, key=lambda c: abs(c.get("delta", 0)))
-
-    pickers = {"ITM": pick_itm, "ATM": pick_atm, "OTM": pick_otm}
     picks, taken = [], set()
-    for label, budget in BUDGET_TIERS:
-        ok = [c for c in side
-              if 0 < contract_cost(c) <= budget
-              and c.get("option_symbol") not in taken]
-        if not ok:
+    for label, floor, ceiling in BUDGET_TIERS:
+        band = [c for c in side
+                if floor < contract_cost(c) <= ceiling
+                and c.get("option_symbol") not in taken]
+        if not band:
             picks.append((label, None))
             continue
-        kind = "ITM" if "ITM" in label else ("ATM" if "ATM" in label else "OTM")
-        chosen = pickers[kind](ok)
-        if chosen is not None:
-            taken.add(chosen.get("option_symbol"))
-        picks.append((label, chosen))
+        best = max(band, key=lambda c: contract_quality(c, spot, expected_move, atr))
+        taken.add(best.get("option_symbol"))
+        picks.append((label, best))
     return picks
 
 
@@ -237,7 +249,7 @@ def best_contract(chain, direction, spot):
     """The contract the liquidity score is computed on: the most liquid one we
     could actually afford, not the highest-OI contract in the whole chain
     (which is often a $2,000 LEAP Salem can never buy)."""
-    top_budget = max(b for _, b in BUDGET_TIERS)
+    top_budget = max(ceiling for _, _, ceiling in BUDGET_TIERS)
     affordable = [c for c in chain
                   if c.get("type") == direction
                   and passes_liquidity(c)

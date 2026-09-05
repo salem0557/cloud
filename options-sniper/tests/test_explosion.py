@@ -495,7 +495,7 @@ def test_above_every_tier_is_named_as_such():
 
 
 def test_tiers_follow_config_not_hardcoded_numbers(monkeypatch):
-    monkeypatch.setattr(config, "BUDGET_TIERS", [("a", 25), ("b", 300)])
+    monkeypatch.setattr(config, "BUDGET_TIERS", [("a", 0, 25), ("b", 25, 300)])
     assert explosion.budget_tier(0.20) == "$25"
     assert explosion.budget_tier(1.00) == "$300"
     assert explosion.budget_tier(4.00) == ">$300"

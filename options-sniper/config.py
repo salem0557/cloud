@@ -50,12 +50,30 @@ THRESHOLD          = 85     # calibrate from journal.csv after 2-4 weeks paper
 WATCHLIST_FLOOR    = 65     # candidates >= this go to shortlist.json
 MAX_ALERTS_PER_DAY = 5
 
-# ── Budget tiers (contract cost = ask x 100) ────────────────────
+# ── Budget bands (contract cost = ask x 100) ────────────────────
+# Each band is a RANGE with a floor and a ceiling, not a target price. The old
+# tiers were nested caps — every contract under $50 also qualified for the $100
+# and $200 tiers — so which tier a contract landed in came down to the order
+# they were checked, not to what it cost. And each tier picked by character
+# (deepest ITM, nearest the money, cheapest OTM) rather than by what the
+# contract was actually worth buying.
+#
+# Bands are now disjoint, and the pick inside each is the best contract by
+# quality: expected profit, liquidity, and whether the stock can reach the
+# strike at all.
 BUDGET_TIERS = [
-    ("🟢 آمن (ITM) <200$",         200),
-    ("🟡 متوازن (ATM) <100$",      100),
-    ("🔴 عالي المخاطرة (OTM) <50$", 50),
+    ("🟢 <200$", 100, 200),   # (label, floor cost, ceiling cost)
+    ("🟡 <100$", 50, 100),
+    ("🔴 <50$", 0, 50),
 ]
+
+# Weights for choosing inside a band. Expected profit is the point, but a
+# contract nobody will trade back to you, or one whose strike the stock cannot
+# reach, is not worth its headline number.
+QUALITY_WEIGHTS = {"profit": 0.5, "liquidity": 0.3, "reach": 0.2}
+REACHABLE_ATR = 2.0          # ATRs to the strike that still counts as reachable
+MAX_PROFIT_CREDIT = 300.0    # cap on the profit term: a 900% estimate on a
+                             # far-OTM contract is delta arithmetic, not an edge
 
 # ── 15m technical frame ─────────────────────────────────────────
 CANDLE_SIZE        = "15m"

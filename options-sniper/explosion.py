@@ -275,10 +275,11 @@ def bucket(name, value):
 def budget_tier(price):
     """-> the budget label a contract at this premium falls in."""
     cost = price * 100
-    for label, cap in sorted(C.BUDGET_TIERS, key=lambda t: t[1]):
-        if cost <= cap:
-            return f"${cap:.0f}"
-    return f">${max(c for _, c in C.BUDGET_TIERS):.0f}"
+    for _, floor, ceiling in sorted(C.BUDGET_TIERS, key=lambda t: t[2]):
+        if floor < cost <= ceiling:
+            return f"${ceiling:.0f}"
+    top = max(c for _, _, c in C.BUDGET_TIERS)
+    return f">${top:.0f}" if cost > top else "$0"
 
 
 FEATURES = ["price", "spread_pct", "vol_oi", "ask_share", "sweep_share",
@@ -371,8 +372,8 @@ def main(args, collect=None):
     label = {"high": "the day's print (not an order you can place)",
              "mid": "a tick-rounded limit at the midpoint",
              "bid": "hitting the bid (the floor)"}[model]
-    tiers = ", ".join(f"${c:.0f} (<=${c/100:.2f})"
-                      for _, c in sorted(C.BUDGET_TIERS, key=lambda t: t[1]))
+    tiers = ", ".join(f"${c:.0f} (${f/100:.2f}-${c/100:.2f})"
+                      for _, f, c in sorted(C.BUDGET_TIERS, key=lambda t: t[2]))
     print(f"Finding candidates: OTM, {args.min_dte}-{args.max_dte} DTE, "
           f"${args.min_price}-${args.max_price} premium")
     print(f"Budget tiers: {tiers}")
