@@ -76,6 +76,24 @@ def render_entry(p):
         "⚠️ الربح المتوقع تقدير (دلتا+جاما−ثيتا) وليس ضماناً",
     ]
 
+    a = p.get("analyst")
+    if a:
+        head = {"TAKE": "✅ رأي المحلل", "WAIT": "⏸ رأي المحلل",
+                "SKIP": "⛔ رأي المحلل"}.get(a.get("verdict"), "رأي المحلل")
+        lines += ["", f"{head} — قناعة {a.get('conviction', '؟')}"]
+        br = a.get("base_rate") or {}
+        if br.get("available"):
+            lines.append(f"   المعدل التاريخي لهذا النوع: {br.get('hit_rate')}% "
+                         f"(ن={br.get('count')}) — تقييمه {a.get('vs_base_rate', '؟')}")
+        else:
+            lines.append(f"   ⚠️ بلا مرجع تاريخي ({br.get('reason', 'غير متاح')})")
+        if a.get("reading"):
+            lines.append(f"   {a['reading']}")
+        for c in (a.get("concerns") or [])[:3]:
+            lines.append(f"   • {c}")
+        if a.get("tier"):
+            lines.append(f"   العقد المفضّل لدى المحلل: {a['tier']}")
+
     flags = (p.get("risk") or {}).get("flags") or []
     if flags:
         penalty = p["risk"]["penalty"]

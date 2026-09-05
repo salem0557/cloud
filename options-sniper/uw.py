@@ -287,7 +287,7 @@ def option_contracts(ticker):
 
 
 # ── 4) Real-time intraday candles ───────────────────────────────
-def candles(ticker, candle_size=None, timeframe="5D", limit=500):
+def candles(ticker, candle_size=None, timeframe="5D", limit=500, end_date=None):
     """GET /api/stock/{ticker}/ohlc/{candle_size}
 
     Returns candles ASCENDING in time (UW serves them newest-first).
@@ -297,9 +297,10 @@ def candles(ticker, candle_size=None, timeframe="5D", limit=500):
     """
     size = candle_size or C.CANDLE_SIZE
     try:
-        raw = _get(f"/api/stock/{ticker}/ohlc/{size}", {
-            "timeframe": timeframe, "limit": limit,
-        })
+        params = {"timeframe": timeframe, "limit": limit}
+        if end_date:
+            params["end_date"] = end_date       # walk backwards for backtests
+        raw = _get(f"/api/stock/{ticker}/ohlc/{size}", params)
     except UWError:
         return []
     rows = []

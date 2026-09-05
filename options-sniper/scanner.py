@@ -11,6 +11,7 @@ import datetime
 import json
 import sys
 
+import analyst
 import config as C
 import finviz
 import journal
@@ -248,6 +249,20 @@ def main(dry_run=False, limit_tickers=None):
         if cand["score"] < C.THRESHOLD:
             break
         payload = to_payload(cand)
+
+        # Final read. An unreachable analyst returns None and the alert goes
+        # out on the arithmetic — the layer may reject a setup, never silently
+        # swallow one because a request failed.
+        note = analyst.review(payload)
+        if note:
+            payload["analyst"] = note
+            print(f"  {cand['ticker']} analyst: {note.get('verdict')} "
+                  f"({note.get('conviction')}, {note.get('vs_base_rate')} من المعدل)")
+            if C.ANALYST_CAN_BLOCK and note.get("verdict") == "SKIP":
+                print(f"    ↳ rejected: {note.get('reading', '')[:120]}")
+                journal.log_alert(payload, kind="analyst_skip")
+                continue
+
         msg = compose("entry", payload)
         if msg.startswith(NO_TRADE):
             print(cand["ticker"], msg)

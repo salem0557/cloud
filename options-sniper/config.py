@@ -165,6 +165,22 @@ MONITOR_EVERY_MIN = 5
 HEARTBEAT_MIN     = 60      # a line in the log so a healthy idle service is
                             # distinguishable from a dead one over a weekend
 
+# ── Analyst layer (analyst.py) ──────────────────────────────────
+# A final read on a setup before it is recommended. Requires an Anthropic API
+# key — a Pro/Max subscription is for interactive use and cannot authenticate a
+# container. Roughly $3.30/month at 5 alerts a day on Opus 5.
+# Off by default: without backtest.json its conviction has nothing to anchor to.
+USE_ANALYST    = os.environ.get("USE_ANALYST", "0").lower() in ("1", "true", "yes")
+ANALYST_MODEL  = os.environ.get("ANALYST_MODEL", "claude-opus-5")
+ANALYST_EFFORT = os.environ.get("ANALYST_EFFORT", "high")
+# A SKIP verdict removes the alert entirely. Off means the analyst's read is
+# attached to the message but Salem still sees the setup.
+ANALYST_CAN_BLOCK = os.environ.get("ANALYST_CAN_BLOCK", "1").lower() in ("1", "true", "yes")
+
+# ── Backtest / base rates ───────────────────────────────────────
+BASE_RATE_MIN_SAMPLE = 20   # a setup type below this is not a base rate, it is
+                            # an anecdote — the analyst is told so explicitly
+
 # ── State / data files ──────────────────────────────────────────
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 SHORTLIST_FILE = DATA_DIR / "shortlist.json"
@@ -172,3 +188,4 @@ POSITIONS_FILE = DATA_DIR / "positions.json"
 STATE_FILE     = DATA_DIR / "state.json"
 LOCK_FILE      = DATA_DIR / ".state.lock"
 JOURNAL_FILE   = DATA_DIR / "journal.csv"
+BACKTEST_FILE  = DATA_DIR / "backtest.json"
