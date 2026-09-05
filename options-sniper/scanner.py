@@ -13,6 +13,7 @@ import sys
 
 import config as C
 import journal
+import market
 import state
 import technical
 import uw
@@ -134,6 +135,9 @@ def to_payload(cand):
 
 # ── Main ────────────────────────────────────────────────────────
 def main(dry_run=False, limit_tickers=None):
+    if not dry_run and not market.is_open():
+        print("Market closed —", market.reason())
+        return 0
     if not dry_run and state.capacity_left() == 0:
         print("Daily cap reached — scan skipped.")
         return 0

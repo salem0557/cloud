@@ -12,6 +12,7 @@ import sys
 
 import config as C
 import journal
+import market
 import state
 import technical
 import uw
@@ -167,6 +168,9 @@ def check_shortlist(dry_run=False):
 
 
 def main(dry_run=False):
+    if not dry_run and not market.is_open():
+        print("Market closed —", market.reason())
+        return
     exits = check_positions(dry_run)
     entries = check_shortlist(dry_run)
     print(f"exits: {exits}  entries: {entries}")

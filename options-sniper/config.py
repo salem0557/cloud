@@ -77,7 +77,9 @@ MIN_TICKER_PREMIUM      = 250_000   # skip tickers below this daily premium
 # True  = `claude -p` writes the Arabic message (Salem's original design)
 # False = deterministic Python formatter (no LLM, zero fabrication risk)
 # Either way every number comes from the computed JSON.
-USE_CLAUDE_COMPOSER = True
+# Overridable per-environment: GitHub Actions runners have no `claude` CLI, so
+# the workflows set USE_CLAUDE_COMPOSER=0.
+USE_CLAUDE_COMPOSER = os.environ.get("USE_CLAUDE_COMPOSER", "1").lower() not in ("0", "false", "no")
 CLAUDE_TIMEOUT_SEC  = 300
 
 # ── State / data files ──────────────────────────────────────────
