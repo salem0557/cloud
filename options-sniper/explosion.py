@@ -236,13 +236,30 @@ def realised(o, take_multiple):
 
 
 def summarise(obs, threshold, take=None):
+    """Includes `contracts` — how many DISTINCT contracts the rows came from.
+
+    Entry days are not independent observations. A 10-day forward window
+    starting on Monday shares nine of its ten days with the one starting
+    Tuesday, so a contract that ran once contributes a win on every entry day
+    it had. At roughly 13 entry days per contract, a bucket showing n=104 can
+    be eight contracts, and a single explosion can carry the whole bucket.
+    The contract count is the sample size that matters.
+    """
     if not obs:
         return {"count": 0}
     wins = [o for o in obs if o["peak_multiple"] >= threshold]
     peaks = sorted(o["peak_multiple"] for o in obs)
     take = take or threshold
     got = [realised(o, take) for o in obs]
+    syms = {o.get("symbol") for o in obs if o.get("symbol")}
+    # per contract: its best entry day, so one explosion counts once
+    by_sym = defaultdict(list)
+    for o in obs:
+        by_sym[o.get("symbol")].append(realised(o, take))
+    per_contract = [statistics.mean(v) for v in by_sym.values()] or [0.0]
     return {
+        "contracts": len(syms),
+        "per_contract_avg": round(statistics.mean(per_contract), 3),
         # what a sell-at-`take` rule returned per dollar staked. Below 1.0 the
         # bucket loses money however impressive its touch rate looks.
         "realised_avg": round(statistics.mean(got), 3),
@@ -364,7 +381,10 @@ def main(args):
             print(f"    --fills {alt:<4} : ${s['realised_avg']} per $1, "
                   f"{s['explosion_rate']}% touching, n={s['count']}")
 
-    print(f"\n{'═' * 64}\nWhat separates the ones that ran:\n")
+    base = overall["realised_avg"]
+    print(f"\n{'═' * 64}\nWhat separates the ones that ran")
+    print(f"(measured against the run's own average of ${base}, not against "
+          f"$1.00 —\n almost everything clears $1.00 when the overall does)\n")
     for feat in FEATURES:
         groups = defaultdict(list)
         for o in obs:
@@ -375,22 +395,33 @@ def main(args):
             continue
         print(f"  {feat}")
         for k, s in sorted(rows, key=lambda kv: -kv[1]["realised_avg"]):
-            flag = "  ← profitable" if s["realised_avg"] > 1.0 else ""
-            print(f"    ${s['realised_avg']:>5}/$1  {s['explosion_rate']:>5}% hit  "
-                  f"n={s['count']:>5}  {k}{flag}")
+            # measured against the run's own average, not against $1.00. Almost
+            # every bucket clears $1.00 when the overall does; the question is
+            # whether a filter beats taking everything.
+            lift = s["realised_avg"] / base if base else 0
+            mark = ("  ← beats the average" if lift >= 1.15
+                    else ("  (thin)" if s["contracts"] < C.MIN_CONTRACTS else ""))
+            print(f"    ${s['realised_avg']:>5}/$1  {lift:>4.2f}x avg  "
+                  f"{s['explosion_rate']:>5}% hit  n={s['count']:>5} "
+                  f"({s['contracts']:>3} contracts)  {k}{mark}")
         print()
 
     print(f"{'═' * 64}\nBest pairs (>= {C.BASE_RATE_MIN_SAMPLE} samples), "
           f"by what they actually returned:\n")
     pairs = combinations(obs, FEATURES, args.multiple, C.BASE_RATE_MIN_SAMPLE)
     for k, s in pairs[:12]:
-        flag = "  ← profitable" if s["realised_avg"] > 1.0 else ""
-        print(f"  ${s['realised_avg']:>5}/$1  {s['explosion_rate']:>5}% hit  "
-              f"n={s['count']:>5}  {k}{flag}")
-    if not any(s["realised_avg"] > 1.0 for _, s in pairs):
-        print("\n  None returned more than the stake. On this sample there is "
-              "no pair of\n  these features that makes buying profitable at "
-              f"a {args.multiple}x exit.")
+        lift = s["realised_avg"] / base if base else 0
+        mark = ("  ← beats the average" if lift >= 1.15
+                else ("  (thin)" if s["contracts"] < C.MIN_CONTRACTS else ""))
+        print(f"  ${s['realised_avg']:>5}/$1  {lift:>4.2f}x avg  "
+              f"{s['explosion_rate']:>5}% hit  n={s['count']:>5} "
+              f"({s['contracts']:>3} contracts)  {k}{mark}")
+    thin = [k for k, s in pairs[:12] if s["contracts"] < C.MIN_CONTRACTS]
+    if thin:
+        print(f"\n  {len(thin)} of the top 12 rest on fewer than "
+              f"{C.MIN_CONTRACTS} distinct contracts. Entry days on one "
+              "contract\n  overlap almost completely, so those are closer to "
+              "a handful of events\n  than to the sample size shown.")
     print()
 
     payload = {

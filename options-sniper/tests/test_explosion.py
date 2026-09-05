@@ -304,3 +304,47 @@ def test_five_x_is_a_smaller_move_on_a_cheap_contract():
     dollars, a real move in the underlying."""
     assert round(0.02 * 5 - 0.02, 2) == 0.08
     assert round(1.00 * 5 - 1.00, 2) == 4.00
+
+
+# ── Entry days are not independent observations ─────────────────
+def _e(symbol, peak, end):
+    return {"symbol": symbol, "peak_multiple": peak, "end_multiple": end,
+            "days_to_peak": 3, "features": {}}
+
+
+def test_distinct_contracts_are_counted():
+    """A 10-day window starting Monday shares nine days with Tuesday's, so one
+    contract that ran contributes a win on every entry day it had. n=13 from
+    one contract is one event."""
+    obs = [_e("BOOM", 8.0, 6.0)] * 13
+    s = explosion.summarise(obs, 5.0)
+    assert s["count"] == 13
+    assert s["contracts"] == 1              # the sample size that matters
+
+
+def test_thirteen_contracts_are_thirteen_contracts():
+    obs = [_e(f"D{i}", 0.6, 0.4) for i in range(13)]
+    assert explosion.summarise(obs, 5.0)["contracts"] == 13
+
+
+def test_one_explosion_can_carry_a_bucket():
+    """13 losing contracts and one winner counted 13 times reads as $2.70 per
+    dollar. Per contract it is much closer to break-even."""
+    obs = [_e("BOOM", 8.0, 6.0)] * 13 + [_e(f"D{i}", 0.6, 0.4) for i in range(13)]
+    s = explosion.summarise(obs, 5.0)
+    assert s["realised_avg"] > 2.5
+    assert s["per_contract_avg"] < s["realised_avg"]
+    assert s["contracts"] == 14
+
+
+def test_per_contract_average_gives_each_contract_one_vote():
+    obs = [_e("A", 8.0, 6.0)] * 10 + [_e("B", 0.5, 0.3)]
+    s = explosion.summarise(obs, 5.0)
+    # per day: ten wins to one loss. per contract: one to one.
+    assert round(s["per_contract_avg"], 2) == round((5.0 + 0.3) / 2, 2)
+
+
+def test_a_bucket_with_no_symbols_is_still_safe():
+    obs = [{"peak_multiple": 1.0, "end_multiple": 1.0, "days_to_peak": 1}]
+    s = explosion.summarise(obs, 5.0)
+    assert s["contracts"] == 0

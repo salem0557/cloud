@@ -178,7 +178,10 @@ ANALYST_EFFORT = os.environ.get("ANALYST_EFFORT", "high")
 ANALYST_CAN_BLOCK = os.environ.get("ANALYST_CAN_BLOCK", "1").lower() in ("1", "true", "yes")
 
 # ── Backtest / base rates ───────────────────────────────────────
-BASE_RATE_MIN_SAMPLE = 20   # a setup type below this is not a base rate, it is
+BASE_RATE_MIN_SAMPLE = 20
+MIN_CONTRACTS        = 10   # distinct contracts below which a bucket is a
+                            # handful of events, not a rate — entry days on one
+                            # contract share almost all of their forward window   # a setup type below this is not a base rate, it is
                             # an anecdote — the analyst is told so explicitly
 
 # ── State / data files ──────────────────────────────────────────
