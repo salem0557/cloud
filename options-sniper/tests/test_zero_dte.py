@@ -112,3 +112,26 @@ def test_budget_buckets_match_the_three_salem_uses():
 
 def test_a_missing_feature_is_marked_not_guessed():
     assert z.bucket("spread_pct", None) == "spread_pct=?"
+
+
+# ── Asking for a specific expiry ────────────────────────────────
+import uw  # noqa: E402
+
+
+def test_expiry_is_requested_by_date_not_by_dte(monkeypatch):
+    """min_dte/max_dte are measured from TODAY, so asking for dte 0 on a past
+    session matched nothing on all four dates tested. The screener names its
+    array filters with a literal [] suffix, which is not a valid Python
+    keyword, so the bare name is translated here."""
+    seen = {}
+
+    def fake(path, params=None):
+        seen.update(params or {})
+        return []
+
+    monkeypatch.setattr(uw, "_get", fake)
+    uw.screen_contracts(is_otm="true", expiry_dates=["2026-09-04"],
+                        date="2026-09-04")
+    assert seen["expiry_dates[]"] == ["2026-09-04"]
+    assert "expiry_dates" not in seen
+    assert "min_dte" not in seen and "max_dte" not in seen

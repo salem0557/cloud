@@ -236,8 +236,10 @@ def run_one(date, args, model):
     print(f"give up after {args.max_hold} minutes, out by {args.hard_exit}.")
     print(f"Fills: {model}. Premium ${args.min_price}-${args.max_price} "
           f"(${args.min_price*100:.0f}-${args.max_price*100:.0f} a contract)\n")
+    # expiry_dates, not min_dte/max_dte: the screener measures dte from TODAY,
+    # so asking for dte 0 on a past session matched nothing on every date.
     try:
-        pool = uw.screen_contracts(is_otm="true", min_dte=0, max_dte=0,
+        pool = uw.screen_contracts(is_otm="true", expiry_dates=[date],
                                    min_volume=args.min_volume, type=args.type,
                                    limit=250, date=date)
     except uw.UWError as e:
@@ -245,9 +247,25 @@ def run_one(date, args, model):
         return None
     print(f"Screener returned {len(pool)} contracts expiring that day")
     if not pool:
-        print("No 0DTE contracts for that date. Index names expire Mon/Wed/Fri "
-              "and most single stocks only on Friday — pick a date that had "
-              "an expiry.")
+        # Say what the session actually held instead of guessing at expiry
+        # calendars — the last guess sent Salem looking at the wrong thing.
+        try:
+            any_c = uw.screen_contracts(is_otm="true", min_volume=args.min_volume,
+                                        limit=250, date=date)
+        except uw.UWError:
+            any_c = []
+        if not any_c:
+            print(f"That session returned no contracts at all — {date} is "
+                  "probably not a trading day, or is outside the plan's "
+                  "history.")
+        else:
+            seen = sorted({c.get("expiry") for c in any_c if c.get("expiry")})
+            print(f"  {len(any_c)} contracts traded that session, expiring: "
+                  f"{', '.join(seen[:8])}"
+                  + (f" (+{len(seen)-8} more)" if len(seen) > 8 else ""))
+            print(f"  None expire on {date} itself, so that session had no "
+                  "0DTE contracts above the volume floor. Pick a date from "
+                  "the list above.")
         return None
 
     pool = [c for c in pool

@@ -527,6 +527,14 @@ def screen_contracts(**filters):
     and the caller cannot tell the user which one happened.
     """
     params = {k: v for k, v in filters.items() if v is not None}
+    # The screener names its array filters with a literal "[]" suffix, which is
+    # not a valid Python keyword, so callers pass the bare name and it is
+    # translated here. `expiry_dates` is the only reliable way to ask for a
+    # specific expiry: min_dte/max_dte are measured from TODAY, so asking for
+    # dte 0 on a past session returns nothing at all.
+    for name in ("expiry_dates", "sectors", "issue_types"):
+        if name in params:
+            params[f"{name}[]"] = params.pop(name)
     params.setdefault("limit", 250)
     raw = _get("/api/screener/option-contracts", params)
     return [_normalise_screener_row(c) for c in raw if isinstance(c, dict)]
