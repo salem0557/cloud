@@ -141,6 +141,10 @@ REGIME_TICKER        = "SPY"
 REGIME_MOVE_PCT      = 1.0   # broad-market move that counts as a real tide
 REGIME_PENALTY       = 8.0
 MIN_ASK_SIDE_RATIO   = 0.55  # below this the premium was mostly sold, not bought
+MIN_DIRECTIONAL_SHARE = 0.60 # below this the volume is mostly spread legs, which
+                             # say nothing about direction — a live screen found
+                             # a contract at 98% multi-leg that would have scored
+                             # as a huge one-way bet
 CONVICTION_PENALTY   = 10.0
 MAX_RISK_PENALTY     = 20.0  # a setup is rejected on its own merits, not buried
 

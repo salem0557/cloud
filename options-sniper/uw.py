@@ -423,6 +423,8 @@ def _normalise_screener_row(c):
         "ask_volume": ask_v, "bid_volume": bid_v,
         "sweep_volume": _num(c.get("sweep_volume")),
         "premium": _num(c.get("premium")),
+        "multileg_volume": _num(c.get("multileg_volume")),
+        "days_of_oi_increases": _num(c.get("days_of_oi_increases")),
         "stock_price": _num(c.get("stock_price")),
         "next_earnings_date": c.get("next_earnings_date") or "",
         "sector": c.get("sector") or "",
