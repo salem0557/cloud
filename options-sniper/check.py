@@ -11,7 +11,36 @@ Also a paste workaround: Railway's web console mangles multi-line pastes
 (bracketed-paste escapes arrive as literal text), so a diagnostic that has to
 be pasted cannot be run there. This one is typed in full as `python check.py`.
 """
+import os
 import sys
+
+# Railway's web console starts a plain shell, so `python` there is the system
+# interpreter, not the virtualenv the app runs under — its dependencies are
+# missing and this script dies on `import requests` before reaching any check.
+# Re-exec under the interpreter that actually has them.
+def _reexec_into_venv():
+    try:
+        import requests  # noqa: F401
+        return
+    except ImportError:
+        pass
+    for candidate in ("/opt/venv/bin/python", "/opt/venv/bin/python3",
+                      "/app/.venv/bin/python", "/usr/local/bin/python3"):
+        if candidate == sys.executable or not os.path.exists(candidate):
+            continue
+        probe = os.system(f"{candidate} -c 'import requests' 2>/dev/null")
+        if probe == 0:
+            print(f"(re-running under {candidate} — the console's python has no "
+                  f"dependencies)\n")
+            os.execv(candidate, [candidate] + sys.argv)
+    print("FAIL: the 'requests' package is not importable, and no virtualenv "
+          "carrying it was found.\n"
+          "      Find it with:  find / -name requests -maxdepth 7 -type d 2>/dev/null\n"
+          "      then run:      <that-venv>/bin/python check.py")
+    sys.exit(2)
+
+
+_reexec_into_venv()
 
 import config as C
 
