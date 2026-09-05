@@ -32,8 +32,8 @@ import sys
 from collections import defaultdict
 
 import config as C
+import history
 import technical
-import uw
 
 # Liquid, heavily-optioned names. Not a recommendation list — a sample the
 # breakout rule can be measured on.
@@ -47,46 +47,12 @@ MAX_HOLD_BARS = 16          # 4 hours on a 15m frame; a breakout that has not
                             # resolved by then is not what the rule is about
 
 
-def fetch_history(ticker, days, verbose=False):
-    """Walk backwards with end_date until UW stops serving, or `days` covered."""
-    all_bars, end = [], None
-    for _ in range(12):                     # 12 pages x 2500 bars is ample
-        try:
-            page = uw.candles(ticker, timeframe=f"{days}D", limit=2500) if end is None \
-                else _page(ticker, end)
-        except uw.UWError as e:
-            if verbose:
-                print(f"  {ticker}: {e}")
-            break
-        if not page:
-            break
-        known = {b["start_time"] for b in all_bars}
-        fresh = [b for b in page if b["start_time"] not in known]
-        if not fresh:
-            break
-        all_bars = sorted(fresh + all_bars, key=lambda b: b["start_time"])
-        oldest = all_bars[0]["start_time"][:10]
-        if _age_days(oldest) >= days:
-            break
-        end = _day_before(oldest)
-    return all_bars
-
-
-def _page(ticker, end_date):
-    return uw.candles(ticker, timeframe="60D", limit=2500, end_date=end_date)
-
-
 def _age_days(iso_date):
     try:
         d = datetime.date.fromisoformat(iso_date)
     except ValueError:
         return 0
     return (datetime.date.today() - d).days
-
-
-def _day_before(iso_date):
-    d = datetime.date.fromisoformat(iso_date)
-    return (d - datetime.timedelta(days=1)).isoformat()
 
 
 # ── Attribute buckets — the keys the analyst looks a setup up by ─
@@ -99,14 +65,8 @@ def bucket_distance(d):
 
 
 def bucket_hour(end_time):
-    """Session third, in ET. Opening and closing hours behave differently."""
-    try:
-        h = int(end_time[11:13]) - 4         # UTC -> ET (approximate, DST-agnostic)
-    except (ValueError, IndexError):
-        return "unknown"
-    if h < 11:
-        return "open"
-    return "midday" if h < 14 else "close"
+    """Session third, in real ET — opening and closing hours behave differently."""
+    return history.session_third(end_time)
 
 
 def setup_key(tech, direction):
@@ -176,12 +136,16 @@ def summarise(trades):
     }
 
 
-def main(days, tickers, out_path):
-    print(f"Backtest: {len(tickers)} tickers, requesting {days} days of "
-          f"{C.CANDLE_SIZE} bars\n")
+def main(days, tickers, out_path, interval, source):
+    print(f"Backtest: {len(tickers)} tickers, {interval} bars, "
+          f"requesting {days} days from {source}\n")
     all_trades, coverage = [], {}
     for ticker in tickers:
-        bars = fetch_history(ticker, days, verbose=True)
+        try:
+            bars = history.fetch(ticker, interval=interval, days=days, source=source)
+        except history.HistoryError as e:
+            print(f"  {ticker:6} —      {e}")
+            continue
         if len(bars) < C.CANDLES_LOOKBACK + MAX_HOLD_BARS + 5:
             print(f"  {ticker:6} {len(bars):>6} bars — too few, skipped")
             continue
@@ -200,8 +164,12 @@ def main(days, tickers, out_path):
     actual_days = _age_days(oldest)
     print(f"\n{'═' * 62}\nCoverage: {actual_days} days (oldest bar {oldest})")
     if actual_days < days * 0.8:
-        print(f"NOTE: asked for {days} days, the plan served {actual_days}. "
-              "This is a subscription lookback limit, not a bug.")
+        why = ("Yahoo caps intraday history by interval — try --interval 1h "
+               "for a much longer sample") if source == "yahoo" else \
+              ("a subscription lookback limit — UW documents 90 days on the "
+               "Startup tier and less on a trial")
+        print(f"NOTE: asked for {days} days, got {actual_days}. This is {why}. "
+              "Not a bug.")
 
     overall = summarise(all_trades)
     print(f"\nOverall — {overall['count']} setups")
@@ -218,11 +186,15 @@ def main(days, tickers, out_path):
              if len(v) >= C.BASE_RATE_MIN_SAMPLE}
 
     print(f"\nSetup types with >= {C.BASE_RATE_MIN_SAMPLE} samples: {len(rates)}")
+    if not rates:
+        print("  None yet — the analyst will fall back to the overall rate and "
+              "say so. Widen --tickers or --days for per-setup rates.")
     for k, s in sorted(rates.items(), key=lambda kv: -kv[1]["hit_rate"])[:10]:
         print(f"  {s['hit_rate']:>5}%  n={s['count']:>4}  {k}")
 
     payload = {
         "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "interval": interval, "source": source,
         "days_requested": days, "days_covered": actual_days,
         "rules": {"target_atr": C.TARGET_ATR_MULT, "stop_atr": C.STOP_ATR_MULT,
                   "volume_spike": C.VOLUME_SPIKE_RATIO,
@@ -241,11 +213,16 @@ if __name__ == "__main__":
                     help="history to request; the plan may serve less")
     ap.add_argument("--tickers", help="comma-separated, default a liquid sample")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--interval", default="15m",
+                    choices=["15m", "30m", "1h", "1d"],
+                    help="15m is the live strategy; 1h reaches much further back")
+    ap.add_argument("--source", default="yahoo", choices=["yahoo", "uw", "auto"],
+                    help="yahoo is free and deeper; uw costs quota")
     a = ap.parse_args()
     tick = [t.strip().upper() for t in a.tickers.split(",")] if a.tickers else UNIVERSE
     out = __import__("pathlib").Path(a.out) if a.out else C.BACKTEST_FILE
     try:
-        sys.exit(main(a.days, tick, out))
-    except uw.UWError as e:
-        print("UW error:", e, file=sys.stderr)
+        sys.exit(main(a.days, tick, out, a.interval, a.source))
+    except history.HistoryError as e:
+        print("history error:", e, file=sys.stderr)
         sys.exit(2)
