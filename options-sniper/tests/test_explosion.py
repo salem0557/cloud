@@ -429,14 +429,22 @@ def test_the_cutoff_is_on_spread_not_price():
 
 
 # ── Stock context: the variable that was deliberately removed ───
-def _tech(atr, rsi=None, vs_sma20=None):
-    return lambda t, **k: {"atr": atr, "rsi": rsi, "vs_sma20": vs_sma20,
-                           "sma20": None, "close": 0.0}
+def _tech(monkeypatch, session_move, rsi=None, vs_sma20=None):
+    """Stub both frames. atr_to_strike is measured on 15m — the frame Salem
+    trades — with the daily ATR only as a fallback."""
+    monkeypatch.setattr(explosion.uw, "intraday_technicals",
+                        lambda t, **k: {"atr15": 0.0, "rsi": rsi,
+                                        "session_move": session_move,
+                                        "close": 0.0, "bars": 200})
+    monkeypatch.setattr(explosion.uw, "stock_technicals",
+                        lambda t, **k: {"atr": 0.0, "rsi": None,
+                                        "vs_sma20": vs_sma20, "sma20": None,
+                                        "close": 0.0})
 
 def test_atr_distance_measures_what_the_stock_must_travel(monkeypatch):
     """Every feature so far described the contract. None said the STOCK would
     move, and a contract only explodes because it does."""
-    monkeypatch.setattr(explosion.uw, "stock_technicals", _tech(4.5))
+    _tech(monkeypatch, 4.5)
     monkeypatch.setattr(explosion.uw, "gex_levels", lambda t, **k: None)
     ctx = explosion.stock_context({"ticker": "NVDA", "stock_price": 230.36,
                                    "strike": 240.0, "type": "call"})
@@ -444,7 +452,7 @@ def test_atr_distance_measures_what_the_stock_must_travel(monkeypatch):
 
 
 def test_puts_measure_the_distance_downward(monkeypatch):
-    monkeypatch.setattr(explosion.uw, "stock_technicals", _tech(4.0))
+    _tech(monkeypatch, 4.0)
     monkeypatch.setattr(explosion.uw, "gex_levels", lambda t, **k: None)
     ctx = explosion.stock_context({"ticker": "X", "stock_price": 100.0,
                                    "strike": 92.0, "type": "put"})
@@ -454,7 +462,7 @@ def test_puts_measure_the_distance_downward(monkeypatch):
 def test_gex_side_records_which_way_dealers_hedge(monkeypatch):
     """Below the flip dealers sell rallies and buy dips, damping movement.
     Above it they add to it. Nothing in a contract's own tape contains this."""
-    monkeypatch.setattr(explosion.uw, "stock_technicals", _tech(4.5))
+    _tech(monkeypatch, 4.5)
     monkeypatch.setattr(explosion.uw, "gex_levels",
                         lambda t, **k: {"gamma_flip": 231.69})
     below = explosion.stock_context({"ticker": "NVDA", "stock_price": 230.36,
@@ -466,7 +474,7 @@ def test_gex_side_records_which_way_dealers_hedge(monkeypatch):
 
 
 def test_missing_stock_data_gives_none_not_a_guess(monkeypatch):
-    monkeypatch.setattr(explosion.uw, "stock_technicals", _tech(0.0))
+    _tech(monkeypatch, 0.0)
     monkeypatch.setattr(explosion.uw, "gex_levels", lambda t, **k: None)
     ctx = explosion.stock_context({"ticker": "X", "stock_price": 0, "strike": 0})
     assert ctx == {"atr_to_strike": None, "gex_side": None, "rsi": None,
@@ -474,11 +482,13 @@ def test_missing_stock_data_gives_none_not_a_guess(monkeypatch):
 
 
 def test_atr_distance_buckets_separate_reachable_from_hopeless():
-    """SPY 775C sits 0.9 ATR from its strike and NVDA 252.5C 4.9 — same price
-    tier, entirely different propositions."""
-    assert explosion.bucket("atr_to_strike", 0.9) == "atr2strike=<1"
-    assert explosion.bucket("atr_to_strike", 2.1) == "atr2strike=2-4"
-    assert explosion.bucket("atr_to_strike", 4.9) == "atr2strike=4+"
+    """Measured in sessions of expected 15m movement, because a same-day
+    contract does not have days. A strike 0.3 sessions away is reachable
+    before the close; one 2+ sessions away is a different bet entirely."""
+    assert explosion.bucket("atr_to_strike", 0.3) == "sess2strike=<0.5"
+    assert explosion.bucket("atr_to_strike", 0.9) == "sess2strike=0.5-1"
+    assert explosion.bucket("atr_to_strike", 2.1) == "sess2strike=2+"
+    assert explosion.bucket("atr_to_strike", 4.9) == "sess2strike=2+"
     assert explosion.bucket("atr_to_strike", None) == "atr_to_strike=?"
 
 

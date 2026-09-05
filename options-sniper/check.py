@@ -177,6 +177,20 @@ else:
   except Exception as e:
       report("daily technicals", BAD, str(e))
 
+  # The frame the alerts are actually read on, and the one a 0DTE move fits in.
+  try:
+      t = uw.intraday_technicals("AAPL")
+      if t["session_move"] > 0:
+          report("15m technicals", OK,
+                 f"{t['bars']} bars | ATR15 {t['atr15']} | RSI {t['rsi']} | "
+                 f"session move ${t['session_move']}")
+      else:
+          report("15m technicals", BAD,
+                 f"no usable 15m bars ({t['bars']} returned) — distance to "
+                 "strike would fall back to the daily ATR")
+  except Exception as e:
+      report("15m technicals", BAD, str(e))
+
 # ── 4. Finviz ───────────────────────────────────────────────────
 section("5. Finviz (candidate discovery only)")
 if not C.FINVIZ_AUTH:

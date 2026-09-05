@@ -135,3 +135,53 @@ def test_technicals_are_cached_per_as_of_date_not_per_ticker(monkeypatch):
     uw.stock_technicals("X", as_of="2026-07-15")
     uw.stock_technicals("X", as_of="2026-05-15")
     assert calls == ["2026-05-15", "2026-07-15"]
+
+
+# ── The measuring stick is 15m, not daily ───────────────────────
+def _bars15(monkeypatch, n=60, high=101.0, low=99.0, close=100.0):
+    """Closed 15m bars, all in the past so the forming-bar filter keeps them."""
+    base = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=3)
+    rows = []
+    for i in range(n):
+        end = base + datetime.timedelta(minutes=15 * (i + 1))
+        rows.append({"market_time": "r", "open": "100", "high": str(high),
+                     "low": str(low), "close": str(close), "volume": "1000",
+                     "start_time": (end - datetime.timedelta(minutes=15)).isoformat(),
+                     "end_time": end.isoformat()})
+    monkeypatch.setattr(uw, "_get", lambda path, params=None: rows)
+
+
+def test_session_move_scales_one_bar_to_a_whole_session(monkeypatch):
+    """Salem trades same-day contracts, so the distance to a strike has to be
+    measured in what the stock can cover before the close — not in daily ATRs.
+    A random walk covers sqrt(n) bars of range in n bars, not n."""
+    _bars15(monkeypatch)
+    uw._intraday_cache.clear()
+    t = uw.intraday_technicals("NVDA")
+    assert t["atr15"] == 2.0                      # high-low is 2.0 every bar
+    assert round(t["session_move"], 2) == round(2.0 * (C.BARS_PER_SESSION ** 0.5), 2)
+
+
+def test_a_session_is_twenty_six_fifteen_minute_bars():
+    """9:30 to 16:00 is 6.5 hours."""
+    assert C.BARS_PER_SESSION == 26
+
+
+def test_the_fifteen_minute_frame_is_what_gets_requested(monkeypatch):
+    seen = {}
+
+    def fake(path, params=None):
+        seen["path"] = path
+        return []
+
+    monkeypatch.setattr(uw, "_get", fake)
+    uw._intraday_cache.clear()
+    uw.intraday_technicals("NVDA")
+    assert seen["path"].endswith("/ohlc/15m")
+
+
+def test_no_intraday_bars_means_zero_not_a_guess(monkeypatch):
+    monkeypatch.setattr(uw, "_get", lambda path, params=None: [])
+    uw._intraday_cache.clear()
+    t = uw.intraday_technicals("X")
+    assert t["session_move"] == 0.0 and t["rsi"] is None

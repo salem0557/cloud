@@ -6,6 +6,7 @@ Every path and field name below was verified against the official OpenAPI spec
 never has to guess a type.
 """
 import datetime
+import math
 import re
 import time
 
@@ -482,7 +483,7 @@ def screen_contracts(**filters):
     return [_normalise_screener_row(c) for c in raw if isinstance(c, dict)]
 
 
-_gex_cache, _tech_cache = {}, {}
+_gex_cache, _tech_cache, _intraday_cache = {}, {}, {}
 
 
 def gex_levels(ticker, date=None):
@@ -573,6 +574,39 @@ def _wilder_rsi(closes, period=14):
         return 100.0 if avg_g > 0 else None
     rs = avg_g / avg_l
     return round(100 - 100 / (1 + rs), 2)
+
+
+def intraday_technicals(ticker, as_of=None, period=14):
+    """The same three readings as stock_technicals, but on 15m bars.
+
+    This is the measuring stick a same-day trader needs. A daily ATR says what
+    the stock does in a week of sessions; a 0DTE contract has hours. ATR(14) on
+    15m bars reads the last three and a half hours, so it reflects today's
+    regime rather than a fortnight's average.
+
+    `session_move` scales one bar's ATR to a whole session by the square root
+    of the bar count — a random walk covers sqrt(n) bars of range in n bars,
+    not n. It is the honest answer to "how far can this stock travel before the
+    close", which is the only distance a same-day contract can use.
+    """
+    key = (ticker, as_of or "", period)
+    if key in _intraday_cache:
+        return _intraday_cache[key]
+    bars = candles(ticker, candle_size="15m", timeframe="5D", limit=200,
+                   end_date=as_of)
+    out = {"atr15": 0.0, "rsi": None, "session_move": 0.0,
+           "close": bars[-1]["close"] if bars else 0.0, "bars": len(bars)}
+    if len(bars) > period:
+        out["atr15"] = _wilder_atr(bars, period)
+        out["rsi"] = _wilder_rsi([b["close"] for b in bars], period)
+        out["session_move"] = round(out["atr15"] * math.sqrt(C.BARS_PER_SESSION), 4)
+    _intraday_cache[key] = out
+    return out
+
+
+def session_move(ticker, as_of=None):
+    """How far the stock can travel in one full session, from 15m volatility."""
+    return intraday_technicals(ticker, as_of=as_of)["session_move"]
 
 
 def daily_atr(ticker, as_of=None, period=14):
