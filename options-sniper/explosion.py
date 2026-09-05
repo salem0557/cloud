@@ -46,36 +46,64 @@ import config as C
 import uw
 
 
-def forward_multiple(rows, i, horizon, realistic=True):
-    """What a buy at row i's ask was worth over the next `horizon` days.
+def tick(price):
+    """Options quote in $0.01 below $3.00 and $0.05 above. This is why a mid
+    is not always a price you can enter: on a contract quoted 0.01 x 0.02 the
+    mid is 0.015, and no exchange will accept that order. You pay 0.02."""
+    return 0.01 if price < 3.0 else 0.05
 
-    Two ways to price the exit, and they disagree enormously on cheap
-    contracts:
 
-      optimistic  credit the day's HIGH. That is a print somebody got, not a
-                  price you could have sold into.
-      realistic   credit the BID, because selling means hitting the bid. On a
-                  $0.02 contract quoted 0.01 x 0.02 that halves the entry
-                  before anything moves, and when the bid is 0.00 there is no
-                  exit at all.
+def to_tick(price, up):
+    """Round to a tradeable increment — up when paying, down when receiving."""
+    t = tick(price)
+    n = price / t
+    return round((int(n) + 1) * t if up and n % 1 else int(n) * t, 4)
 
-    The gap between them is the whole question about the "cheap contracts
-    explode" result: a 5x on a $0.02 contract is an 8-cent move, less than two
-    ticks, and entirely inside a spread that is 50-100% of the price.
+
+def fill_price(bid, ask, model, buying):
+    """What a fill is worth under each assumption.
+
+    high  the day's print. Somebody got it; it is not an order you can place.
+    mid   a limit at the midpoint, rounded to a tradeable tick — against you,
+          because a mid that is not on the tick grid is not available.
+    bid   hit the bid to sell, lift the ask to buy. The floor, not the norm.
     """
-    entry = rows[i]["ask"] or rows[i]["last"]
+    if model == "bid":
+        return ask if buying else bid
+    if model == "mid":
+        mid = (bid + ask) / 2
+        return to_tick(mid, up=buying)
+    return ask if buying else max(bid, ask)
+
+
+def forward_multiple(rows, i, horizon, model="mid"):
+    """What a buy at row i was worth over the next `horizon` days.
+
+    The exit assumption is the whole argument about the "cheap contracts
+    explode" result, so it is a parameter rather than a decision made here.
+    Crediting the day's HIGH flatters it; hitting the BID punishes it twice,
+    since the entry already paid the full ask. A tick-rounded MID sits between
+    and is what a limit order actually reaches on a contract with a book.
+
+    On a $0.02 contract none of that helps: the spread is half the price and
+    the mid is not on the tick grid, so the entry is the ask either way.
+    """
+    entry = fill_price(rows[i]["bid"], rows[i]["ask"] or rows[i]["last"],
+                       model, buying=True)
     if entry <= 0:
         return None
     window = rows[i + 1:i + 1 + horizon]
     if not window:
         return None
 
-    def exit_price(r):
-        return (r["bid"] if realistic else (r["high"] or r["last"])) or 0.0
+    def out(r):
+        if model == "high":
+            return (r["high"] or r["last"]) or 0.0
+        return fill_price(r["bid"], r["ask"] or r["last"], model, buying=False)
 
-    peak = max(exit_price(r) for r in window)
-    end = exit_price(window[-1])
-    spread = rows[i]["ask"] - rows[i]["bid"]
+    peak = max(out(r) for r in window)
+    end = out(window[-1])
+    spread = (rows[i]["ask"] or 0) - (rows[i]["bid"] or 0)
     return {
         "entry": entry,
         "entry_bid": rows[i]["bid"],
@@ -83,7 +111,7 @@ def forward_multiple(rows, i, horizon, realistic=True):
         "peak_multiple": round(peak / entry, 2),
         "end_multiple": round(end / entry, 2) if end else 0.0,
         "days_to_peak": next((n for n, r in enumerate(window, 1)
-                              if exit_price(r) >= peak), len(window)),
+                              if out(r) >= peak), len(window)),
     }
 
 
@@ -170,7 +198,7 @@ FEATURES = ["price", "spread_pct", "vol_oi", "ask_share", "sweep_share",
 
 
 def scan_contract(symbol, meta, horizon, min_price, max_price,
-                  realistic=True, max_spread_pct=None):
+                  model="mid", max_spread_pct=None):
     rows = uw.contract_history(symbol)      # raises; the caller reports why
     if len(rows) < 3:
         return []
@@ -179,9 +207,9 @@ def scan_contract(symbol, meta, horizon, min_price, max_price,
         price = rows[i]["ask"] or rows[i]["last"]
         if not (min_price <= price <= max_price):
             continue
-        if realistic and rows[i]["bid"] <= 0:
+        if model != "high" and rows[i]["bid"] <= 0:
             continue                # no bid means no exit; not a tradeable entry
-        fwd = forward_multiple(rows, i, horizon, realistic)
+        fwd = forward_multiple(rows, i, horizon, model)
         if not fwd:
             continue
         if max_spread_pct is not None and fwd["spread_pct"] > max_spread_pct:
@@ -232,11 +260,13 @@ def summarise(obs, threshold, take=None):
 
 
 def main(args):
-    fills = "OPTIMISTIC (exits at the high)" if args.optimistic \
-        else "realistic (exits at the bid)"
+    model = args.fills
+    label = {"high": "the day's print (not an order you can place)",
+             "mid": "a tick-rounded limit at the midpoint",
+             "bid": "hitting the bid (the floor)"}[model]
     print(f"Finding candidates: OTM, {args.min_dte}-{args.max_dte} DTE, "
           f"${args.min_price}-${args.max_price}")
-    print(f"Fills: {fills}"
+    print(f"Fills: {model} — {label}"
           + (f", max spread {args.max_spread}%" if args.max_spread else "") + "\n")
     try:
         raw_pool = uw.screen_contracts(
@@ -271,8 +301,7 @@ def main(args):
         try:
             got = scan_contract(c["option_symbol"], c, args.horizon,
                                 args.min_price, args.max_price,
-                                realistic=not args.optimistic,
-                                max_spread_pct=args.max_spread)
+                                model=model, max_spread_pct=args.max_spread)
         except uw.UWError as err:
             failures.append(f"{c['option_symbol']}: {err}")
             if len(failures) == 1:
@@ -316,6 +345,24 @@ def main(args):
     print(f"    returned per $1 staked : ${overall['realised_avg']}")
     print(f"    break-even needs       : {round(100 / args.multiple, 1)}% "
           f"touching {args.multiple}x")
+
+    # How much of that number is the fill assumption rather than the setup?
+    print(f"\n  Same entries under the other fill models:")
+    for alt in ("high", "mid", "bid"):
+        if alt == model:
+            continue
+        alt_obs = []
+        for c in pool:
+            try:
+                alt_obs += scan_contract(c["option_symbol"], c, args.horizon,
+                                         args.min_price, args.max_price,
+                                         model=alt, max_spread_pct=args.max_spread)
+            except uw.UWError:
+                continue
+        if alt_obs:
+            s = summarise(alt_obs, args.multiple)
+            print(f"    --fills {alt:<4} : ${s['realised_avg']} per $1, "
+                  f"{s['explosion_rate']}% touching, n={s['count']}")
 
     print(f"\n{'═' * 64}\nWhat separates the ones that ran:\n")
     for feat in FEATURES:
@@ -365,14 +412,10 @@ def main(args):
                                     if len(v) >= C.BASE_RATE_MIN_SAMPLE}
     C.EXPLOSION_FILE.write_text(json.dumps(payload, indent=2))
     print(f"Wrote {C.EXPLOSION_FILE}")
-    if args.optimistic:
-        print("\nOPTIMISTIC fills: exits credited at the day's high, a print "
-              "somebody got rather than a price you could sell into. Re-run "
-              "without --optimistic for bid-based exits.")
-    else:
-        print("\nExits are credited at the bid, and entries without a bid are "
-              "skipped. Still optimistic in one way: it assumes the whole "
-              "position fills at the touch, and size moves a thin book.")
+    print("\nStill optimistic in one way under every model: the whole "
+          "position is assumed to fill at the touch, and size moves a thin "
+          "book. Re-run with --fills high / bid to see how much of any result "
+          "is the fill assumption rather than the setup.")
     return 0
 
 
@@ -390,10 +433,10 @@ if __name__ == "__main__":
     ap.add_argument("--contracts", type=int, default=150,
                     help="how many contracts to pull history for (1 request each)")
     ap.add_argument("--type", choices=["call", "put"], default=None)
-    ap.add_argument("--optimistic", action="store_true",
-                    help="credit exits at the day's high instead of the bid. "
-                         "Shows the number the first run reported; not "
-                         "reachable by any real order.")
+    ap.add_argument("--fills", default="mid", choices=["high", "mid", "bid"],
+                    help="high: the day's print, not an order you can place. "
+                         "mid: a tick-rounded limit, what a real order reaches. "
+                         "bid: hit the bid, the floor. Default mid.")
     ap.add_argument("--max-spread", type=float, default=None,
                     help="skip entries wider than this %% spread at entry")
     a = ap.parse_args()
