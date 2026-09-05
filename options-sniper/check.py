@@ -50,7 +50,6 @@ report("FINVIZ_AUTH", OK if C.FINVIZ_AUTH else WARN,
 # after the deploy that dropped it. Checked up front instead.
 section("2. Dependencies")
 for mod, need, why in (("requests", True, "live scanning"),
-                       ("yfinance", False, "backtest history — python backtest.py"),
                        ("anthropic", False, "analyst layer — USE_ANALYST=1")):
     try:
         __import__(mod)
