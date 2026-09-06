@@ -231,11 +231,35 @@ def mark_paper():
     return len(closed)
 
 
+def send_paper_daily():
+    """After the bell, once. The monitor is the only thing still running then.
+
+    It has to fire on a closed market, so main()'s market-open guard cannot
+    cover it — a summary that only sends while the market is open would never
+    send at all.
+    """
+    now = market.now_et()
+    if now.weekday() >= 5 or market.is_holiday(now):
+        return False
+    if now.time() < market.closes_at(now):
+        return False                        # bell has not gone yet
+    try:
+        return paper.send_daily()
+    except Exception as e:                  # never take the monitor down
+        print(f"paper daily failed: {e}")
+        return False
+
+
 def main(dry_run=False):
+    # Both of these have to run on a CLOSED market. A position opened at 15:29
+    # is still being marked at 15:44, and a summary that only sends while the
+    # market is open would never send at all.
+    mark_paper()
+    if not dry_run and send_paper_daily():
+        print("paper daily summary sent")
     if not dry_run and not market.is_open():
         print("Market closed —", market.reason())
         return
-    mark_paper()
     exits = check_positions(dry_run)
     entries = check_shortlist(dry_run)
     print(f"exits: {exits}  entries: {entries}")

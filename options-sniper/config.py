@@ -43,6 +43,10 @@ UW_BASE          = "https://api.unusualwhales.com"
 FINVIZ_AUTH      = _clean("FINVIZ_AUTH")
 TELEGRAM_TOKEN   = _clean("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = _clean("TELEGRAM_CHAT_ID")
+# Optional second destination for the paper record. A month of "closed +40% in
+# 4 minutes" would otherwise bury the handful of alerts Salem acts on. Unset,
+# both go to the same chat.
+TELEGRAM_PAPER_CHAT_ID = _clean("TELEGRAM_PAPER_CHAT_ID")
 
 # ── Scoring (agreed design: 30/30/20/20, threshold 85) ──────────
 WEIGHTS = {"flow": 30, "technical": 30, "catalyst": 20, "liquidity": 20}

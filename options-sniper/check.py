@@ -225,6 +225,12 @@ if st["n"] or st["open"]:
               if st["n"] else ""))
 else:
     report("record", WARN, "empty — no alert has opened a paper position yet")
+if C.TELEGRAM_PAPER_CHAT_ID:
+    report("paper chat", OK, f"separate — {C.TELEGRAM_PAPER_CHAT_ID[:6]}…")
+else:
+    report("paper chat", WARN,
+           "not set — results will share the alerts chat "
+           "(set TELEGRAM_PAPER_CHAT_ID)")
 
 # ── 5. Telegram ─────────────────────────────────────────────────
 section("7. Telegram")
