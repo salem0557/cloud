@@ -105,7 +105,11 @@ zero slippage it was measuring the assumption, not the trade.
 - Never change, round up, or "improve" the score, prices, or profit estimates you receive.
 - Budget filter is already applied in code: (ask price × 100) ≤ tier. Do NOT suggest contracts outside the provided list.
 - Confidence percentages are computed by code (score/100). Do not state your own confidence feelings as numbers.
-- Max 5 alerts/day is enforced by code (`state.py`, under a file lock). If asked to exceed it, refuse.
+- The daily alert cap is enforced by code (`state.py`, under a file lock) and read
+  from `MAX_ALERTS_PER_DAY` (30 on the container). If asked to exceed it, refuse.
+- A `caution` field on the payload is a WARNING, never a reason to withhold the
+  alert. Salem picks his own entries; the alert is information and the decision
+  is his. Render it as its own `⚠️` line and change nothing else.
 - Output the message only — no preamble, no explanation, no markdown fences.
 
 ## Scoring System (computed in scoring.py, NOT by you)
@@ -152,29 +156,69 @@ The wording is deliberately colloquial and jargon-free — "عند 185.1 يصي�
 all real and all true and none of them help him decide in the ten seconds he
 has. A test asserts they never reappear in the message.
 
-## Entry Alert Template (fill from JSON only, keep Arabic RTL)
+## Entry Alert Template — mirror `compose.render_entry`
+
+That renderer is the reference; match it rather than this sketch if they differ.
+
 ```
-🚨 {ticker} — تنبيه دخول (نقاط: {score}/100)
+🚨 {ticker} — {كول 📈 | بوت 📉}  ({score}/100)
 
-لماذا هذه الصفقة:
-{كل سطر من reasoning.links مسبوقاً بـ ←، ثم أي سطر من gaps مسبوقاً بـ ⚠️}
+{كل سطر من reasoning.links، بلا بادئة}
+{أي سطر من gaps مسبوقاً بـ ⚠️}
 
-الاتجاه: {📈 كول | 📉 بوت} ({flow_reason})
-السعر الحالي للسهم: ${spot}
-الهدف: ${technical.target} (كسر ${technical.level} + 1.5×ATR)
-نقطة الدخول: {technical.entry_rule}
-وقف الخسارة (السهم): ${technical.stop}
+اشترِ الآن:
+🟢 <200$: {strike} {كول|بوت} @ ${ask} → {cost}$ للعقد
+🟡 <100$: ...
+🔴 <50$: ما فيه عقد مناسب
 
-العقود المرشحة:
-🟢 آمن (ITM) <200$: {strike}{C|P} @ ${ask} → تكلفة ${cost} — ربح متوقع ~{expected_profit_pct}%
-🟡 متوازن (ATM) <100$: {strike}{C|P} @ ${ask} → تكلفة ${cost} — ربح متوقع ~{expected_profit_pct}%
-🔴 عالي المخاطرة (OTM) <50$: {strike}{C|P} @ ${ask} → تكلفة ${cost} — ربح متوقع ~{expected_profit_pct}%
+بِع عند +{take}%  |  اقطع عند {stop}%
 
-انتهاء الصلاحية: {expiry}
-⏰ {time_riyadh}
-⚠️ الربح المتوقع تقدير تقريبي (دلتا) وليس ضماناً
+⚠️ {caution إن وُجد}
+⏰ {time_riyadh} — الأرقام تقديرية لا مضمونة
 ```
-If a tier has `option_symbol: null`, write: `{tier}: لا يوجد عقد مناسب (سيولة/سعر)`.
+A tier with `option_symbol: null` reads `{tier}: ما فيه عقد مناسب`.
+
+## How an alert is actually produced
+
+Salem's design, and the one the code follows:
+
+1. `scanner.py` every **10 minutes** — scores the market, writes the ones worth
+   watching to `shortlist.json`. It does NOT alert on flow alone.
+2. `monitor.py` every **5 minutes** — waits for each watched name to break its
+   level on a CLOSED 15m candle.
+3. The break has to **hold**: `technical.holds()` requires the candle to close
+   in the third of its range that agrees with the direction and not to have
+   traded back through the level. A break that closes at the low of the bar
+   that made it was sold back inside those fifteen minutes.
+4. Pressure is re-read **at that moment**, not at scan time: if the flow has
+   turned against the setup, or the ask-side share has fallen below
+   `MIN_ASK_SIDE_RATIO`, the alert is dropped.
+
+Only then does it send. This is why silence is normal — five of twenty
+backtested sessions produced no signal at all.
+
+### The early notice — 👀 مراقبة — is NOT an alert
+
+Salem's goal from the first message is to be in before the move, not after a
+confirmed break has already taken 0.3 ATR: *"أركب موجة ارتفاع سعر العقد من
+أوله"*. Everything measured in this project is the confirmed break, so the two
+are kept separate and the notice says so in its own text, twice.
+
+It goes out once per name per day when price is within `APPROACH_ATR` of its
+level and has NOT broken it. It carries the level, the distance, exactly what
+would confirm — and the **magnet strike**: where money is being lifted into
+ahead of price, from `/flow-per-strike`.
+
+`uw.magnet_strike()` ranks on NET premium, not gross. On a real NVDA tape the
+biggest gross strike was 230 at $61M bought — against $56M sold. Gross picks a
+strike being distributed; net picks the one being built (250, taking 30% of the
+day's net call flow). A strike under `MIN_MAGNET_SHARE` of the day's flow is
+dropped as noise.
+
+Say what it is: positioning, not prophecy. Large accounts betting on a strike
+is not price reaching it. `render_watch` is deterministic and never routed
+through the composer — a model rewording "this has not broken yet" into
+something that sounds like a signal would defeat the whole separation.
 
 ## Exit Alert Template
 ```

@@ -51,9 +51,14 @@ def test_break_without_volume_is_not_confirmed():
 
 
 def _broken(close, level_vol=1200):
-    """50 flat bars around 100, then a break that closes at `close`."""
+    """50 flat bars around 100, then a break that closes at `close`.
+
+    flat() puts resistance at 100.5, so the breaking bar's low has to sit ABOVE
+    that or the bar traded back through the level it broke. The original
+    fixture used 100.3 and modelled exactly the reversal holds() now rejects.
+    """
     c = flat(50, vol=level_vol)
-    c[-1] = {"open": 100.4, "high": close + 0.5, "low": 100.3,
+    c[-1] = {"open": 100.55, "high": close + 0.05, "low": 100.55,
              "close": close, "volume": level_vol * 4, "end_time": "last"}
     return technical.analyse(c, "call")
 
@@ -76,13 +81,21 @@ def test_fresh_breakout_still_has_room():
 
 
 # ── Room to target is signed, not absolute ──────────────────────
-def _at(close, direction="call"):
+def _at(close, direction="call", rejected=False):
+    """A breaking candle. `rejected` puts the close at the wrong end of it.
+
+    The original fixture had high = close + 0.3, which put the close near the
+    BOTTOM of the bar — a break that was sold back inside its own candle. It
+    passed every check until holds() existed, which is the point of holds().
+    """
     c = flat(50)
     if direction == "call":
-        c[-1] = {"open": 100.4, "high": close + 0.3, "low": 100.3,
+        c[-1] = {"open": 100.6, "high": close + (0.3 if rejected else 0.05),
+                 "low": 100.55,                    # above the 100.5 resistance
                  "close": close, "volume": 5000, "end_time": "last"}
     else:
-        c[-1] = {"open": 99.6, "high": 99.7, "low": close - 0.3,
+        c[-1] = {"open": 99.4, "high": 99.45,      # below the 99.5 support
+                 "low": close - (0.3 if rejected else 0.05),
                  "close": close, "volume": 5000, "end_time": "last"}
     return technical.analyse(c, direction)
 
@@ -126,3 +139,42 @@ def test_expected_move_never_points_backwards():
 def test_direction_is_recorded_on_the_analysis():
     assert _at(100.85)["direction"] == "call"
     assert _at(99.2, "put")["direction"] == "put"
+
+
+
+# ── The break that reverses inside its own candle ───────────────
+def test_a_break_sold_back_inside_its_candle_does_not_confirm():
+    """Salem asked for alerts only when the break "will not reverse
+    immediately". A call that breaks out and closes at the LOW of the bar that
+    broke was rejected by sellers within those fifteen minutes — and it used
+    to clear every other check: level broken, volume behind it, room left."""
+    strong, weak = _at(100.85), _at(100.85, rejected=True)
+    assert strong["broke_level"] and weak["broke_level"]
+    assert strong["volume_ratio"] == weak["volume_ratio"]
+    assert technical.holds(strong) and not technical.holds(weak)
+    assert technical.confirms(strong) and not technical.confirms(weak)
+
+
+def test_the_same_rule_applies_to_a_breakdown():
+    strong = _at(99.15, direction="put")
+    weak = _at(99.15, direction="put", rejected=True)
+    assert technical.holds(strong) and not technical.holds(weak)
+
+
+def test_a_wick_back_through_the_level_is_a_reversal():
+    """Price traded back through the level during the candle. It closed beyond
+    it, but it did not hold it."""
+    c = flat(50)
+    c[-1] = {"open": 100.6, "high": 100.9, "low": 100.0,   # dipped under 100.5
+             "close": 100.85, "volume": 5000, "end_time": "last"}
+    t = technical.analyse(c, "call")
+    assert t["wick_back"] is True
+    assert not technical.holds(t)
+
+
+def test_a_flat_candle_is_not_treated_as_a_rejection():
+    """Zero range means nothing was rejected; dividing by it would crash."""
+    c = flat(50)
+    c[-1] = {"open": 100.85, "high": 100.85, "low": 100.85,
+             "close": 100.85, "volume": 5000, "end_time": "last"}
+    assert technical.holds(technical.analyse(c, "call"))

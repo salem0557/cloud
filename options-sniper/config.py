@@ -43,6 +43,10 @@ UW_BASE          = "https://api.unusualwhales.com"
 FINVIZ_AUTH      = _clean("FINVIZ_AUTH")
 TELEGRAM_TOKEN   = _clean("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = _clean("TELEGRAM_CHAT_ID")
+# Optional second destination for the paper record. A month of "closed +40% in
+# 4 minutes" would otherwise bury the handful of alerts Salem acts on. Unset,
+# both go to the same chat.
+TELEGRAM_PAPER_CHAT_ID = _clean("TELEGRAM_PAPER_CHAT_ID")
 
 # ── Scoring (agreed design: 30/30/20/20, threshold 85) ──────────
 WEIGHTS = {"flow": 30, "technical": 30, "catalyst": 20, "liquidity": 20}
@@ -87,7 +91,18 @@ ATR_PERIOD         = 14
 VOLUME_SPIKE_RATIO = 1.5    # candle volume vs prior-bar average
 TARGET_ATR_MULT    = 1.5    # target = broken level +/- 1.5 x ATR
 STOP_ATR_MULT      = 1.0    # stop   = broken level -/+ 1.0 x ATR
-MIN_REMAINING_ATR  = 0.75   # reject a setup whose target is already this close.
+MIN_REMAINING_ATR  = 0.75
+
+# ── The early notice: "this one is coiling" ─────────────────────
+# Salem's actual goal, stated from the first message: ride the contract's rise
+# from the start, not after the break has been confirmed and 0.3 ATR is
+# already gone. A confirmed break is the measured signal and stays the only
+# thing called an alert; this is a heads-up on a name approaching its level,
+# so he can watch it himself and decide to be early. Set WATCH_NOTICE = 0 to
+# turn it off.
+WATCH_NOTICE       = int(os.environ.get("WATCH_NOTICE") or 1)
+APPROACH_ATR       = 0.60    # within this much of the level -> worth watching
+MIN_MAGNET_SHARE   = 0.15    # a strike taking under 15% of net flow is noise   # reject a setup whose target is already this close.
                             # Without it the scanner alerts on breakouts that have
                             # ALREADY run to target: price $102.40, target $102.58,
                             # 18c of room left and an "expected profit" of 6%.
@@ -179,14 +194,20 @@ PAPER_BASELINE = {"hit": 43.2, "lost": 41.2, "avg": 1.033}   # pre-commission
 # backtest and the paper book both charge it now.
 COMMISSION_PER_CONTRACT = float(os.environ.get("COMMISSION_PER_CONTRACT") or 0.65)
 
-# Stop alerting for the day once the paper book has lost this much. At 30
-# alerts a day and a 41% loss rate, a bad session is not a possibility, it is
-# a certainty, and a rule that fires 30 times into one is the fastest way to
-# turn a thin edge into a large loss. 0 disables.
+# These two do NOT block an alert. Salem wants all 30 of the best setups and
+# picks his own entries — an alert is information, and withholding information
+# because a PAPER position lost is the wrong trade-off entirely. They add a
+# warning line to the message, and they gate the paper book, which has to stay
+# a record of a disciplined trader rather than of thirty correlated bets.
+#
+# The paper book stops taking new positions once it is down this much on the
+# day. At 30 alerts and a 41% loss rate a bad session is a certainty, and a
+# book that keeps opening into one stops measuring the rule. 0 disables.
 MAX_DAILY_LOSS_USD = float(os.environ.get("MAX_DAILY_LOSS_USD") or 300)
 
 # Thirty calls on a rally day are one bet placed thirty times, not thirty
-# bets. No more than this many open paper positions on the same side.
+# bets. The paper book holds at this many open on one side; the alert still
+# goes out, carrying the count so Salem can see the crowding himself.
 MAX_SAME_DIRECTION_OPEN = int(os.environ.get("MAX_SAME_DIRECTION_OPEN") or 4)
 
 # ── The three gates Salem's previous system had and our test excluded ──

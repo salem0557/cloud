@@ -35,6 +35,7 @@ venv_boot.ensure(["requests"])
 import config as C
 import market
 import uw
+from telegram_send import send_paper
 from zero_dte import entry_exit, measured_spread, minute_of
 
 PAPER_FILE = C.DATA_DIR / "paper.json"
@@ -72,6 +73,9 @@ def record(payload, tier=None):
     if not pick:
         return None
     take, stop = rule_for(pick.get("dte"))
+    ok, why = may_open(payload.get("direction") or pick.get("type") or "")
+    if not ok:
+        return None                     # the alert went out; the book holds
     book = _load()
     if any(p["option_symbol"] == pick["option_symbol"] and p["open"]
            for p in book["open"]):
@@ -82,6 +86,7 @@ def record(payload, tier=None):
         "strike": pick.get("strike"), "type": pick.get("type"),
         "expiry": pick.get("expiry"), "dte": pick.get("dte"),
         "tier": pick.get("tier", ""),
+        "direction": payload.get("direction") or pick.get("type"),
         "entry_date": datetime.date.today().isoformat(),
         "entry_minute": _now_et_minute(),
         "entry_ask": pick.get("ask"),
@@ -97,7 +102,7 @@ def record(payload, tier=None):
     return pos
 
 
-def mark(verbose=True):
+def mark(verbose=True, notify=True):
     """Advance every open position on its own tape and close what triggered.
 
     A position is scored from the minute it was opened, not from the start of
@@ -139,10 +144,12 @@ def mark(verbose=True):
             "closed_at": datetime.datetime.now().isoformat(timespec="seconds"),
         })
         closed_now.append(pos)
+        pct = (pos["multiple"] - 1) * 100
         if verbose:
-            pct = (pos["multiple"] - 1) * 100
             print(f"  CLOSED {pos['ticker']} {pos['option_symbol']} "
                   f"{pos['why']} {pct:+.1f}% after {pos['minutes']}m")
+        if notify:
+            send_paper(close_message(pos))
     book["open"] = still_open
     book["closed"].extend(closed_now)
     _save(book)
@@ -162,7 +169,8 @@ def open_same_direction(direction, book=None):
     """How many open paper positions already point the way this alert does."""
     book = book or _load()
     return sum(1 for pos in book["open"]
-               if pos.get("open") and pos.get("type") == direction)
+               if pos.get("open")
+               and (pos.get("direction") or pos.get("type")) == direction)
 
 
 def may_open(direction):
@@ -184,6 +192,69 @@ def may_open(direction):
             return False, (f"{n} {direction}s already open — the same bet "
                            f"{n} times is not {n} bets")
     return True, ""
+
+
+WHY_AR = {"take": "وصل الهدف ✅", "stop": "ضرب الوقف ❌",
+          "timeout": "انتهت المهلة ⏳"}
+
+
+def close_message(pos):
+    """One closed paper position, in three lines.
+
+    Deliberately short: this arrives dozens of times a month and is a record,
+    not a decision. Anything longer and it stops being read.
+    """
+    pct = (pos["multiple"] - 1) * 100
+    kind = "كول" if (pos.get("direction") or pos.get("type")) == "call" else "بوت"
+    pnl = (pos["multiple"] - 1) * (pos.get("cost") or 0)
+    return (f"📄 ورقي — {pos['ticker']} {pos.get('strike'):g} {kind}\n"
+            f"{WHY_AR.get(pos['why'], pos['why'])}  {pct:+.1f}%  "
+            f"({pnl:+.0f}$) خلال {pos['minutes']} د\n"
+            f"دخول ${pos['entry_price']:.2f} ← خروج ${pos['exit_price']:.2f}")
+
+
+def daily_message(book=None):
+    """The end of a session: today alone, then the record it is building."""
+    book = book or _load()
+    today = datetime.date.today().isoformat()
+    done = [p for p in book["closed"] if (p.get("closed_at") or "")[:10] == today]
+    s = summary(book)
+    lines = [f"📄 ملخص التداول الورقي — {today}", ""]
+    if not done:
+        lines.append("لا صفقات اليوم.")
+    else:
+        took = sum(1 for p in done if p["why"] == "take")
+        stopped = sum(1 for p in done if p["why"] == "stop")
+        timed = sum(1 for p in done if p["why"] == "timeout")
+        lines += [f"اليوم: {len(done)} صفقات",
+                  f"  ✅ وصلت الهدف: {took}",
+                  f"  ❌ ضربت الوقف: {stopped}",
+                  f"  ⏳ انتهت المهلة: {timed}",
+                  f"  الناتج: {today_pnl_usd(book):+.0f}$"]
+    if s.get("n"):
+        lines += ["", f"الإجمالي: {s['n']} صفقة مغلقة، {s['open']} مفتوحة", "",
+                  f"  يصل الهدف  {s['hit']:.1f}%   "
+                  f"(الاختبار قال {C.PAPER_BASELINE['hit']:.1f}%)",
+                  f"  يخسر       {s['lost']:.1f}%   "
+                  f"(الاختبار قال {C.PAPER_BASELINE['lost']:.1f}%)",
+                  f"  لكل 1$     ${s['avg']:.3f}   "
+                  f"(الاختبار قال ${C.PAPER_BASELINE['avg']:.3f})"]
+        if s["n"] < C.PAPER_MIN_TRADES:
+            lines += ["", f"⚠️ {s['n']} صفقة — تحت {C.PAPER_MIN_TRADES} "
+                          "الرقم لا يعني شيئاً بعد"]
+    return "\n".join(lines)
+
+
+def send_daily(book=None):
+    """Once per session, after the bell. Returns True if it went out."""
+    book = book or _load()
+    today = datetime.date.today().isoformat()
+    if book.get("last_daily") == today:
+        return False                    # already sent; the monitor runs often
+    ok = send_paper(daily_message(book))
+    book["last_daily"] = today
+    _save(book)
+    return ok
 
 
 def summary(book=None):
@@ -241,13 +312,18 @@ def _index_of(rows, minute):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("action", choices=["mark", "report", "positions"],
-                   help="mark: advance open positions; report: the record")
+    p.add_argument("action", choices=["mark", "report", "positions", "daily"],
+                   help="mark: advance open positions; report: the record; "
+                        "daily: send today's summary to Telegram")
     args = p.parse_args(argv)
     if args.action == "mark":
         closed = mark()
         print(f"{len(closed)} closed")
         return report()
+    if args.action == "daily":
+        print(daily_message())
+        print("sent" if send_daily() else "already sent today")
+        return 0
     if args.action == "positions":
         for pos in _load()["open"]:
             print(f"  {pos['ticker']:6s} {pos['option_symbol']}  "

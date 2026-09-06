@@ -174,3 +174,90 @@ def test_the_same_direction_cap_stops_the_thirtieth_call(monkeypatch, tmp_path):
     ok, why = paper.may_open("call")
     assert not ok and "same bet" in why
     assert paper.may_open("put")[0]          # the other side is a different bet
+
+
+# ── The paper record has its own Telegram section ───────────────
+import datetime  # noqa: E402
+import telegram_send  # noqa: E402
+
+
+def closed(why="take", mult=1.40, when=None, **over):
+    row = {"ticker": "NVDA", "strike": 185.0, "direction": "call", "why": why,
+           "multiple": mult, "cost": 95.0, "minutes": 4, "entry_price": 0.95,
+           "exit_price": round(0.95 * mult, 2),
+           "closed_at": (when or datetime.date.today().isoformat()) + "T20:14:00"}
+    row.update(over)
+    return row
+
+
+def test_paper_goes_to_its_own_chat_when_one_is_set(monkeypatch):
+    """A month of 'closed +40% in 4 minutes' would bury the handful of alerts
+    Salem actually acts on."""
+    seen = {}
+    monkeypatch.setattr(telegram_send, "TELEGRAM_TOKEN", "t")
+    monkeypatch.setattr(telegram_send, "TELEGRAM_CHAT_ID", "main")
+    monkeypatch.setattr(telegram_send.C, "TELEGRAM_PAPER_CHAT_ID", "paper")
+    monkeypatch.setattr(telegram_send.requests, "post",
+                        lambda url, json=None, **k: (seen.update(json), _Ok())[1])
+    telegram_send.send_paper("x")
+    assert seen["chat_id"] == "paper"
+
+
+def test_it_falls_back_to_the_main_chat_when_none_is_set(monkeypatch):
+    """Unset, nothing breaks — both land in the same place."""
+    seen = {}
+    monkeypatch.setattr(telegram_send, "TELEGRAM_TOKEN", "t")
+    monkeypatch.setattr(telegram_send, "TELEGRAM_CHAT_ID", "main")
+    monkeypatch.setattr(telegram_send.C, "TELEGRAM_PAPER_CHAT_ID", "")
+    monkeypatch.setattr(telegram_send.requests, "post",
+                        lambda url, json=None, **k: (seen.update(json), _Ok())[1])
+    telegram_send.send_paper("x")
+    assert seen["chat_id"] == "main"
+
+
+class _Ok:
+    ok = True
+    text = ""
+
+    @staticmethod
+    def json():
+        return {"ok": True}
+
+
+def test_a_close_message_fits_on_a_phone():
+    """It arrives dozens of times a month. It is a record, not a decision."""
+    msg = paper.close_message(closed())
+    assert msg.count("\n") == 2
+    assert "NVDA 185 كول" in msg and "وصل الهدف ✅" in msg
+    assert "+40.0%" in msg and "(+38$)" in msg
+
+
+def test_a_stop_and_a_timeout_read_differently():
+    assert "ضرب الوقف ❌" in paper.close_message(closed("stop", 0.70))
+    assert "انتهت المهلة ⏳" in paper.close_message(closed("timeout", 0.98))
+
+
+def test_the_daily_summary_shows_today_beside_the_record():
+    book = {"open": [], "closed": [closed(), closed("stop", 0.70),
+                                   closed("timeout", 0.98)]}
+    msg = paper.daily_message(book)
+    assert "اليوم: 3 صفقات" in msg
+    assert "الاختبار قال 43.2%" in msg          # the number being tested
+    assert "الرقم لا يعني شيئاً بعد" in msg      # under 30 trades
+
+
+def test_yesterdays_trades_are_not_counted_as_todays():
+    old = closed(when="2026-01-02")
+    msg = paper.daily_message({"open": [], "closed": [old]})
+    assert "لا صفقات اليوم" in msg
+    assert "الإجمالي: 1 صفقة" in msg            # still in the running record
+
+
+def test_the_summary_is_sent_once_a_day(monkeypatch, tmp_path):
+    fresh(monkeypatch, tmp_path)
+    sent = []
+    monkeypatch.setattr(paper, "send_paper", lambda m: (sent.append(m), True)[1])
+    paper._save({"open": [], "closed": [closed()]})
+    assert paper.send_daily() is True
+    assert paper.send_daily() is False          # the monitor runs every 5 min
+    assert len(sent) == 1

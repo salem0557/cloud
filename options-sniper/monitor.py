@@ -18,11 +18,14 @@ import config as C
 import journal
 import market
 import paper
+import reasoning
 import state
 import technical
 import uw
 from compose import compose, NO_TRADE
-from scoring import (contract_cost, exit_rule, expected_profit_pct,
+from scanner import aggregate_flow, flow_reason
+from scoring import (ask_side_ratio, contract_cost, exit_rule,
+                     expected_profit_pct, flow_direction,
                      technical_score, pick_contracts_by_budget)
 from telegram_send import send
 
@@ -34,6 +37,15 @@ def load_json(path, default):
         return json.loads(path.read_text())
     except (ValueError, OSError):
         return default
+
+
+def save_json(path, data):
+    """Best effort. A failed write must not stop the monitor — at worst a
+    watch notice repeats, which is noise, not damage."""
+    try:
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    except OSError as e:
+        print(f"could not write {path.name}: {e}")
 
 
 def now_riyadh():
@@ -106,6 +118,20 @@ def check_positions(dry_run=False):
 
 
 # ── Entry monitoring: shortlist breakouts ───────────────────────
+def send_watch(ticker, direction, tech, dry_run=False):
+    """One heads-up per name per day, before any break."""
+    magnet = uw.magnet_strike(ticker, direction, tech["close"])
+    if magnet and magnet["share"] < C.MIN_MAGNET_SHARE:
+        magnet = None                   # a strike taking 4% of flow says nothing
+    payload = {"ticker": ticker, "direction": direction, "technical": tech,
+               "magnet": magnet, "time_riyadh": now_riyadh()}
+    msg = compose("watch", payload)
+    if dry_run:
+        print("\n" + "-" * 50 + f"\n[DRY RUN watch] {ticker}\n" + msg)
+        return True
+    return send(msg)
+
+
 def check_shortlist(dry_run=False):
     shortlist = load_json(C.SHORTLIST_FILE, [])
     if not shortlist:
@@ -126,9 +152,43 @@ def check_shortlist(dry_run=False):
             print(f"  {t}: {e}")
             continue
         if not technical.confirms(tech):
-            if tech and tech["broke_level"] and technical.is_late(tech):
-                print(f"  {t}: break already extended — skipped")
+            # Not confirmed. If it is CLOSE to its level, say so once — this is
+            # the early notice Salem asked for, and it is explicitly not an
+            # alert.
+            if (C.WATCH_NOTICE and tech and not tech["broke_level"]
+                    and not item.get("watch_sent")):
+                gap = abs(tech["level"] - tech["close"])
+                if tech["atr"] > 0 and gap <= C.APPROACH_ATR * tech["atr"]:
+                    if send_watch(t, item["direction"], tech, dry_run):
+                        item["watch_sent"] = True
+                        save_json(C.SHORTLIST_FILE, shortlist)
+            if tech and tech["broke_level"]:
+                if technical.is_late(tech):
+                    print(f"  {t}: break already extended — skipped")
+                elif not technical.holds(tech):
+                    print(f"  {t}: broke and reversed inside the candle "
+                          f"(close {tech['close']} in a {tech['bar_low']}-"
+                          f"{tech['bar_high']} bar) — skipped")
             continue
+
+        # Pressure NOW, not at scan time. A shortlist entry can be twenty
+        # minutes old, and the flow that put it there may have turned; the
+        # break is only worth taking if buyers (or sellers) are still leaning.
+        try:
+            fresh = aggregate_flow(uw.ticker_flow_alerts(t)).get(t)
+        except uw.UWError:
+            fresh = None
+        if fresh:
+            ratio = ask_side_ratio(fresh)
+            side = flow_direction(fresh)
+            if side and side != item["direction"]:
+                print(f"  {t}: flow turned {side} against a "
+                      f"{item['direction']} setup — skipped")
+                continue
+            if ratio and ratio < C.MIN_ASK_SIDE_RATIO:
+                print(f"  {t}: buying pressure faded ({ratio*100:.0f}% at the "
+                      f"ask, need {C.MIN_ASK_SIDE_RATIO*100:.0f}%) — skipped")
+                continue
 
         # re-score: shortlist carries flow+catalyst+liquidity ("base_score");
         # the technical 30 is recomputed from the break that just confirmed.
@@ -164,8 +224,13 @@ def check_shortlist(dry_run=False):
 
         payload = {"ticker": t, "score": score, "direction": item["direction"],
                    "spot": tech["close"], "technical": tech, "tiers": tiers,
-                   "flow_reason": "كسر مؤكد على فريم 15د بعد تدفق خيارات",
+                   "flow_reason": (flow_reason(fresh, item["direction"]) if fresh
+                                   else "كسر مؤكد على فريم 15د بعد تدفق خيارات"),
                    "news": [], "time_riyadh": now_riyadh()}
+        # The chain was only ever built in scanner.to_payload, so an alert that
+        # came through the watchlist — the path Salem actually wants — arrived
+        # without the reasoning.
+        payload["reasoning"] = reasoning.chain(payload)
         msg = compose("entry", payload)
         if msg.startswith(NO_TRADE):
             print(t, msg)
@@ -199,11 +264,35 @@ def mark_paper():
     return len(closed)
 
 
+def send_paper_daily():
+    """After the bell, once. The monitor is the only thing still running then.
+
+    It has to fire on a closed market, so main()'s market-open guard cannot
+    cover it — a summary that only sends while the market is open would never
+    send at all.
+    """
+    now = market.now_et()
+    if now.weekday() >= 5 or market.is_holiday(now):
+        return False
+    if now.time() < market.closes_at(now):
+        return False                        # bell has not gone yet
+    try:
+        return paper.send_daily()
+    except Exception as e:                  # never take the monitor down
+        print(f"paper daily failed: {e}")
+        return False
+
+
 def main(dry_run=False):
+    # Both of these have to run on a CLOSED market. A position opened at 15:29
+    # is still being marked at 15:44, and a summary that only sends while the
+    # market is open would never send at all.
+    mark_paper()
+    if not dry_run and send_paper_daily():
+        print("paper daily summary sent")
     if not dry_run and not market.is_open():
         print("Market closed —", market.reason())
         return
-    mark_paper()
     exits = check_positions(dry_run)
     entries = check_shortlist(dry_run)
     print(f"exits: {exits}  entries: {entries}")

@@ -477,3 +477,25 @@ def test_a_flat_timeout_loses_the_round_trip():
     t = z.entry_exit(rows, 0, 40, 25, 3, 4.0, "15:30", fee=0.65)
     assert t["why"] == "timeout"
     assert t["multiple"] < 0.95 if "multiple" in t else t["exit"] / t["entry"] < 0.95
+
+
+# ── The cheap far strike, asked at the pair actually used ───────
+def test_the_budget_breakdown_splits_cost_from_distance():
+    """Salem likes the cheap far strike. Those are two different questions:
+    price is what he pays, distance to the strike is what the stock has to do
+    for it to pay back. A $50 contract one strike out and a $50 contract five
+    strikes out are not the same trade."""
+    assert z.bucket("price", 0.45) == "budget=$50"
+    assert z.bucket("price", 1.80) == "budget=$200"
+    assert z.bucket("moneyness", 0.3) == "otm=<0.5%"
+    assert z.bucket("moneyness", 4.0) == "otm=3%+"
+
+
+def test_a_thin_split_is_dropped_rather_than_ranked():
+    """Every run so far said cheap loses — at +25/-10, a stop inside the noise
+    on a contract quoted 5% wide. Re-asking at +40/-30 is only worth anything
+    if the answer rests on more than a handful of contracts."""
+    import statistics as st
+    obs = [{"multiple": 1.4, "why": "take", "symbol": "A"} for _ in range(19)]
+    assert len(obs) < 20                    # below the floor by_budget applies
+    assert st.mean(o["multiple"] for o in obs) > 1.0   # and it would have "won"

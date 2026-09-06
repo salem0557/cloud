@@ -87,10 +87,40 @@ def render_entry(p):
     if any(t.get("dte") == 0 for t in p.get("tiers", [])):
         lines.append(f"اخرج قبل {C.ZERO_DTE_HARD_EXIT_ET} نيويورك مهما صار")
 
+    if p.get("caution"):
+        lines += ["", f"⚠️ {p['caution']}"]
     lines += ["", f"⏰ {p.get('time_riyadh', '')} — الأرقام تقديرية لا مضمونة"]
     a = p.get("analyst")
     if a and a.get("reading"):
         lines += ["", f"🧠 {a['reading']}"]
+    return "\n".join(lines)
+
+
+def render_watch(p):
+    """The early notice. Deliberately NOT an alert, and it says so twice.
+
+    A confirmed break is the only thing this system has measured an edge on.
+    This message goes out before that, on Salem's explicit ask to be early —
+    so it names what has NOT happened yet, and what would have to.
+    """
+    tech, up = p["technical"], p["direction"] == "call"
+    lines = [f"👀 مراقبة — {p['ticker']} {'كول 📈' if up else 'بوت 📉'}",
+             "",
+             f"السعر {tech['close']:.2f}، و{'المقاومة' if up else 'الدعم'} "
+             f"{tech['level']:.2f} — باقي {abs(tech['level'] - tech['close']):.2f}$",
+             f"لسه ما كسر. التأكيد = إغلاق شمعة 15د "
+             f"{'فوق' if up else 'تحت'} {tech['level']:.2f} بحجم أعلى من المعتاد"]
+    m = p.get("magnet")
+    if m:
+        lines += ["",
+                  f"💰 الفلوس داخلة على إضراب {m['strike']:g} — "
+                  f"صافي {m['net_premium']/1e6:.1f}M$ شراء، "
+                  f"{m['share']*100:.0f}% من تدفق اليوم",
+                  f"   (على بُعد {m['distance_pct']:.1f}% من السعر — "
+                  "هذا مكان رهانهم، مو وعد إنه يوصله)"]
+    lines += ["",
+              "⚠️ هذا مو تنبيه دخول. الدخول المقاس يجي بعد التأكيد.",
+              f"⏰ {p.get('time_riyadh', '')}"]
     return "\n".join(lines)
 
 
@@ -131,6 +161,12 @@ def _via_claude(kind, payload):
 
 
 def compose(kind, payload):
+    # The watch notice is deterministic only. It exists to say what has NOT
+    # happened, and a composer that reworded it into something that sounds
+    # like a signal would defeat the entire point of separating the two.
+    if kind == "watch":
+        return render_watch(payload)
+
     """-> message string, or a 'NO_TRADE: reason' string."""
     if kind == "entry" and not _required_present(payload):
         return f"{NO_TRADE}: بيانات ناقصة (هدف/وقف/سعر)"
@@ -143,4 +179,6 @@ def compose(kind, payload):
             # Claude refused on data we already validated -> trust the data,
             # but keep the refusal visible in the log.
             print("[compose] claude returned:", msg[:120], "— falling back")
+    if kind == "watch":
+        return render_watch(payload)
     return render_entry(payload) if kind == "entry" else render_exit(payload)

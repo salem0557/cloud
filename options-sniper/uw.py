@@ -467,6 +467,75 @@ def _normalise_screener_row(c):
     }
 
 
+def strike_flow(ticker, date=None):
+    """GET /api/stock/{ticker}/flow-per-strike — where the money is going.
+
+    Every other signal in this system reacts to a move that already started.
+    This one is positioning: it says which strike buyers are lifting the offer
+    on RIGHT NOW, before price gets there. Salem has asked for this from the
+    first message — "أركب موجة ارتفاع سعر العقد من أوله".
+
+    Read it for what it is. Money concentrating at a strike says where large
+    accounts are betting price goes; it does not say price goes there, and the
+    same tape shows strikes being SOLD just as heavily. It belongs on a
+    watchlist, not on a trade.
+    """
+    raw = _get(f"/api/stock/{ticker}/flow-per-strike",
+               {"date": date} if date else {})
+    rows = []
+    for r in raw:
+        if not isinstance(r, dict):
+            continue
+        rows.append({
+            "strike": _num(r.get("strike")),
+            "call_ask": _num(r.get("call_premium_ask_side")),
+            "call_bid": _num(r.get("call_premium_bid_side")),
+            "put_ask": _num(r.get("put_premium_ask_side")),
+            "put_bid": _num(r.get("put_premium_bid_side")),
+            "call_volume": _num(r.get("call_volume")),
+            "put_volume": _num(r.get("put_volume")),
+        })
+    return [r for r in rows if r["strike"] > 0]
+
+
+def magnet_strike(ticker, direction, spot, date=None):
+    """The strike money is being lifted INTO, ahead of price. -> dict or None.
+
+    Net premium, not gross: a strike with $61M bought and $56M sold is being
+    accumulated by $5M, while one with $53M bought and $63M sold is being
+    distributed. Ranking on the gross figure would have picked the second.
+
+    Only strikes price has not reached yet — a strike already in the money is
+    where the move went, not where it is going. `share` is that strike's net
+    as a fraction of all net buying on its side, so one strike taking 40% of
+    the day's flow reads differently from one taking 4%.
+    """
+    if spot <= 0:
+        return None
+    try:
+        rows = strike_flow(ticker, date)
+    except UWError:
+        return None
+    up = direction == "call"
+    ahead = [r for r in rows if (r["strike"] > spot if up else r["strike"] < spot)]
+    nets = []
+    for r in ahead:
+        net = (r["call_ask"] - r["call_bid"]) if up else (r["put_ask"] - r["put_bid"])
+        if net > 0:
+            nets.append((net, r))
+    if not nets:
+        return None
+    total = sum(n for n, _ in nets)
+    net, row = max(nets, key=lambda pair: pair[0])
+    return {
+        "strike": row["strike"],
+        "net_premium": round(net, 0),
+        "share": round(net / total, 3) if total else 0.0,
+        "distance_pct": round(abs(row["strike"] - spot) / spot * 100, 2),
+        "volume": row["call_volume"] if up else row["put_volume"],
+    }
+
+
 def contract_intraday(option_symbol, date=None):
     """GET /api/option-contract/{id}/intraday — one contract, minute by minute.
 
