@@ -39,6 +39,15 @@ def load_json(path, default):
         return default
 
 
+def save_json(path, data):
+    """Best effort. A failed write must not stop the monitor — at worst a
+    watch notice repeats, which is noise, not damage."""
+    try:
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    except OSError as e:
+        print(f"could not write {path.name}: {e}")
+
+
 def now_riyadh():
     return datetime.datetime.now().strftime("%H:%M")
 
@@ -109,6 +118,20 @@ def check_positions(dry_run=False):
 
 
 # ── Entry monitoring: shortlist breakouts ───────────────────────
+def send_watch(ticker, direction, tech, dry_run=False):
+    """One heads-up per name per day, before any break."""
+    magnet = uw.magnet_strike(ticker, direction, tech["close"])
+    if magnet and magnet["share"] < C.MIN_MAGNET_SHARE:
+        magnet = None                   # a strike taking 4% of flow says nothing
+    payload = {"ticker": ticker, "direction": direction, "technical": tech,
+               "magnet": magnet, "time_riyadh": now_riyadh()}
+    msg = compose("watch", payload)
+    if dry_run:
+        print("\n" + "-" * 50 + f"\n[DRY RUN watch] {ticker}\n" + msg)
+        return True
+    return send(msg)
+
+
 def check_shortlist(dry_run=False):
     shortlist = load_json(C.SHORTLIST_FILE, [])
     if not shortlist:
@@ -129,6 +152,16 @@ def check_shortlist(dry_run=False):
             print(f"  {t}: {e}")
             continue
         if not technical.confirms(tech):
+            # Not confirmed. If it is CLOSE to its level, say so once — this is
+            # the early notice Salem asked for, and it is explicitly not an
+            # alert.
+            if (C.WATCH_NOTICE and tech and not tech["broke_level"]
+                    and not item.get("watch_sent")):
+                gap = abs(tech["level"] - tech["close"])
+                if tech["atr"] > 0 and gap <= C.APPROACH_ATR * tech["atr"]:
+                    if send_watch(t, item["direction"], tech, dry_run):
+                        item["watch_sent"] = True
+                        save_json(C.SHORTLIST_FILE, shortlist)
             if tech and tech["broke_level"]:
                 if technical.is_late(tech):
                     print(f"  {t}: break already extended — skipped")

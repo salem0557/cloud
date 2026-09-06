@@ -197,6 +197,29 @@ Salem's design, and the one the code follows:
 Only then does it send. This is why silence is normal — five of twenty
 backtested sessions produced no signal at all.
 
+### The early notice — 👀 مراقبة — is NOT an alert
+
+Salem's goal from the first message is to be in before the move, not after a
+confirmed break has already taken 0.3 ATR: *"أركب موجة ارتفاع سعر العقد من
+أوله"*. Everything measured in this project is the confirmed break, so the two
+are kept separate and the notice says so in its own text, twice.
+
+It goes out once per name per day when price is within `APPROACH_ATR` of its
+level and has NOT broken it. It carries the level, the distance, exactly what
+would confirm — and the **magnet strike**: where money is being lifted into
+ahead of price, from `/flow-per-strike`.
+
+`uw.magnet_strike()` ranks on NET premium, not gross. On a real NVDA tape the
+biggest gross strike was 230 at $61M bought — against $56M sold. Gross picks a
+strike being distributed; net picks the one being built (250, taking 30% of the
+day's net call flow). A strike under `MIN_MAGNET_SHARE` of the day's flow is
+dropped as noise.
+
+Say what it is: positioning, not prophecy. Large accounts betting on a strike
+is not price reaching it. `render_watch` is deterministic and never routed
+through the composer — a model rewording "this has not broken yet" into
+something that sounds like a signal would defeat the whole separation.
+
 ## Exit Alert Template
 ```
 🔔 {ticker} — تنبيه خروج

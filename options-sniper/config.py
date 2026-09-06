@@ -91,7 +91,18 @@ ATR_PERIOD         = 14
 VOLUME_SPIKE_RATIO = 1.5    # candle volume vs prior-bar average
 TARGET_ATR_MULT    = 1.5    # target = broken level +/- 1.5 x ATR
 STOP_ATR_MULT      = 1.0    # stop   = broken level -/+ 1.0 x ATR
-MIN_REMAINING_ATR  = 0.75   # reject a setup whose target is already this close.
+MIN_REMAINING_ATR  = 0.75
+
+# ── The early notice: "this one is coiling" ─────────────────────
+# Salem's actual goal, stated from the first message: ride the contract's rise
+# from the start, not after the break has been confirmed and 0.3 ATR is
+# already gone. A confirmed break is the measured signal and stays the only
+# thing called an alert; this is a heads-up on a name approaching its level,
+# so he can watch it himself and decide to be early. Set WATCH_NOTICE = 0 to
+# turn it off.
+WATCH_NOTICE       = int(os.environ.get("WATCH_NOTICE") or 1)
+APPROACH_ATR       = 0.60    # within this much of the level -> worth watching
+MIN_MAGNET_SHARE   = 0.15    # a strike taking under 15% of net flow is noise   # reject a setup whose target is already this close.
                             # Without it the scanner alerts on breakouts that have
                             # ALREADY run to target: price $102.40, target $102.58,
                             # 18c of room left and an "expected profit" of 6%.
