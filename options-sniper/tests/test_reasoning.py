@@ -38,7 +38,7 @@ def test_the_chain_starts_at_the_stock_and_ends_at_the_contract():
 
 def test_a_call_reads_resistance_and_a_put_reads_support():
     up = reasoning.as_text(reasoning.chain(payload()))
-    assert "كسر المقاومة" in up and "أغلق فوقها" in up
+    assert "كسر المقاومة" in up and "وثبت فوقها" in up
     down = reasoning.chain(payload(
         direction="put", spot=101.20,
         technical={"level": 101.80, "close": 101.20, "atr": 1.10,
@@ -48,22 +48,23 @@ def test_a_call_reads_resistance_and_a_put_reads_support():
                 "ask": 0.72, "cost": 72.0, "delta": -0.40,
                 "expected_profit_pct": 44.0}]))
     text = reasoning.as_text(down)
-    assert "كسر الدعم" in text and "أغلق تحتها" in text
-    assert "الفكرة تسقط إذا رجع السعر فوق 102.3" in text
+    assert "كسر الدعم" in text and "وثبت تحتها" in text
+    assert "لو رجع فوق 102.3 — الفكرة انتهت، اخرج" in text
 
 
 def test_the_strike_link_says_what_the_move_does_to_it():
-    """This is the link Salem named: the target moves the strike from out of
-    the money to in it, which is why the contract reprices."""
+    """This is the link Salem named: the target reaches the strike, which is
+    why the contract reprices. Said plainly — 'out of the money into the money'
+    is jargon he does not need to decode mid-decision."""
     text = reasoning.as_text(reasoning.chain(payload()))
-    assert "عند 185.1 يصبح الإضراب 185 من خارج المال إلى داخل المال" in text
+    assert "عند 185.1 يصير عقد 185 رابح" in text
 
 
 def test_the_contract_move_comes_from_delta_not_from_a_guess():
     text = reasoning.as_text(reasoning.chain(payload()))
-    assert "دلتا العقد 0.42" in text
-    assert "0.92$" in text                      # 0.42 x 2.20, stated, not rounded up
-    assert "تقدير بالدلتا وليس وعداً" in text
+    assert "يزيد العقد 42 سنت" in text
+    assert "+0.92$" in text                     # 0.42 x 2.20, stated, not rounded up
+    assert "(تقدير)" in text
 
 
 # ── What it refuses to say ──────────────────────────────────────
@@ -72,7 +73,7 @@ def test_no_break_means_no_chain_at_all():
     to reason from — and the run says that instead of starting at the contract."""
     built = reasoning.chain(payload(technical={}))
     assert built["links"] == []
-    assert any("لا يوجد كسر" in g for g in built["gaps"])
+    assert any("ما فيه كسر" in g for g in built["gaps"])
 
 
 def test_a_missing_delta_breaks_the_link_and_says_so():
@@ -82,20 +83,20 @@ def test_a_missing_delta_breaks_the_link_and_says_so():
         {"option_symbol": "X", "strike": 185.0, "ask": 0.95, "cost": 95.0,
          "delta": None, "expected_profit_pct": None}]))
     assert "greeks" not in steps(built)
-    assert any("الدلتا غير متاحة" in g for g in built["gaps"])
+    assert any("الدلتا ناقصة" in g for g in built["gaps"])
 
 
 def test_no_affordable_contract_stops_the_chain_at_the_stock():
     built = reasoning.chain(payload(tiers=[{"tier": "🔴 <50$",
                                             "option_symbol": None}]))
     assert steps(built) == ["break", "target", "invalidation"]
-    assert any("لا عقد ضمن الميزانية" in g for g in built["gaps"])
+    assert any("ما فيه عقد داخل الميزانية" in g for g in built["gaps"])
 
 
 def test_an_unclosed_bar_is_not_described_as_a_close():
     tech = dict(payload()["technical"], closed_beyond=False)
     text = reasoning.as_text(reasoning.chain(payload(technical=tech)))
-    assert "لم تُغلق الشمعة بعد خلفها" in text
+    assert "ولسه ما ثبت خلفها" in text
 
 
 def test_every_number_in_the_chain_is_carried_alongside_the_words():
