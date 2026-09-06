@@ -179,14 +179,20 @@ PAPER_BASELINE = {"hit": 43.2, "lost": 41.2, "avg": 1.033}   # pre-commission
 # backtest and the paper book both charge it now.
 COMMISSION_PER_CONTRACT = float(os.environ.get("COMMISSION_PER_CONTRACT") or 0.65)
 
-# Stop alerting for the day once the paper book has lost this much. At 30
-# alerts a day and a 41% loss rate, a bad session is not a possibility, it is
-# a certainty, and a rule that fires 30 times into one is the fastest way to
-# turn a thin edge into a large loss. 0 disables.
+# These two do NOT block an alert. Salem wants all 30 of the best setups and
+# picks his own entries — an alert is information, and withholding information
+# because a PAPER position lost is the wrong trade-off entirely. They add a
+# warning line to the message, and they gate the paper book, which has to stay
+# a record of a disciplined trader rather than of thirty correlated bets.
+#
+# The paper book stops taking new positions once it is down this much on the
+# day. At 30 alerts and a 41% loss rate a bad session is a certainty, and a
+# book that keeps opening into one stops measuring the rule. 0 disables.
 MAX_DAILY_LOSS_USD = float(os.environ.get("MAX_DAILY_LOSS_USD") or 300)
 
 # Thirty calls on a rally day are one bet placed thirty times, not thirty
-# bets. No more than this many open paper positions on the same side.
+# bets. The paper book holds at this many open on one side; the alert still
+# goes out, carrying the count so Salem can see the crowding himself.
 MAX_SAME_DIRECTION_OPEN = int(os.environ.get("MAX_SAME_DIRECTION_OPEN") or 4)
 
 # ── The three gates Salem's previous system had and our test excluded ──

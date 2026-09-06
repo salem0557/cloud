@@ -18,11 +18,14 @@ import config as C
 import journal
 import market
 import paper
+import reasoning
 import state
 import technical
 import uw
 from compose import compose, NO_TRADE
-from scoring import (contract_cost, exit_rule, expected_profit_pct,
+from scanner import aggregate_flow, flow_reason
+from scoring import (ask_side_ratio, contract_cost, exit_rule,
+                     expected_profit_pct, flow_direction,
                      technical_score, pick_contracts_by_budget)
 from telegram_send import send
 
@@ -126,9 +129,33 @@ def check_shortlist(dry_run=False):
             print(f"  {t}: {e}")
             continue
         if not technical.confirms(tech):
-            if tech and tech["broke_level"] and technical.is_late(tech):
-                print(f"  {t}: break already extended — skipped")
+            if tech and tech["broke_level"]:
+                if technical.is_late(tech):
+                    print(f"  {t}: break already extended — skipped")
+                elif not technical.holds(tech):
+                    print(f"  {t}: broke and reversed inside the candle "
+                          f"(close {tech['close']} in a {tech['bar_low']}-"
+                          f"{tech['bar_high']} bar) — skipped")
             continue
+
+        # Pressure NOW, not at scan time. A shortlist entry can be twenty
+        # minutes old, and the flow that put it there may have turned; the
+        # break is only worth taking if buyers (or sellers) are still leaning.
+        try:
+            fresh = aggregate_flow(uw.ticker_flow_alerts(t)).get(t)
+        except uw.UWError:
+            fresh = None
+        if fresh:
+            ratio = ask_side_ratio(fresh)
+            side = flow_direction(fresh)
+            if side and side != item["direction"]:
+                print(f"  {t}: flow turned {side} against a "
+                      f"{item['direction']} setup — skipped")
+                continue
+            if ratio and ratio < C.MIN_ASK_SIDE_RATIO:
+                print(f"  {t}: buying pressure faded ({ratio*100:.0f}% at the "
+                      f"ask, need {C.MIN_ASK_SIDE_RATIO*100:.0f}%) — skipped")
+                continue
 
         # re-score: shortlist carries flow+catalyst+liquidity ("base_score");
         # the technical 30 is recomputed from the break that just confirmed.
@@ -164,8 +191,13 @@ def check_shortlist(dry_run=False):
 
         payload = {"ticker": t, "score": score, "direction": item["direction"],
                    "spot": tech["close"], "technical": tech, "tiers": tiers,
-                   "flow_reason": "كسر مؤكد على فريم 15د بعد تدفق خيارات",
+                   "flow_reason": (flow_reason(fresh, item["direction"]) if fresh
+                                   else "كسر مؤكد على فريم 15د بعد تدفق خيارات"),
                    "news": [], "time_riyadh": now_riyadh()}
+        # The chain was only ever built in scanner.to_payload, so an alert that
+        # came through the watchlist — the path Salem actually wants — arrived
+        # without the reasoning.
+        payload["reasoning"] = reasoning.chain(payload)
         msg = compose("entry", payload)
         if msg.startswith(NO_TRADE):
             print(t, msg)

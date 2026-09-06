@@ -96,6 +96,10 @@ def analyse(candles, direction, lookback=None):
         "level": round(level, 2),
         "close": round(last["close"], 2),
         "atr": round(a, 2),
+        "bar_high": round(last["high"], 2),
+        "bar_low": round(last["low"], 2),
+        "closed_strong": _closed_strong(last, direction),
+        "wick_back": _wick_back(last, level, direction),
         "target": round(target, 2),
         "stop": round(stop, 2),
         "entry_rule": entry_rule,
@@ -103,6 +107,43 @@ def analyse(candles, direction, lookback=None):
         "bar_time": last.get("end_time", ""),
         "bars_used": len(window),
     }
+
+
+def _closed_strong(bar, direction, third=1/3):
+    """Did the candle close in the third of its range that agrees with it?
+
+    A call breaking out and then closing at the BOTTOM of its own candle was
+    rejected inside the very bar that broke — buyers pushed it up and sellers
+    took it straight back. That is the false break Salem asked to filter, and
+    it is answerable from the breaking candle alone, without waiting a second
+    bar and arriving late.
+    """
+    rng = bar["high"] - bar["low"]
+    if rng <= 0:
+        return True                       # a doji-flat bar; nothing to reject
+    pos = (bar["close"] - bar["low"]) / rng
+    return pos >= 1 - third if direction == "call" else pos <= third
+
+
+def _wick_back(bar, level, direction):
+    """Did price trade back through the level inside the breaking candle?"""
+    if direction == "call":
+        return bar["low"] < level
+    return bar["high"] > level
+
+
+def holds(tech):
+    """True when the break did not reverse inside its own candle.
+
+    Two conditions, both read off the bar that broke: it closed in the third of
+    its range that agrees with the direction, and it did not trade back through
+    the level. Waiting for a second candle to confirm would be stronger and
+    would also cost 15 minutes of a move whose median run to target is three —
+    by then the anti-chasing gate would reject the entry anyway.
+    """
+    if not tech:
+        return False
+    return bool(tech.get("closed_strong")) and not tech.get("wick_back")
 
 
 def remaining_atr(tech):
@@ -126,8 +167,15 @@ def is_late(tech):
 
 
 def confirms(tech):
-    """A break worth alerting on: level broken, volume spike, and room left."""
+    """A break worth alerting on.
+
+    Level broken on a CLOSED candle, volume behind it, room left to the target,
+    and — the condition Salem asked for — the break did not reverse inside its
+    own candle. A break that closes at the low of the bar that made it is a
+    trap, and it used to pass every one of the other four checks.
+    """
     return (bool(tech)
             and tech["broke_level"]
             and tech["volume_ratio"] >= C.VOLUME_SPIKE_RATIO
+            and holds(tech)
             and not is_late(tech))

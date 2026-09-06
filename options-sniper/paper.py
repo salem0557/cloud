@@ -72,6 +72,9 @@ def record(payload, tier=None):
     if not pick:
         return None
     take, stop = rule_for(pick.get("dte"))
+    ok, why = may_open(payload.get("direction") or pick.get("type") or "")
+    if not ok:
+        return None                     # the alert went out; the book holds
     book = _load()
     if any(p["option_symbol"] == pick["option_symbol"] and p["open"]
            for p in book["open"]):
@@ -82,6 +85,7 @@ def record(payload, tier=None):
         "strike": pick.get("strike"), "type": pick.get("type"),
         "expiry": pick.get("expiry"), "dte": pick.get("dte"),
         "tier": pick.get("tier", ""),
+        "direction": payload.get("direction") or pick.get("type"),
         "entry_date": datetime.date.today().isoformat(),
         "entry_minute": _now_et_minute(),
         "entry_ask": pick.get("ask"),
@@ -162,7 +166,8 @@ def open_same_direction(direction, book=None):
     """How many open paper positions already point the way this alert does."""
     book = book or _load()
     return sum(1 for pos in book["open"]
-               if pos.get("open") and pos.get("type") == direction)
+               if pos.get("open")
+               and (pos.get("direction") or pos.get("type")) == direction)
 
 
 def may_open(direction):

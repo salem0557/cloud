@@ -87,6 +87,8 @@ def render_entry(p):
     if any(t.get("dte") == 0 for t in p.get("tiers", [])):
         lines.append(f"اخرج قبل {C.ZERO_DTE_HARD_EXIT_ET} نيويورك مهما صار")
 
+    if p.get("caution"):
+        lines += ["", f"⚠️ {p['caution']}"]
     lines += ["", f"⏰ {p.get('time_riyadh', '')} — الأرقام تقديرية لا مضمونة"]
     a = p.get("analyst")
     if a and a.get("reading"):

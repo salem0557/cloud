@@ -276,15 +276,13 @@ def main(dry_run=False, limit_tickers=None):
                 journal.log_alert(payload, kind="analyst_skip")
                 continue
 
-        # Two circuit breakers before anything goes out: today's paper loss,
-        # and how many open positions already lean the same way.
+        # The caps warn, they do not withhold. Salem picks his own entries, so
+        # an alert is information and the decision is his; only the paper book
+        # is gated, inside paper.record().
         ok, why = paper.may_open(cand["direction"])
         if not ok:
-            print(f"  {cand['ticker']}: held back — {why}")
-            journal.log_alert(payload, kind="capped")
-            if "daily loss" in why:
-                break                       # nothing else today either
-            continue
+            payload["caution"] = why
+            print(f"  {cand['ticker']}: alerting with a caution — {why}")
 
         msg = compose("entry", payload)
         if msg.startswith(NO_TRADE):
