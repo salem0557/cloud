@@ -274,3 +274,40 @@ def test_the_grid_pairs_every_target_with_a_matching_stop():
     """Tuning one without the other is what makes a small target look safe."""
     assert (25, 10) in z.GRID and (40, 25) in z.GRID
     assert all(stop < take for take, stop in z.GRID)
+
+
+# ── The two bugs the first gated run exposed ────────────────────
+def test_the_spread_comes_from_prints_not_from_a_dead_quote(monkeypatch):
+    """Reading nbbo_bid off the DAILY tape gave a median of 200% on every
+    session — which is what (ask-bid)/mid returns when the bid is zero, and the
+    closing bid of a 0DTE contract that expired worthless IS zero. The prints
+    are the only live source: buyers lifting the offer against sellers hitting
+    the bid, minute by minute."""
+    rows = [{"ask_px": 1.05, "bid_px": 0.95} for _ in range(10)]
+    assert round(z.measured_spread(rows), 1) == 10.0
+
+
+def test_a_dead_quote_no_longer_reads_as_a_tradeable_contract():
+    """No bid-side prints at all -> None, not a number."""
+    assert z.measured_spread([{"ask_px": 1.0, "bid_px": 0.0}] * 10) is None
+    assert z.measured_spread([{"ask_px": 1.05, "bid_px": 0.95}] * 4) is None
+
+
+def test_the_breakout_rule_is_given_the_history_it_needs(monkeypatch):
+    """Filtering to the target session leaves 26 bars, so the first 16 have no
+    level to break and the rest measure resistance over half a day. That is why
+    the first gated run found 0 signals across 4 sessions: 355 of 361 bars came
+    back 'no breakout'. Three days of context come back; only the target
+    session is offered as entries."""
+    bars = []
+    for d in ("2026-09-02", "2026-09-03", "2026-09-04"):
+        for i in range(26):
+            mins = 9 * 60 + 30 + i * 15
+            bars.append({"start_time": f"{d}T{mins//60:02d}:{mins%60:02d}:00",
+                         "date": d, "open": 100.0, "high": 100.2, "low": 99.8,
+                         "close": 100.0, "volume": 10, "closed": True})
+    monkeypatch.setattr(regime.uw, "candles", lambda *a, **k: bars)
+    got, todays = regime.session_bars("SPY", "2026-09-04")
+    assert len(got) == 78                    # every bar is available as context
+    assert len(todays) == 26                 # only the session is entryable
+    assert todays[0] == 52                   # and it starts after two full days

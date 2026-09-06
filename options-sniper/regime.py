@@ -184,11 +184,24 @@ def time_window(minute_et):
     return None
 
 
-def session_bars(ticker, date):
-    """The 15m bars of one session, oldest first."""
-    bars = uw.candles(ticker, candle_size="15m", timeframe="5D", limit=500,
-                      end_date=date)
-    day = date[:10] if date else None
-    if not day:
-        return bars
-    return [b for b in bars if (b.get("start_time") or "")[:10] == day]
+def session_bars(ticker, date, context_days=3):
+    """(all bars with context, the indices belonging to `date`).
+
+    The breakout rule needs 15 prior bars to have a level at all. Filtering to
+    the target session alone leaves 26 bars, so the first 16 have no history
+    and the "resistance" the rest break is computed from half a day rather than
+    from a real level. That is why the first gated run produced 0 signals
+    across 4 sessions and 56 tickers, with "no breakout" on 355 of 361 bars.
+
+    Salem's previous system pulled three days of 15m bars for exactly this
+    reason. So the context comes back, and only the target session's bars are
+    ever offered as entries.
+    """
+    bars = uw.candles(ticker, candle_size="15m", timeframe=f"{context_days + 2}D",
+                      limit=500, end_date=date)
+    if not date:
+        return bars, list(range(len(bars)))
+    day = date[:10]
+    todays = [i for i, b in enumerate(bars)
+              if (b.get("start_time") or "")[:10] == day]
+    return bars, todays

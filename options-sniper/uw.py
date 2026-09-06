@@ -510,6 +510,14 @@ def contract_intraday(option_symbol, date=None):
             "ask_volume": ask_v,
             "bid_volume": bid_v,
             "iv": _num(_first(r, "iv_high", "implied_volatility", "iv")),
+            # premium is dollars, volume is contracts, so premium/(volume*100)
+            # is the average price of the trades that went off on that side.
+            # The gap between the two IS the spread, measured from real prints
+            # — the only way to get it here, since no NBBO is served.
+            "ask_px": (_num(_first(r, "premium_ask_side")) / (ask_v * 100)
+                       if ask_v > 0 else 0.0),
+            "bid_px": (_num(_first(r, "premium_bid_side")) / (bid_v * 100)
+                       if bid_v > 0 else 0.0),
             "delta": _num(_first(r, "delta")),
             "_keys": sorted(r.keys()),
         })
