@@ -58,6 +58,35 @@ def bar_key(minute):
     return f"{h:02d}:{(m // 15) * 15:02d}"
 
 
+def measured_spread(symbol, date):
+    """This contract's real quoted width on this session, as a % of the mid.
+
+    Salem does not want a whitelist of five liquid names — UBER was a surprise
+    nobody had on a list, and a whitelist would have excluded it by definition.
+    But the spread is what decides whether a small target is reachable at all,
+    and the minute tape carries no NBBO. The DAILY tape does: nbbo_bid and
+    nbbo_ask for the session. So the spread is measured per contract instead
+    of assumed per ticker, which keeps the surprises in and still charges each
+    one what it actually costs.
+
+    Returns None when the day has no quote, and the caller decides — never a
+    default that quietly makes a wide contract look tradeable.
+    """
+    try:
+        rows = uw.contract_history(symbol)
+    except uw.UWError:
+        return None
+    for r in rows:
+        if r.get("date", "")[:10] != date[:10]:
+            continue
+        bid, ask = r.get("bid") or 0, r.get("ask") or 0
+        mid = (bid + ask) / 2
+        if mid > 0 and ask > bid:
+            return (ask - bid) / mid * 100
+        return None
+    return None
+
+
 def build_gates(ticker, date, args):
     """-> {'HH:MM': signal} for every 15m bar of this session that passed.
 
@@ -191,7 +220,8 @@ def features(rows, i, meta):
     }
 
 
-def scan_contract(rows, meta, args, spread_pct, gates=None):
+def scan_contract(rows, meta, args, spread_pct, gates=None,
+                  take=None, stop=None):
     """Every minute of this session that could have been an entry.
 
     `gates` maps 'HH:MM' -> the signal that was live in the 15m bar containing
@@ -212,8 +242,8 @@ def scan_contract(rows, meta, args, spread_pct, gates=None):
             sig = gates.get(bar_key(minute))
             if not sig or sig["direction"] != meta.get("type"):
                 continue
-        trade = entry_exit(rows, i, args.take, args.stop, args.max_hold,
-                           spread_pct, args.hard_exit)
+        trade = entry_exit(rows, i, take or args.take, stop or args.stop,
+                           args.max_hold, spread_pct, args.hard_exit)
         if not trade:
             continue
         trade["multiple"] = trade["exit"] / trade["entry"]
@@ -239,7 +269,18 @@ def summarise(obs, take, stop, label=""):
     be = break_even(take, stop)
     hit = len(took) / len(obs) * 100
 
+    # Salem's rule: the profit's size does not matter, not losing does. So the
+    # headline is how often a trade ends below what it cost, not the hit rate.
+    losers = [o for o in obs if o["multiple"] < 1.0]
+    flat = [o for o in obs if 1.0 <= o["multiple"] < 1.02]
+    loss_rate = len(losers) / len(obs) * 100
+    avg_loss = (statistics.mean(1 - o["multiple"] for o in losers) * 100
+                if losers else 0.0)
     print(f"  {len(obs)} trades across {n_contracts} contracts{label}")
+    print(f"    ENDED AT A LOSS    : {loss_rate:.1f}%   "
+          f"(average loss {avg_loss:.1f}% of the stake)")
+    print(f"    ended flat or up   : {100 - loss_rate:.1f}%  "
+          f"(of which {len(flat)/len(obs)*100:.1f}% barely moved)")
     print(f"    hit +{take:.0f}%           : {hit:.1f}%  "
           f"({len(took)} of {len(obs)})")
     print(f"    stopped out -{stop:.0f}%   : {len(stopped)/len(obs)*100:.1f}%")
@@ -251,7 +292,8 @@ def summarise(obs, take, stop, label=""):
     if took:
         print(f"    median minutes to target : "
               f"{statistics.median(o['minutes'] for o in took):.0f}")
-    return {"avg": avg, "hit": hit, "n": len(obs), "contracts": n_contracts}
+    return {"avg": avg, "hit": hit, "n": len(obs), "contracts": n_contracts,
+            "loss_rate": loss_rate}
 
 
 def report_features(obs, avg):
@@ -284,8 +326,8 @@ def run_one(date, args, spread_pct):
     print(f"Buy a contract expiring {date}, sell at +{args.take:.0f}%, "
           f"cut at -{args.stop:.0f}%,")
     print(f"give up after {args.max_hold} minutes, out by {args.hard_exit}.")
-    print(f"Spread charged: {spread_pct:.0f}% of mid, half each way. "
-          f"Entry premium ${args.min_price}-${args.max_price} "
+    print(f"Spread: each contract charged its own measured width, half each "
+          f"way. Entry premium ${args.min_price}-${args.max_price} "
           f"(${args.min_price*100:.0f}-${args.max_price*100:.0f} a contract)\n")
     # expiry_dates, not min_dte/max_dte: the screener measures dte from TODAY,
     # so asking for dte 0 on a past session matched nothing on every date.
@@ -380,15 +422,40 @@ def run_one(date, args, spread_pct):
         print("\nNo usable tapes.")
         return None
 
+    # Each contract charged its OWN measured spread, not a whitelist and not a
+    # guess. UBER stays in the population; it just pays what UBER cost.
+    spread_of, widths = {}, []
+    for c, _ in tapes:
+        sp = measured_spread(c["option_symbol"], date)
+        spread_of[c["option_symbol"]] = sp
+        if sp is not None:
+            widths.append(sp)
+    unquoted = len(tapes) - len(widths)
+    if widths:
+        widths.sort()
+        print(f"\n  Measured spreads: median {widths[len(widths)//2]:.1f}%, "
+              f"tightest {widths[0]:.1f}%, widest {widths[-1]:.1f}%"
+              + (f", {unquoted} with no quote (dropped)" if unquoted else ""))
+    tapes = [(c, r) for c, r in tapes
+             if spread_of.get(c["option_symbol"]) is not None
+             and spread_of[c["option_symbol"]] <= args.max_spread]
+    print(f"  {len(tapes)} contracts quoted at or under {args.max_spread:.0f}%")
+    if not tapes:
+        print("  None tight enough. A target smaller than the round trip is "
+              "not a trade.")
+        return None
+
     def ticker_of(c):
         return c.get("ticker") or (uw.parse_occ(c["option_symbol"]) or {}).get("ticker")
 
     everything = [t for c, rows in tapes
-                  for t in scan_contract(rows, c, args, spread_pct)]
+                  for t in scan_contract(rows, c, args,
+                                         spread_of[c["option_symbol"]])]
     obs = everything
     if args.gated:
         obs = [t for c, rows in tapes
-               for t in scan_contract(rows, c, args, spread_pct,
+               for t in scan_contract(rows, c, args,
+                                      spread_of[c["option_symbol"]],
                                       gates=gate_map.get(ticker_of(c)) or {})]
 
     if not obs:
@@ -404,31 +471,64 @@ def run_one(date, args, spread_pct):
         print("\n  ONLY ENTRIES THAT CLEARED THE GATES:")
     stats = summarise(obs, args.take, args.stop)
 
-    # The fill-model comparison is dead here: with no quotes all three models
-    # read the same trade price, and the first run printed three identical
-    # numbers. The spread is the live variable instead.
-    print("\n  The same entries at other spreads (this is the whole argument):")
-    for alt in (0.0, 5.0, 10.0, 15.0):
-        if alt == spread_pct:
-            continue
-        rows_alt = [t for c, rows in tapes
-                    for t in scan_contract(rows, c, args, alt)]
-        if not rows_alt:
-            continue
-        a = statistics.mean(o["multiple"] for o in rows_alt)
-        h = sum(1 for o in rows_alt if o["why"] == "take") / len(rows_alt) * 100
-        print(f"    spread {alt:4.0f}% : ${a:.3f} per $1, {h:.1f}% hit")
-
+    sweep(tapes, args, spread_of, gate_map, ticker_of)
     report_features(obs, stats["avg"])
     return {"date": date, **stats}
+
+
+GRID = [(40, 25), (30, 20), (25, 15), (25, 10), (20, 10), (15, 10), (15, 8),
+        (12, 8), (10, 8)]
+
+
+def sweep(tapes, args, spread_of, gate_map, ticker_of):
+    """Every take/stop pair, ranked by how rarely it loses.
+
+    Salem's rule is that the size of the profit does not matter and not losing
+    does. The arithmetic of that is counter-intuitive and worth stating: taking
+    a SMALLER profit with the same stop makes the bar HARDER, not easier.
+    Break-even is stop/(take+stop), so +20% against a -25% stop needs 55.6% of
+    trades to work where +40% against the same stop needs 38.5%.
+
+    The lever is the stop, not the target. +25/-10 needs 28.6%; +20/-25 needs
+    55.6%. Which is why this sweeps both together instead of tuning one.
+    """
+    print(f"\n{'='*64}")
+    print("  Every take/stop pair, ranked by how rarely it ends at a loss")
+    print("  (break-even = stop / (take + stop) — the stop is the lever)\n")
+    print(f"  {'take':>5} {'stop':>5} {'need':>6} {'lost':>7} {'per $1':>8} "
+          f"{'n':>6}")
+    rows = []
+    for take, stop in GRID:
+        got = []
+        for c, tape_rows in tapes:
+            sp = spread_of.get(c["option_symbol"])
+            if sp is None:
+                continue
+            got += scan_contract(tape_rows, c, args, sp,
+                                 gates=(gate_map.get(ticker_of(c)) or {})
+                                 if args.gated else None,
+                                 take=take, stop=stop)
+        if len(got) < 20:
+            continue
+        avg = statistics.mean(o["multiple"] for o in got)
+        lost = sum(1 for o in got if o["multiple"] < 1.0) / len(got) * 100
+        need = stop / (take + stop) * 100
+        rows.append((lost, take, stop, need, avg, len(got)))
+    for lost, take, stop, need, avg, n in sorted(rows):
+        mark = "  <- makes money" if avg > 1.0 else ""
+        print(f"  +{take:>3}% -{stop:>3}% {need:>5.1f}% {lost:>6.1f}% "
+              f"${avg:>7.3f} {n:>6}{mark}")
+    if not rows:
+        print("  Not enough trades at any setting to say anything.")
+    return rows
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--dates", help="comma-separated sessions to test")
     p.add_argument("--date", help="one session (YYYY-MM-DD)")
-    p.add_argument("--take", type=float, default=40.0, help="take profit %%")
-    p.add_argument("--stop", type=float, default=25.0, help="stop loss %%")
+
+    p.add_argument("--stop", type=float, default=10.0, help="stop loss %%")
     p.add_argument("--max-hold", type=int, default=15,
                    help="minutes to give the trade before getting out")
     p.add_argument("--hard-exit", default=HARD_EXIT)
@@ -436,24 +536,26 @@ def main(argv=None):
     p.add_argument("--max-price", type=float, default=2.00)
     p.add_argument("--min-volume", type=int, default=200)
     p.add_argument("--contracts", type=int, default=80)
-    p.add_argument("--tickers", default=",".join(C.LIQUID_0DTE),
-                   help="comma-separated universe. Their 0DTE contracts quote "
-                        "1-3%% wide against 10-25%% for the market at large, "
-                        "and the spread is what decides a +40%% target. "
-                        "Pass an empty string for the whole market.")
+    p.add_argument("--tickers", default="",
+                   help="comma-separated universe. Empty means the whole "
+                        "market, which is the default: a whitelist would have "
+                        "excluded UBER by definition. Liquidity is handled by "
+                        "--max-spread, measured per contract.")
+    p.add_argument("--max-spread", type=float, default=15.0,
+                   help="drop contracts quoted wider than this %% of mid. The "
+                        "round trip has to be smaller than the target or the "
+                        "trade cannot win.")
     p.add_argument("--no-gates", dest="gated", action="store_false",
                    help="measure every minute of the tape, as the first run "
                         "did, instead of only gated entries")
     p.set_defaults(gated=True)
     p.add_argument("--type", default=None, choices=["call", "put"])
-    p.add_argument("--spread", type=float, default=5.0,
-                   help="quoted spread as %% of mid, charged half each way. "
-                        "0 assumes a free round trip, which is fictional.")
+    p.add_argument("--take", type=float, default=25.0, help="take profit %%")
     args = p.parse_args(argv)
 
     dates = ([d.strip() for d in args.dates.split(",") if d.strip()]
              if args.dates else [args.date] if args.date else [None])
-    results = [r for r in (run_one(d, args, args.spread) for d in dates) if r]
+    results = [r for r in (run_one(d, args, None) for d in dates) if r]
     if not results:
         return 1
 

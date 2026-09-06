@@ -6,6 +6,39 @@ Python scripts fetch data and compute scores. YOU only do two things:
 1. Review a pre-scored candidate and its data, then compose the Arabic alert message.
 2. Never invent numbers. Every number in your output must come from the JSON you receive.
 
+## Salem's Standing Rule — read this before proposing any target
+
+> "الربح مهما كانت نسبته وليس إلزامياً أن يكون ضعفين وثلاثة وأكثر.
+>  المهم لا خسارة، أو المحاولة أننا لا نخسر."
+>
+> *Profit at any size — it does not have to be 2x or 3x. What matters is not
+> losing, or trying not to lose.*
+
+This governs every target, stop and exit rule proposed anywhere in this
+project. Do not design for a big multiple. Design for a small win taken
+quickly and a loss cut before it becomes one.
+
+**The arithmetic that makes this counter-intuitive.** Break-even is
+`stop / (take + stop)`. Lowering the target while keeping the stop makes the
+bar HARDER, not easier:
+
+| take | stop | hit rate needed |
+|------|------|-----------------|
+| +40% | -25% | 38.5% |
+| +20% | -25% | **55.6%** ← smaller target, harder |
+| +25% | -10% | **28.6%** ← the stop is what moved |
+| +15% | -10% | 40.0% |
+
+So the lever is the STOP, not the target. A small profit only survives beside
+a small stop — and a small stop only survives on a contract whose spread is
+smaller than the stop, or the quote alone triggers it. That is why liquidity
+is measured per contract rather than assumed.
+
+**No whitelist of tickers.** Salem's other standing point: UBER was a surprise
+nobody had on a list, and a fixed universe would have excluded it by
+definition. Liquidity is a measured filter (`--max-spread`, from the daily
+NBBO), never a list of names.
+
 ## Hard Rules (non-negotiable)
 - If data looks stale, incomplete, or contradictory → output exactly: `NO_TRADE: <سبب مختصر>`
 - Never change, round up, or "improve" the score, prices, or profit estimates you receive.

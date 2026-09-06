@@ -251,3 +251,26 @@ def test_the_universe_is_the_liquid_names():
     """Their 0DTE contracts quote 1-3% wide; the population the first run
     measured quoted 10-25%, and the spread decides whether +40% is reachable."""
     assert C.LIQUID_0DTE == ["SPY", "QQQ", "IWM", "NVDA", "TSLA"]
+
+
+# ── Salem's standing rule: not losing beats winning big ─────────
+def test_a_smaller_target_with_the_same_stop_is_harder_not_easier():
+    """The rule is 'profit at any size, but do not lose'. The arithmetic runs
+    against the intuition: halving the target while keeping the stop raises the
+    hit rate needed from 38.5% to 55.6%."""
+    assert round(z.break_even(40, 25), 1) == 38.5
+    assert round(z.break_even(20, 25), 1) == 55.6
+    assert z.break_even(20, 25) > z.break_even(40, 25)
+
+
+def test_the_stop_is_the_lever():
+    """Same +25% target. Moving the stop from -25% to -10% takes the bar from
+    50% down to 28.6% — a far bigger effect than any change to the target."""
+    assert round(z.break_even(25, 25), 1) == 50.0
+    assert round(z.break_even(25, 10), 1) == 28.6
+
+
+def test_the_grid_pairs_every_target_with_a_matching_stop():
+    """Tuning one without the other is what makes a small target look safe."""
+    assert (25, 10) in z.GRID and (40, 25) in z.GRID
+    assert all(stop < take for take, stop in z.GRID)
