@@ -58,33 +58,38 @@ def bar_key(minute):
     return f"{h:02d}:{(m // 15) * 15:02d}"
 
 
-def measured_spread(symbol, date):
-    """This contract's real quoted width on this session, as a % of the mid.
+def measured_spread(rows):
+    """This contract's real quoted width, measured from its own prints.
 
-    Salem does not want a whitelist of five liquid names — UBER was a surprise
-    nobody had on a list, and a whitelist would have excluded it by definition.
-    But the spread is what decides whether a small target is reachable at all,
-    and the minute tape carries no NBBO. The DAILY tape does: nbbo_bid and
-    nbbo_ask for the session. So the spread is measured per contract instead
-    of assumed per ticker, which keeps the surprises in and still charges each
-    one what it actually costs.
+    Salem does not want a whitelist — UBER was a surprise nobody had on a list,
+    and a fixed universe excludes exactly that. But the spread decides whether
+    a small target is reachable, so it has to be measured per contract.
 
-    Returns None when the day has no quote, and the caller decides — never a
-    default that quietly makes a wide contract look tradeable.
+    The first attempt read nbbo_bid/nbbo_ask off the DAILY tape and returned a
+    median of 200% on every session. 200% is what (ask-bid)/mid gives when the
+    bid is zero — and the closing bid of a 0DTE contract that expired worthless
+    IS zero. It was reading the quote after the contract was already dead.
+
+    The minute tape carries no NBBO either, but it does carry premium and
+    volume split by side. premium_ask_side / (volume_ask_side * 100) is the
+    average price paid by buyers lifting the offer in that minute, and the
+    bid-side pair is the average received by sellers hitting the bid. The gap
+    between them is the spread, measured from prints that actually happened.
+
+    Returns the median across the minutes that traded both sides, or None when
+    too few did — never a default that would make a wide contract look
+    tradeable.
     """
-    try:
-        rows = uw.contract_history(symbol)
-    except uw.UWError:
-        return None
+    widths = []
     for r in rows:
-        if r.get("date", "")[:10] != date[:10]:
+        a, b = r.get("ask_px") or 0, r.get("bid_px") or 0
+        if a <= 0 or b <= 0 or a <= b:
             continue
-        bid, ask = r.get("bid") or 0, r.get("ask") or 0
-        mid = (bid + ask) / 2
-        if mid > 0 and ask > bid:
-            return (ask - bid) / mid * 100
+        mid = (a + b) / 2
+        widths.append((a - b) / mid * 100)
+    if len(widths) < 5:
         return None
-    return None
+    return statistics.median(widths)
 
 
 def build_gates(ticker, date, args):
@@ -94,19 +99,21 @@ def build_gates(ticker, date, args):
     the gates were skipped rather than silently measure the whole tape again.
     """
     try:
-        bars = regime.session_bars(ticker, date)
+        bars, todays = regime.session_bars(ticker, date)
     except Exception:
         return None
-    if len(bars) < 18:
+    # 15 bars of level plus one to break it; anything less cannot signal.
+    if len(bars) < 20 or not todays:
         return None
     out, reasons = {}, Counter()
-    for i in range(len(bars)):
+    for i in todays:
         sig = regime.signal(bars, i)
         ok, why = regime.gate(sig, (bars[i].get("start_time") or "")[11:16])
         reasons[why if not ok else "PASS"] += 1
         if ok:
             out[bar_key((bars[i].get("start_time") or "")[11:16])] = sig
-    return {"gates": out, "reasons": reasons, "bars": len(bars)}
+    return {"gates": out, "reasons": reasons, "bars": len(todays),
+            "context": len(bars)}
 
 
 def entry_exit(rows, i, take_pct, stop_pct, max_hold, spread_pct, hard_exit):
@@ -385,8 +392,9 @@ def run_one(date, args, spread_pct):
             else:
                 gate_map[t] = None
         passed = sum(len(g) for g in gate_map.values() if g)
-        print(f"  Gates: {passed} of the session's 15m bars cleared every "
-              f"rule across {len(gate_map)} tickers")
+        scored = sum(sum(r.values()) for r in gate_note.values())
+        print(f"  Gates: {passed} of {scored} of the session's 15m bars "
+              f"cleared every rule, across {len(gate_map)} tickers")
         merged = Counter()
         for r in gate_note.values():
             merged.update(r)
@@ -425,8 +433,8 @@ def run_one(date, args, spread_pct):
     # Each contract charged its OWN measured spread, not a whitelist and not a
     # guess. UBER stays in the population; it just pays what UBER cost.
     spread_of, widths = {}, []
-    for c, _ in tapes:
-        sp = measured_spread(c["option_symbol"], date)
+    for c, tape_rows in tapes:
+        sp = measured_spread(tape_rows)
         spread_of[c["option_symbol"]] = sp
         if sp is not None:
             widths.append(sp)
