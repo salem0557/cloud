@@ -206,8 +206,20 @@ else:
                "0 rows. Market closed, or the token is wrong — check the log "
                "line above for 'got HTML, not CSV'")
 
+# ── Paper book ──────────────────────────────────────────────────
+section("6. Paper book")
+import paper  # noqa: E402
+st = paper.summary()
+if st["n"] or st["open"]:
+    report("record", OK,
+           f"{st['n']} closed, {st['open']} open"
+           + (f" — {st['hit']:.0f}% hit, ${st['avg']:.3f}/$1"
+              if st["n"] else ""))
+else:
+    report("record", WARN, "empty — no alert has opened a paper position yet")
+
 # ── 5. Telegram ─────────────────────────────────────────────────
-section("6. Telegram")
+section("7. Telegram")
 if "--no-telegram" in sys.argv:
     report("send", WARN, "skipped (--no-telegram)")
 elif not (C.TELEGRAM_TOKEN and C.TELEGRAM_CHAT_ID):

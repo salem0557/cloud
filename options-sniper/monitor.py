@@ -17,6 +17,7 @@ venv_boot.ensure(["requests"])
 import config as C
 import journal
 import market
+import paper
 import state
 import technical
 import uw
@@ -183,10 +184,26 @@ def check_shortlist(dry_run=False):
     return sent
 
 
+def mark_paper():
+    """Advance the paper book on the same 5-minute beat as the monitor.
+
+    A 0DTE paper position that is not marked before 15:30 never closes, and an
+    unclosed position is not a result. This runs whether or not Salem is at the
+    screen, which is the only way a paper month finishes.
+    """
+    try:
+        closed = paper.mark(verbose=True)
+    except Exception as e:                      # never take the monitor down
+        print(f"paper mark failed: {e}")
+        return 0
+    return len(closed)
+
+
 def main(dry_run=False):
     if not dry_run and not market.is_open():
         print("Market closed —", market.reason())
         return
+    mark_paper()
     exits = check_positions(dry_run)
     entries = check_shortlist(dry_run)
     print(f"exits: {exits}  entries: {entries}")

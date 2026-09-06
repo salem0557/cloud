@@ -162,6 +162,16 @@ TRADING_HOURS_PER_DAY = 6.5
 # 15m bars in one regular session — the unit a same-day move is measured in
 BARS_PER_SESSION = int(TRADING_HOURS_PER_DAY * 60 / 15)      # 26
 
+# ── Paper trading (paper.py) ────────────────────────────────────
+# Scored by the same entry_exit() the backtest used, so live and measured are
+# comparable. The baseline is what 796 gated trades over 9 sessions said at
+# +40/-30; if the paper month lands far below it, the backtest was measuring
+# its own assumptions and that is the thing worth knowing.
+PAPER_MAX_HOLD = 15          # minutes, as in the backtest
+PAPER_HARD_EXIT = "15:30"
+PAPER_MIN_TRADES = 30        # below this the record says nothing either way
+PAPER_BASELINE = {"hit": 43.2, "lost": 41.2, "avg": 1.033}
+
 # ── The three gates Salem's previous system had and our test excluded ──
 # Its 0DTE names quote 1-3% wide against the 10-25% of the population we
 # measured, and the spread is what decides whether a +40% target is reachable:
