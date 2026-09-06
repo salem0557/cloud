@@ -48,7 +48,12 @@ TELEGRAM_CHAT_ID = _clean("TELEGRAM_CHAT_ID")
 WEIGHTS = {"flow": 30, "technical": 30, "catalyst": 20, "liquidity": 20}
 THRESHOLD          = 85     # calibrate from journal.csv after 2-4 weeks paper
 WATCHLIST_FLOOR    = 65     # candidates >= this go to shortlist.json
-MAX_ALERTS_PER_DAY = 5
+# The THRESHOLD is the quality gate; this is only a volume limit. The scanner
+# sorts candidates by score and stops below the threshold, so raising this does
+# not lower the quality of any single alert — it stops discarding setups that
+# qualified but arrived late in the day. It does mean a losing strategy loses
+# six times faster at 30 than at 5, which is the reason it exists.
+MAX_ALERTS_PER_DAY = int(os.environ.get("MAX_ALERTS_PER_DAY") or 5)
 
 # ── Budget bands (contract cost = ask x 100) ────────────────────
 # Each band is a RANGE with a floor and a ceiling, not a target price. The old
