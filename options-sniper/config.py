@@ -104,16 +104,25 @@ REGULAR_HOURS_ONLY = True   # ignore pre/post-market candles (market_time == "r"
 # and `result_pct` in journal.csv and set these from your own results:
 # if most winners ran well past the take level you cut too early; if most
 # losers passed the stop before reversing you cut too late.
-# The 0DTE row is no longer a guess. Across 9 usable sessions and 766 gated
-# trades, +50/-35 was the pair Salem accepted: 59.3% of trades did not end
-# below cost against 21.6% at +25/-10, and it returned $1.11 pooled, $1.035
-# with every session weighted equally, winning 5 sessions of 9. It held its
-# value through the 25% slippage column. It does NOT meet his 35% loss-rate
-# target — 40.7% is the measured rate — and MAX_STOP_PCT caps the stop at 35
-# because he ruled out anything wider as gambling.
+# The 0DTE row is measured, not guessed. Salem accepted a wider pair on one
+# condition: that more trades win. Across 9 usable sessions and 796 gated
+# trades, +40/-30 is the pair that best answers it —
+#
+#   pair        reaches target   does not lose   per $1 (one vote per session)
+#   +50/-35          32.8%           59.7%             $1.035
+#   +40/-30          43.2%           58.8%             $1.033
+#
+# ten points more of the trades actually reach the target, for two cents per
+# thousand dollars. Both hold their value through the 25% slippage column and
+# both won 5 sessions of 9.
+#
+# Neither meets his 35% loss-rate target: the measured rate is 41.2%, and
+# MAX_STOP_PCT caps the stop at 35 because he ruled out anything wider as
+# gambling. And $1.033 with every session weighted equally is a 3.3% edge on
+# 41 distinct contracts — enough to paper trade, not enough to trust.
 EXIT_RULES = [
     # (max_dte, take_profit_pct, stop_loss_pct, note)
-    (0,   50, -35, "0DTE: اخرج بالكامل عند +50% — لا يوجد غد"),
+    (0,   40, -30, "0DTE: اخرج بالكامل عند +40% — لا يوجد غد"),
     (7,   60, -40, "بيع نصف الكمية عند الهدف وارفع الوقف إلى سعر الدخول"),
     (999, 80, -40, "بيع ثلث الكمية عند الهدف واترك الباقي بوقف متحرك"),
 ]
@@ -152,6 +161,16 @@ HOLD_HOURS = 2.0
 TRADING_HOURS_PER_DAY = 6.5
 # 15m bars in one regular session — the unit a same-day move is measured in
 BARS_PER_SESSION = int(TRADING_HOURS_PER_DAY * 60 / 15)      # 26
+
+# ── Paper trading (paper.py) ────────────────────────────────────
+# Scored by the same entry_exit() the backtest used, so live and measured are
+# comparable. The baseline is what 796 gated trades over 9 sessions said at
+# +40/-30; if the paper month lands far below it, the backtest was measuring
+# its own assumptions and that is the thing worth knowing.
+PAPER_MAX_HOLD = 15          # minutes, as in the backtest
+PAPER_HARD_EXIT = "15:30"
+PAPER_MIN_TRADES = 30        # below this the record says nothing either way
+PAPER_BASELINE = {"hit": 43.2, "lost": 41.2, "avg": 1.033}
 
 # ── The three gates Salem's previous system had and our test excluded ──
 # Its 0DTE names quote 1-3% wide against the 10-25% of the population we

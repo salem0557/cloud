@@ -565,7 +565,10 @@ def sweep(tapes, args, spread_of, gate_map, ticker_of):
             avg = statistics.mean(o["multiple"] for o in got)
             lost = sum(1 for o in got if o["multiple"] < 1.0) / len(got) * 100
             hit = sum(1 for o in got if o["why"] == "take") / len(got) * 100
-            pooled[(take, stop, slip)] = (avg, lost, len(got), hit)
+            losers = [o for o in got if o["multiple"] < 1.0]
+            avg_loss = (statistics.mean(1 - o["multiple"] for o in losers) * 100
+                        if losers else 0.0)
+            pooled[(take, stop, slip)] = (avg, lost, len(got), hit, avg_loss)
             if slip == args.slips[0] and len(got) >= 20:
                 rows.append((lost, take, stop, stop / (take + stop) * 100,
                              avg, len(got)))
@@ -602,23 +605,25 @@ def pooled_sweep(results, args):
     print("  (each cell is return per $1; columns charge the stop slipping "
           "through)\n")
     head = "  ".join(f"slip {s:>2.0f}%" for s in slips)
-    print(f"  {'take':>5} {'stop':>5} {'need':>6} {'hit':>6} {'nolose':>6} "
-          f"{'n':>6}  {head}  {'even wt':>7}  {'won':>5}")
+    print(f"  {'take':>5} {'stop':>5} {'ifstop':>6} {'real':>6} {'hit':>6} "
+          f"{'nolose':>6} {'n':>6}  {head}  {'even wt':>7}  {'won':>5}")
     seen = set()
     out = []
     for take, stop, _ in keys:
         if (take, stop) in seen:
             continue
         seen.add((take, stop))
-        cells, n_at_base, per_session, hit_at_base = [], 0, [], 0.0
+        cells, n_at_base, per_session = [], 0, []
+        hit_at_base = avg_loss_at_base = 0.0
         for slip in slips:
-            tot = num = lost = hit_w = 0
+            tot = num = lost = hit_w = loss_w = 0
             for r in results:
                 got = r.get("sweep", {}).get((take, stop, slip))
                 if got:
                     tot += got[0] * got[2]
                     lost += got[1] * got[2]
                     hit_w += got[3] * got[2]
+                    loss_w += (got[4] if len(got) > 4 else 0) * got[2]
                     num += got[2]
             if not num:
                 cells.append(None)
@@ -627,6 +632,7 @@ def pooled_sweep(results, args):
             if slip == slips[0]:
                 n_at_base = num
                 hit_at_base = hit_w / num
+                avg_loss_at_base = loss_w / num
                 per_session = [r["sweep"][(take, stop, slip)][0] for r in results
                                if (take, stop, slip) in r.get("sweep", {})
                                and r["sweep"][(take, stop, slip)][2] >= 20]
@@ -644,11 +650,18 @@ def pooled_sweep(results, args):
         won = sum(1 for a in per_session if a > 1.0)
         equal = (sum(per_session) / len(per_session)) if per_session else None
         out.append((cells[0] or 0, take, stop, n_at_base, cells, lost_at_base,
-                    won, len(per_session), equal, hit_at_base))
+                    won, len(per_session), equal, hit_at_base,
+                    avg_loss_at_base))
     hits = []
     for (_, take, stop, n, cells, lost, won, sessions, equal,
-         hit) in sorted(out, reverse=True):
+         hit, avg_loss) in sorted(out, reverse=True):
+        # stop/(take+stop) assumes every loss is a full stop. It is not: with
+        # a 15-minute clock most losers time out somewhere short of the stop,
+        # so the real bar is set by the loss actually taken. Printing only the
+        # naive figure made +60/-35 look like a failure at 25.6% hit against
+        # "36.8% needed" while it returned $1.126.
         need = stop / (take + stop) * 100
+        real = (avg_loss / (take + avg_loss) * 100) if avg_loss > 0 else 0.0
         body = "  ".join("     -  " if c is None else
                          f"${c:>6.3f}" + ("*" if c > 1.0 else " ")
                          for c in cells)
@@ -667,8 +680,13 @@ def pooled_sweep(results, args):
         # trade that times out flat did not lose and did not win, and at a wide
         # stop most of the difference between the two columns is exactly that.
         keep = 100 - (lost if lost is not None else 0)
-        print(f"  +{take:>3}% -{stop:>3}% {need:>5.1f}% {hit:>5.1f}% "
-              f"{keep:>5.1f}% {n:>6}  {body}  {eq}  {won}/{sessions}{target}")
+        print(f"  +{take:>3}% -{stop:>3}% {need:>5.1f}% {real:>5.1f}% "
+              f"{hit:>5.1f}% {keep:>5.1f}% {n:>6}  {body}  {eq}  "
+              f"{won}/{sessions}{target}")
+    print("\n  'ifstop' is stop/(take+stop) — the bar IF every loss were a "
+          "full stop.\n    'real' uses the loss actually taken: with a 15-minute "
+          "clock most losers\n    time out short of the stop, so the real bar "
+          "is lower. Compare 'hit' to\n    'real', not to 'ifstop'.")
     print("\n  * = made money. A row that only makes money in the leftmost "
           "column\n    was measuring the no-slippage assumption, not the trade."
           "\n  'hit' reached the target; 'nolose' did not end below cost — a "

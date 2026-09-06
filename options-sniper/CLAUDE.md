@@ -39,6 +39,30 @@ nobody had on a list, and a fixed universe would have excluded it by
 definition. Liquidity is a measured filter (`--max-spread`), never a list of
 names.
 
+### The pair the live system uses, and why (measured 2026-08-10 to 09-04)
+
+`EXIT_RULES` for 0DTE is **+40% / -30%**, from 796 gated trades over 9 usable
+sessions. Salem's condition for a wider stop was that more trades win:
+
+| pair | reaches target | does not lose | per $1, one vote per session |
+|------|----------------|---------------|------------------------------|
+| +50 / -35 | 32.8% | 59.7% | $1.035 |
+| **+40 / -30** | **43.2%** | 58.8% | $1.033 |
+| +25 / -10 | 21.0% | 21.6% | $0.959 |
+
+Ten points more of the trades reach the target for two cents per thousand.
+
+**Read `hit` against `real`, never against `ifstop`.** `stop/(take+stop)`
+assumes every loss is a full stop, and with a 15-minute clock most losers time
+out short of it. Judging by the naive figure would have discarded the best row
+in the table: +60/-35 returned $1.126 while "hitting" 25.6% against a nominal
+36.8% bar.
+
+**What it is not.** $1.033 with every session weighted equally is a 3.3% edge
+resting on 41 distinct contracts, 5 sessions of 9 profitable, entries on one
+contract overlapping almost completely. Enough to paper trade. Not enough to
+trust with capital.
+
 ### What 11 sessions and 796 trades actually said (2026-08-10 to 09-04)
 
 The rule holds. The obvious way to implement it does not.
