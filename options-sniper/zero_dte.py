@@ -515,8 +515,12 @@ def run_one(date, args, spread_pct):
     stats = summarise(obs, args.take, args.stop)
 
     pooled = sweep(tapes, args, spread_of, gate_map, ticker_of)
+    detail = {"budget": defaultdict(list), "moneyness": defaultdict(list)}
+    for o in obs:
+        detail["budget"][bucket("price", o.get("price"))].append(o)
+        detail["moneyness"][bucket("moneyness", o.get("moneyness"))].append(o)
     report_features(obs, stats["avg"])
-    return {"date": date, "sweep": pooled, **stats}
+    return {"date": date, "sweep": pooled, "detail": detail, **stats}
 
 
 # The 20-session run's best pair, +40/-25, sat exactly at the EDGE of the old
@@ -586,6 +590,52 @@ def sweep(tapes, args, spread_of, gate_map, ticker_of):
     if not rows:
         print("  Not enough trades at this session to say anything.")
     return pooled
+
+
+def by_budget(results, args):
+    """The chosen pair, split by what the contract cost and how far out it was.
+
+    Salem likes the cheap far strike that costs little and starts moving the
+    moment a wave begins. Every run so far said cheap loses — but every run
+    said it at +25/-10, and that stop is inside the noise on a contract quoted
+    5% wide. A cheap far strike has enormous gamma and needs room to breathe,
+    so the question of whether it survives at +40/-30 has never actually been
+    asked. This asks it.
+
+    Both cuts matter and they are not the same cut. Price is what he pays;
+    distance to the strike is what the stock has to do for it to pay back.
+    """
+    rows = [r for r in results if r.get("detail")]
+    if not rows:
+        return
+    take, stop = int(args.take), int(args.stop)
+    print(f"\n{'='*64}")
+    print(f"  +{take}% / -{stop}% BY WHAT THE CONTRACT COST AND HOW FAR OUT")
+    print("  (the cheap-far-strike question, asked at the pair actually used)\n")
+    for name, label in (("budget", "cost"), ("moneyness", "distance to strike")):
+        buckets = defaultdict(list)
+        for r in rows:
+            for key, obs in (r["detail"].get(name) or {}).items():
+                buckets[key] += obs
+        if not buckets:
+            continue
+        print(f"  by {label}")
+        print(f"    {'':16s} {'per $1':>8} {'hit':>7} {'lost':>7} {'n':>6} "
+              f"{'contracts':>10}")
+        for key, obs in sorted(buckets.items(),
+                               key=lambda kv: -statistics.mean(
+                                   o["multiple"] for o in kv[1])):
+            if len(obs) < 20:
+                continue
+            avg = statistics.mean(o["multiple"] for o in obs)
+            hit = sum(1 for o in obs if o["why"] == "take") / len(obs) * 100
+            lost = sum(1 for o in obs if o["multiple"] < 1.0) / len(obs) * 100
+            cs = len({o["symbol"] for o in obs})
+            mark = "  *" if avg > 1.0 else "   "
+            thin = "  (thin)" if cs < 10 else ""
+            print(f"    {key:16s} ${avg:>7.3f}{mark} {hit:>6.1f}% {lost:>6.1f}% "
+                  f"{len(obs):>6} {cs:>10}{thin}")
+        print()
 
 
 def pooled_sweep(results, args):
@@ -792,13 +842,14 @@ def main(argv=None):
             print("  A rule that works on some sessions and not others is a "
                   "coin flip with extra steps.")
         pooled_sweep(results, args)
+        by_budget(results, args)
 
     out = C.DATA_DIR / "zero_dte.json"
     try:
         out.write_text(json.dumps(
             [{k: (v if k != "sweep" else
                   {f"{t}/{st}/{sl}": list(cell) for (t, st, sl), cell in v.items()})
-              for k, v in r.items() if k != "obs"}
+              for k, v in r.items() if k not in ("obs", "detail")}
              for r in results], indent=2))
         print(f"\nWrote {out}")
     except OSError:
