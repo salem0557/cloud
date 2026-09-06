@@ -311,3 +311,29 @@ def test_the_breakout_rule_is_given_the_history_it_needs(monkeypatch):
     assert len(got) == 78                    # every bar is available as context
     assert len(todays) == 26                 # only the session is entryable
     assert todays[0] == 52                   # and it starts after two full days
+
+
+# ── Sample size, and the alert cap ──────────────────────────────
+def test_sessions_walk_back_over_weekends():
+    """Four sessions cannot separate a rule from luck any better than 'three
+    wins out of five' could. Hand-listing twenty dates is also how a date list
+    quietly becomes a choice about which dates flatter the answer."""
+    days = z.trading_days("2026-09-07", 6)      # a Monday
+    assert days[0] == "2026-09-07"
+    assert "2026-09-05" not in days and "2026-09-06" not in days   # weekend
+    assert days == ["2026-09-07", "2026-09-04", "2026-09-03",
+                    "2026-09-02", "2026-09-01", "2026-08-31"]
+
+
+def test_the_alert_cap_is_a_volume_limit_not_a_quality_gate(monkeypatch):
+    """THRESHOLD is what decides whether a setup is good enough; the scanner
+    sorts by score and stops below it. The cap only truncates, so raising it
+    stops discarding setups that qualified but arrived late in the day."""
+    import importlib, os
+    monkeypatch.setenv("MAX_ALERTS_PER_DAY", "30")
+    importlib.reload(C)
+    assert C.MAX_ALERTS_PER_DAY == 30
+    monkeypatch.delenv("MAX_ALERTS_PER_DAY")
+    importlib.reload(C)
+    assert C.MAX_ALERTS_PER_DAY == 5
+    assert C.THRESHOLD == 85          # unchanged: the cap is not the gate

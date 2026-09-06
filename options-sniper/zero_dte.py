@@ -21,6 +21,7 @@ needs a hit rate above 38.5%, which is a very different bar from the 50% a 2x
 target needed. Whether the real rate clears it is what this measures.
 """
 import argparse
+import datetime
 import json
 import statistics
 import sys
@@ -45,6 +46,27 @@ def minute_of(row):
     if "T" in t:
         t = t.split("T", 1)[1]
     return t[:5]
+
+
+def trading_days(end, count):
+    """The `count` weekdays ending at `end`, most recent first.
+
+    Sample size is the thing that decides whether a result means anything. Four
+    sessions cannot separate a rule from luck any better than "three wins out of
+    five" could — and hand-listing twenty dates is how a date list quietly turns
+    into a choice about which dates flatter the answer.
+
+    Holidays are not filtered: the screener returns nothing for them and the
+    session is skipped with a line saying so, which is honest and costs one
+    request.
+    """
+    day = datetime.date.fromisoformat(end)
+    out = []
+    while len(out) < count:
+        if day.weekday() < 5:
+            out.append(day.isoformat())
+        day -= datetime.timedelta(days=1)
+    return out
 
 
 def bar_key(minute):
@@ -535,6 +557,11 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--dates", help="comma-separated sessions to test")
     p.add_argument("--date", help="one session (YYYY-MM-DD)")
+    p.add_argument("--sessions", type=int,
+                   help="test this many weekdays back from --date (or from "
+                        "today). Four sessions cannot separate a rule from "
+                        "luck; twenty can start to. Costs roughly "
+                        "--contracts requests per session.")
 
     p.add_argument("--stop", type=float, default=10.0, help="stop loss %%")
     p.add_argument("--max-hold", type=int, default=15,
@@ -561,8 +588,13 @@ def main(argv=None):
     p.add_argument("--take", type=float, default=25.0, help="take profit %%")
     args = p.parse_args(argv)
 
-    dates = ([d.strip() for d in args.dates.split(",") if d.strip()]
-             if args.dates else [args.date] if args.date else [None])
+    if args.sessions:
+        end = args.date or datetime.date.today().isoformat()
+        dates = trading_days(end, args.sessions)
+        print(f"Testing {len(dates)} sessions, {dates[-1]} to {dates[0]}\n")
+    else:
+        dates = ([d.strip() for d in args.dates.split(",") if d.strip()]
+                 if args.dates else [args.date] if args.date else [None])
     results = [r for r in (run_one(d, args, None) for d in dates) if r]
     if not results:
         return 1
@@ -570,13 +602,21 @@ def main(argv=None):
     if len(results) > 1:
         print(f"\n{'='*64}\nREPLICATION across {len(results)} sessions")
         for r in results:
-            print(f"  {r['date']}: ${r['avg']:.3f}/$1, {r['hit']:.1f}% hit, "
-                  f"{r['contracts']} contracts")
+            print(f"  {r['date']}: ${r['avg']:.3f}/$1, lost {r['loss_rate']:.1f}%, "
+                  f"{r['n']:4d} trades, {r['contracts']} contracts")
         be = break_even(args.take, args.stop)
-        wins = [r for r in results if r["hit"] > be and r["avg"] > 1.0]
-        print(f"\n  {len(wins)} of {len(results)} sessions cleared break-even "
-              f"({be:.1f}%).")
-        if len(wins) < len(results):
+        total = sum(r["n"] for r in results)
+        wins = [r for r in results if r["avg"] > 1.0]
+        pooled = (sum(r["avg"] * r["n"] for r in results) / total) if total else 0
+        lost = (sum(r["loss_rate"] * r["n"] for r in results) / total) if total else 0
+        print(f"\n  Pooled across every session: ${pooled:.3f} per $1, "
+              f"{lost:.1f}% of trades ended at a loss, n={total}")
+        print(f"  {len(wins)} of {len(results)} sessions made money "
+              f"(break-even needs {be:.1f}% hitting +{args.take:.0f}%).")
+        if total < 200:
+            print(f"  {total} trades is too few to separate a rule from luck. "
+                  "Re-run with --sessions 20 before reading anything into it.")
+        elif len(wins) < len(results) * 0.6:
             print("  A rule that works on some sessions and not others is a "
                   "coin flip with extra steps.")
 
