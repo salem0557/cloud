@@ -485,21 +485,31 @@ def contract_intraday(option_symbol, date=None):
         if not isinstance(r, dict):
             continue
         close = _num(_first(r, "close", "price", "last", "last_price"))
+        # UW names these volume_ask_side / volume_bid_side here, not
+        # ask_volume / bid_volume as the daily tape does. Reading the wrong
+        # name is a silent zero: it made minute volume and ask share blank on
+        # every one of 6,867 trades in the first 0DTE run.
+        ask_v = _num(_first(r, "volume_ask_side", "ask_volume", "ask_side_volume"))
+        bid_v = _num(_first(r, "volume_bid_side", "bid_volume", "bid_side_volume"))
+        mid_v = _num(_first(r, "volume_mid_side", "mid_volume"))
+        no_v = _num(_first(r, "volume_no_side", "no_side_volume", "neutral_volume"))
+        total_v = _num(_first(r, "volume", "total_volume"))
         rows.append({
-            "time": _first(r, "tape_time", "start_time", "timestamp", "time",
+            "time": _first(r, "start_time", "tape_time", "timestamp", "time",
                            default=""),
             "open": _num(_first(r, "open", "price")),
             "high": _num(_first(r, "high", "price")),
             "low": _num(_first(r, "low", "price")),
             "close": close,
-            # NBBO if the row carries one; otherwise the trade price stands in
-            # and the caller must say so rather than pretend to a spread.
+            "avg_price": _num(_first(r, "avg_price")),
+            # This endpoint serves no NBBO at all — the caller must charge a
+            # spread explicitly rather than pretend the trade price is free.
             "bid": _num(_first(r, "nbbo_bid", "bid", "bid_price")),
             "ask": _num(_first(r, "nbbo_ask", "ask", "ask_price")),
-            "volume": _num(_first(r, "volume", "total_volume")),
-            "ask_volume": _num(_first(r, "ask_volume", "ask_side_volume")),
-            "bid_volume": _num(_first(r, "bid_volume", "bid_side_volume")),
-            "iv": _num(_first(r, "implied_volatility", "iv")),
+            "volume": total_v or (ask_v + bid_v + mid_v + no_v),
+            "ask_volume": ask_v,
+            "bid_volume": bid_v,
+            "iv": _num(_first(r, "iv_high", "implied_volatility", "iv")),
             "delta": _num(_first(r, "delta")),
             "_keys": sorted(r.keys()),
         })

@@ -24,13 +24,14 @@ import argparse
 import json
 import statistics
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 import venv_boot
 
 venv_boot.ensure(["requests"])
 
 import config as C
+import regime
 import uw
 from explosion import fill_price          # noqa: E402  the same fill rules
 
@@ -46,36 +47,97 @@ def minute_of(row):
     return t[:5]
 
 
-def _take_filled(row, target, model):
-    """Did the target actually become sellable in this minute?
+def bar_key(minute):
+    """The 15m bar a minute belongs to. 10:47 -> 10:45."""
+    if not minute or len(minute) < 5:
+        return ""
+    try:
+        h, m = int(minute[:2]), int(minute[3:5])
+    except ValueError:
+        return ""
+    return f"{h:02d}:{(m // 15) * 15:02d}"
 
-    Under `bid` the sale has to reach the BID, because that is where a seller
-    gets out. Under the looser models a print at or above the target is enough.
+
+def measured_spread(symbol, date):
+    """This contract's real quoted width on this session, as a % of the mid.
+
+    Salem does not want a whitelist of five liquid names — UBER was a surprise
+    nobody had on a list, and a whitelist would have excluded it by definition.
+    But the spread is what decides whether a small target is reachable at all,
+    and the minute tape carries no NBBO. The DAILY tape does: nbbo_bid and
+    nbbo_ask for the session. So the spread is measured per contract instead
+    of assumed per ticker, which keeps the surprises in and still charges each
+    one what it actually costs.
+
+    Returns None when the day has no quote, and the caller decides — never a
+    default that quietly makes a wide contract look tradeable.
     """
-    if model == "bid" and row["bid"] > 0:
-        return row["bid"] >= target
-    return row["high"] >= target
+    try:
+        rows = uw.contract_history(symbol)
+    except uw.UWError:
+        return None
+    for r in rows:
+        if r.get("date", "")[:10] != date[:10]:
+            continue
+        bid, ask = r.get("bid") or 0, r.get("ask") or 0
+        mid = (bid + ask) / 2
+        if mid > 0 and ask > bid:
+            return (ask - bid) / mid * 100
+        return None
+    return None
 
 
-def entry_exit(rows, i, take_pct, stop_pct, max_hold, model, hard_exit):
+def build_gates(ticker, date, args):
+    """-> {'HH:MM': signal} for every 15m bar of this session that passed.
+
+    Returns None when the stock's bars cannot be had, so the caller can say
+    the gates were skipped rather than silently measure the whole tape again.
+    """
+    try:
+        bars = regime.session_bars(ticker, date)
+    except Exception:
+        return None
+    if len(bars) < 18:
+        return None
+    out, reasons = {}, Counter()
+    for i in range(len(bars)):
+        sig = regime.signal(bars, i)
+        ok, why = regime.gate(sig, (bars[i].get("start_time") or "")[11:16])
+        reasons[why if not ok else "PASS"] += 1
+        if ok:
+            out[bar_key((bars[i].get("start_time") or "")[11:16])] = sig
+    return {"gates": out, "reasons": reasons, "bars": len(bars)}
+
+
+def entry_exit(rows, i, take_pct, stop_pct, max_hold, spread_pct, hard_exit):
     """One trade: buy at row i, then walk forward minute by minute.
 
-    The order of the checks inside a minute is deliberately pessimistic. A
-    minute whose range covers BOTH the target and the stop is counted as a
-    stop: an OHLC bar cannot say which came first, and assuming the good one is
-    how a backtest invents an edge.
+    This endpoint serves NO bid/ask — only trade prices — so the spread cannot
+    be measured and must be charged explicitly. `spread_pct` is the quoted
+    width as a percentage of the mid; the buy pays half of it and the sale
+    gives up the other half. At 0 the run assumes a free round trip, which on a
+    0DTE contract is not a conservative assumption, it is a fictional one.
 
-    Two assumptions still favour the trade, and neither can be removed from
-    minute bars: the target is credited at exactly the limit price, and the
-    stop at exactly the stop, so slippage through a fast 0DTE move is not
-    charged. Both make the result better than reality, never worse.
+    Everything is computed in mid space: to net +40% AFTER paying to get out,
+    the contract has to reach more than the entry times 1.4.
+
+    The order of the checks inside a minute is deliberately pessimistic. A
+    minute whose range covers both the target and the stop counts as a stop —
+    an OHLC bar cannot say which came first, and assuming the good one is how
+    a backtest invents a win rate.
+
+    One assumption still favours the trade and cannot be removed from minute
+    bars: the target pays exactly the limit and the stop exactly the stop, so
+    slippage through a fast move is not charged.
     """
-    entry = fill_price(rows[i]["bid"], rows[i]["ask"] or rows[i]["close"],
-                       model, buying=True)
-    if entry <= 0:
+    half = spread_pct / 200.0
+    mid_in = rows[i]["close"] or rows[i]["avg_price"]
+    if mid_in <= 0:
         return None
-    target = entry * (1 + take_pct / 100.0)
-    stop = entry * (1 - stop_pct / 100.0)
+    cost = mid_in * (1 + half)                  # lift the offer
+    out_factor = 1 - half                       # hit the bid on the way out
+    target = cost * (1 + take_pct / 100.0) / out_factor
+    stop = cost * (1 - stop_pct / 100.0) / out_factor
 
     seen = 0
     for r in rows[i + 1:i + 1 + max_hold]:
@@ -83,18 +145,17 @@ def entry_exit(rows, i, take_pct, stop_pct, max_hold, model, hard_exit):
             break
         seen += 1
         if r["low"] > 0 and r["low"] <= stop:        # both in one bar -> stop
-            return {"exit": stop, "entry": entry, "minutes": seen,
-                    "why": "stop"}
-        if _take_filled(r, target, model):
-            return {"exit": target, "entry": entry, "minutes": seen,
-                    "why": "take"}
+            return {"exit": stop * out_factor, "entry": cost,
+                    "minutes": seen, "why": "stop"}
+        if r["high"] >= target:
+            return {"exit": target * out_factor, "entry": cost,
+                    "minutes": seen, "why": "take"}
 
     if not seen:
         return None
     last = rows[i + seen]
-    out = fill_price(last["bid"], last["ask"] or last["close"], model,
-                     buying=False)
-    return {"exit": out if out > 0 else last["close"], "entry": entry,
+    mid_out = last["close"] or last["avg_price"]
+    return {"exit": max(mid_out, 0.0) * out_factor, "entry": cost,
             "minutes": seen, "why": "timeout"}
 
 
@@ -118,8 +179,14 @@ def bucket(name, value):
     if name == "price":
         cost = value * 100
         return f"budget={'$50' if cost <= 50 else '$100' if cost <= 100 else '$200' if cost <= 200 else '>$200'}"
-    if name == "spread_pct":
-        return f"spread={'<5%' if value < 5 else '5-15%' if value < 15 else '15-30%' if value < 30 else '30%+'}"
+    if name == "window":
+        return f"when={value}"
+    if name == "agree":
+        return f"committee={value}/4"
+    if name == "chase":
+        return f"chase={'0-0.1' if value <= 0.1 else '0.1-0.2' if value <= 0.2 else '0.2-0.3'} ATR"
+    if name == "iv":
+        return f"iv={'<50%' if value < 0.5 else '50-100%' if value < 1.0 else '100-200%' if value < 2.0 else '200%+'}"
     if name == "minute_volume":
         return f"minvol={'<10' if value < 10 else '10-50' if value < 50 else '50-200' if value < 200 else '200+'}"
     if name == "ask_share":
@@ -129,18 +196,14 @@ def bucket(name, value):
     return f"{name}={value}"
 
 
-FEATURES = ["minute", "price", "spread_pct", "minute_volume", "ask_share",
-            "moneyness"]
+FEATURES = ["minute", "price", "minute_volume", "ask_share", "moneyness",
+            "iv", "window", "agree", "chase"]
 
 
 def features(rows, i, meta):
     """Only what a trader could see at the moment of the buy."""
     r = rows[i]
-    price = r["ask"] or r["close"]
-    spread_pct = None
-    if r["bid"] > 0 and r["ask"] > 0:
-        mid = (r["bid"] + r["ask"]) / 2
-        spread_pct = (r["ask"] - r["bid"]) / mid * 100 if mid > 0 else None
+    price = r["close"] or r["avg_price"]
     sided = (r["ask_volume"] or 0) + (r["bid_volume"] or 0)
     spot, strike = meta.get("stock_price", 0), meta.get("strike", 0)
     moneyness = None
@@ -150,29 +213,46 @@ def features(rows, i, meta):
     return {
         "minute": minute_of(r),
         "price": price,
-        "spread_pct": spread_pct,
+        "iv": r["iv"] or None,
         "minute_volume": r["volume"],
         "ask_share": (r["ask_volume"] / sided) if sided else None,
         "moneyness": moneyness,
     }
 
 
-def scan_contract(rows, meta, args, model):
-    """Every minute of this session that could have been an entry."""
+def scan_contract(rows, meta, args, spread_pct, gates=None,
+                  take=None, stop=None):
+    """Every minute of this session that could have been an entry.
+
+    `gates` maps 'HH:MM' -> the signal that was live in the 15m bar containing
+    that minute. When it is given, only minutes inside a bar that passed every
+    gate are entries — which is the difference between measuring a strategy and
+    measuring the whole tape.
+    """
     out = []
     for i in range(len(rows) - 1):
-        price = rows[i]["ask"] or rows[i]["close"]
+        price = rows[i]["close"] or rows[i]["avg_price"]
         if not (args.min_price <= price <= args.max_price):
             continue
-        if minute_of(rows[i]) >= args.hard_exit:
+        minute = minute_of(rows[i])
+        if minute >= args.hard_exit:
             continue
-        trade = entry_exit(rows, i, args.take, args.stop, args.max_hold,
-                           model, args.hard_exit)
+        sig = None
+        if gates is not None:
+            sig = gates.get(bar_key(minute))
+            if not sig or sig["direction"] != meta.get("type"):
+                continue
+        trade = entry_exit(rows, i, take or args.take, stop or args.stop,
+                           args.max_hold, spread_pct, args.hard_exit)
         if not trade:
             continue
         trade["multiple"] = trade["exit"] / trade["entry"]
         trade["symbol"] = meta["option_symbol"]
         trade.update(features(rows, i, meta))
+        if sig:
+            trade["window"] = regime.time_window(minute)
+            trade["agree"] = sig["agree"]
+            trade["chase"] = round(sig["chase_atr"], 2)
         out.append(trade)
     return out
 
@@ -189,7 +269,18 @@ def summarise(obs, take, stop, label=""):
     be = break_even(take, stop)
     hit = len(took) / len(obs) * 100
 
+    # Salem's rule: the profit's size does not matter, not losing does. So the
+    # headline is how often a trade ends below what it cost, not the hit rate.
+    losers = [o for o in obs if o["multiple"] < 1.0]
+    flat = [o for o in obs if 1.0 <= o["multiple"] < 1.02]
+    loss_rate = len(losers) / len(obs) * 100
+    avg_loss = (statistics.mean(1 - o["multiple"] for o in losers) * 100
+                if losers else 0.0)
     print(f"  {len(obs)} trades across {n_contracts} contracts{label}")
+    print(f"    ENDED AT A LOSS    : {loss_rate:.1f}%   "
+          f"(average loss {avg_loss:.1f}% of the stake)")
+    print(f"    ended flat or up   : {100 - loss_rate:.1f}%  "
+          f"(of which {len(flat)/len(obs)*100:.1f}% barely moved)")
     print(f"    hit +{take:.0f}%           : {hit:.1f}%  "
           f"({len(took)} of {len(obs)})")
     print(f"    stopped out -{stop:.0f}%   : {len(stopped)/len(obs)*100:.1f}%")
@@ -201,7 +292,8 @@ def summarise(obs, take, stop, label=""):
     if took:
         print(f"    median minutes to target : "
               f"{statistics.median(o['minutes'] for o in took):.0f}")
-    return {"avg": avg, "hit": hit, "n": len(obs), "contracts": n_contracts}
+    return {"avg": avg, "hit": hit, "n": len(obs), "contracts": n_contracts,
+            "loss_rate": loss_rate}
 
 
 def report_features(obs, avg):
@@ -229,18 +321,20 @@ def report_features(obs, avg):
         print()
 
 
-def run_one(date, args, model):
+def run_one(date, args, spread_pct):
     print(f"\n{'#'*64}\n# 0DTE session {date}\n{'#'*64}")
     print(f"Buy a contract expiring {date}, sell at +{args.take:.0f}%, "
           f"cut at -{args.stop:.0f}%,")
     print(f"give up after {args.max_hold} minutes, out by {args.hard_exit}.")
-    print(f"Fills: {model}. Premium ${args.min_price}-${args.max_price} "
+    print(f"Spread: each contract charged its own measured width, half each "
+          f"way. Entry premium ${args.min_price}-${args.max_price} "
           f"(${args.min_price*100:.0f}-${args.max_price*100:.0f} a contract)\n")
     # expiry_dates, not min_dte/max_dte: the screener measures dte from TODAY,
     # so asking for dte 0 on a past session matched nothing on every date.
     try:
         pool = uw.screen_contracts(is_otm="true", expiry_dates=[date],
                                    min_volume=args.min_volume, type=args.type,
+                                   ticker_symbol=args.tickers or None,
                                    limit=250, date=date)
     except uw.UWError as e:
         print(f"Screener failed: {e}")
@@ -264,16 +358,41 @@ def run_one(date, args, model):
                   f"{', '.join(seen[:8])}"
                   + (f" (+{len(seen)-8} more)" if len(seen) > 8 else ""))
             print(f"  None expire on {date} itself, so that session had no "
-                  "0DTE contracts above the volume floor. Pick a date from "
-                  "the list above.")
+                  "0DTE contracts above the volume floor.")
         return None
 
-    pool = [c for c in pool
-            if args.min_price <= c["price"] <= args.max_price][:args.contracts]
-    if not pool:
-        print("None inside the premium band.")
-        return None
-    print(f"{len(pool)} inside the budget. One request each.\n")
+    # NOT filtered by the screener's price. That price is the session's
+    # snapshot, so keeping only contracts under $2 there keeps the ones that
+    # ENDED the day cheap — which is very close to keeping the ones that lost.
+    # The budget is applied minute by minute inside scan_contract instead, on
+    # the price at the moment of the buy, which is the only price Salem sees.
+    pool = pool[:args.contracts]
+    print(f"{len(pool)} contracts, taken in the screener's own order "
+          f"(volume). One request each.\n")
+
+    # One set of 15m stock bars per ticker, shared by all its contracts.
+    gate_map, gate_note = {}, {}
+    if args.gated:
+        for t in sorted({c.get("ticker") or
+                         (uw.parse_occ(c["option_symbol"]) or {}).get("ticker")
+                         for c in pool}):
+            if not t:
+                continue
+            built = build_gates(t, date, args)
+            if built:
+                gate_map[t] = built["gates"]
+                gate_note[t] = built["reasons"]
+            else:
+                gate_map[t] = None
+        passed = sum(len(g) for g in gate_map.values() if g)
+        print(f"  Gates: {passed} of the session's 15m bars cleared every "
+              f"rule across {len(gate_map)} tickers")
+        merged = Counter()
+        for r in gate_note.values():
+            merged.update(r)
+        for why, n in merged.most_common(6):
+            print(f"    {n:4d}  {why}")
+        print()
 
     tapes, failures, shape_shown = [], [], False
     for n, c in enumerate(pool, 1):
@@ -287,70 +406,156 @@ def run_one(date, args, model):
         if len(rows) < 5:
             continue
         if not shape_shown:
-            # UW does not publish this row shape; report what actually arrived
-            print(f"  row fields: {', '.join(rows[0]['_keys'][:14])}")
+            print(f"  row fields: {', '.join(rows[0]['_keys'])}")
             quoted = sum(1 for r in rows if r["bid"] > 0 and r["ask"] > 0)
-            print(f"  {len(rows)} minutes, {quoted} carry a bid/ask. "
-                  + ("Fills use the real quote.\n" if quoted > len(rows) / 2
-                     else "NO QUOTES — fills fall back to the trade price, so "
-                          "the spread is NOT charged and every number below "
-                          "is optimistic.\n"))
+            print(f"  {len(rows)} minutes, {quoted} carry a bid/ask."
+                  + ("" if quoted else " No NBBO is served here, which is why "
+                     "the spread is charged as a parameter."))
             shape_shown = True
         tapes.append((c, rows))
-        if n % 20 == 0:
+        if n % 25 == 0:
             print(f"  {n}/{len(pool)} contracts pulled")
 
     if failures:
         print(f"\n  {len(failures)} contracts had no intraday data")
     if not tapes:
-        print("\nNo usable tapes. Either the band is empty or intraday data "
-              "is not served on this plan.")
+        print("\nNo usable tapes.")
         return None
 
-    obs = [t for c, rows in tapes for t in scan_contract(rows, c, args, model)]
+    # Each contract charged its OWN measured spread, not a whitelist and not a
+    # guess. UBER stays in the population; it just pays what UBER cost.
+    spread_of, widths = {}, []
+    for c, _ in tapes:
+        sp = measured_spread(c["option_symbol"], date)
+        spread_of[c["option_symbol"]] = sp
+        if sp is not None:
+            widths.append(sp)
+    unquoted = len(tapes) - len(widths)
+    if widths:
+        widths.sort()
+        print(f"\n  Measured spreads: median {widths[len(widths)//2]:.1f}%, "
+              f"tightest {widths[0]:.1f}%, widest {widths[-1]:.1f}%"
+              + (f", {unquoted} with no quote (dropped)" if unquoted else ""))
+    tapes = [(c, r) for c, r in tapes
+             if spread_of.get(c["option_symbol"]) is not None
+             and spread_of[c["option_symbol"]] <= args.max_spread]
+    print(f"  {len(tapes)} contracts quoted at or under {args.max_spread:.0f}%")
+    if not tapes:
+        print("  None tight enough. A target smaller than the round trip is "
+              "not a trade.")
+        return None
+
+    def ticker_of(c):
+        return c.get("ticker") or (uw.parse_occ(c["option_symbol"]) or {}).get("ticker")
+
+    everything = [t for c, rows in tapes
+                  for t in scan_contract(rows, c, args,
+                                         spread_of[c["option_symbol"]])]
+    obs = everything
+    if args.gated:
+        obs = [t for c, rows in tapes
+               for t in scan_contract(rows, c, args,
+                                      spread_of[c["option_symbol"]],
+                                      gates=gate_map.get(ticker_of(c)) or {})]
+
     if not obs:
-        print("\nNo trades inside the premium band.")
+        print("\nNo entry cleared the gates in this session. That is the "
+              "rule working, not a failure — but it also means this session "
+              "says nothing.")
         return None
 
     print(f"\n{'='*64}")
+    if args.gated:
+        print("  EVERY MINUTE OF THE TAPE (what the last run measured):")
+        summarise(everything, args.take, args.stop)
+        print("\n  ONLY ENTRIES THAT CLEARED THE GATES:")
     stats = summarise(obs, args.take, args.stop)
 
-    # the same entries under the other two fill assumptions, no new requests
-    print("\n  Same entries under the other fill models:")
-    for other in ("high", "mid", "bid"):
-        if other == model:
-            continue
-        alt = [t for c, rows in tapes for t in scan_contract(rows, c, args, other)]
-        if not alt:
-            continue
-        a = statistics.mean(o["multiple"] for o in alt)
-        h = sum(1 for o in alt if o["why"] == "take") / len(alt) * 100
-        print(f"    --fills {other:4s}: ${a:.3f} per $1, {h:.1f}% hit, n={len(alt)}")
-
+    sweep(tapes, args, spread_of, gate_map, ticker_of)
     report_features(obs, stats["avg"])
     return {"date": date, **stats}
+
+
+GRID = [(40, 25), (30, 20), (25, 15), (25, 10), (20, 10), (15, 10), (15, 8),
+        (12, 8), (10, 8)]
+
+
+def sweep(tapes, args, spread_of, gate_map, ticker_of):
+    """Every take/stop pair, ranked by how rarely it loses.
+
+    Salem's rule is that the size of the profit does not matter and not losing
+    does. The arithmetic of that is counter-intuitive and worth stating: taking
+    a SMALLER profit with the same stop makes the bar HARDER, not easier.
+    Break-even is stop/(take+stop), so +20% against a -25% stop needs 55.6% of
+    trades to work where +40% against the same stop needs 38.5%.
+
+    The lever is the stop, not the target. +25/-10 needs 28.6%; +20/-25 needs
+    55.6%. Which is why this sweeps both together instead of tuning one.
+    """
+    print(f"\n{'='*64}")
+    print("  Every take/stop pair, ranked by how rarely it ends at a loss")
+    print("  (break-even = stop / (take + stop) — the stop is the lever)\n")
+    print(f"  {'take':>5} {'stop':>5} {'need':>6} {'lost':>7} {'per $1':>8} "
+          f"{'n':>6}")
+    rows = []
+    for take, stop in GRID:
+        got = []
+        for c, tape_rows in tapes:
+            sp = spread_of.get(c["option_symbol"])
+            if sp is None:
+                continue
+            got += scan_contract(tape_rows, c, args, sp,
+                                 gates=(gate_map.get(ticker_of(c)) or {})
+                                 if args.gated else None,
+                                 take=take, stop=stop)
+        if len(got) < 20:
+            continue
+        avg = statistics.mean(o["multiple"] for o in got)
+        lost = sum(1 for o in got if o["multiple"] < 1.0) / len(got) * 100
+        need = stop / (take + stop) * 100
+        rows.append((lost, take, stop, need, avg, len(got)))
+    for lost, take, stop, need, avg, n in sorted(rows):
+        mark = "  <- makes money" if avg > 1.0 else ""
+        print(f"  +{take:>3}% -{stop:>3}% {need:>5.1f}% {lost:>6.1f}% "
+              f"${avg:>7.3f} {n:>6}{mark}")
+    if not rows:
+        print("  Not enough trades at any setting to say anything.")
+    return rows
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--dates", help="comma-separated sessions to test")
     p.add_argument("--date", help="one session (YYYY-MM-DD)")
-    p.add_argument("--take", type=float, default=40.0, help="take profit %%")
-    p.add_argument("--stop", type=float, default=25.0, help="stop loss %%")
+
+    p.add_argument("--stop", type=float, default=10.0, help="stop loss %%")
     p.add_argument("--max-hold", type=int, default=15,
                    help="minutes to give the trade before getting out")
     p.add_argument("--hard-exit", default=HARD_EXIT)
     p.add_argument("--min-price", type=float, default=0.05)
     p.add_argument("--max-price", type=float, default=2.00)
     p.add_argument("--min-volume", type=int, default=200)
-    p.add_argument("--contracts", type=int, default=60)
+    p.add_argument("--contracts", type=int, default=80)
+    p.add_argument("--tickers", default="",
+                   help="comma-separated universe. Empty means the whole "
+                        "market, which is the default: a whitelist would have "
+                        "excluded UBER by definition. Liquidity is handled by "
+                        "--max-spread, measured per contract.")
+    p.add_argument("--max-spread", type=float, default=15.0,
+                   help="drop contracts quoted wider than this %% of mid. The "
+                        "round trip has to be smaller than the target or the "
+                        "trade cannot win.")
+    p.add_argument("--no-gates", dest="gated", action="store_false",
+                   help="measure every minute of the tape, as the first run "
+                        "did, instead of only gated entries")
+    p.set_defaults(gated=True)
     p.add_argument("--type", default=None, choices=["call", "put"])
-    p.add_argument("--fills", default="mid", choices=["high", "mid", "bid"])
+    p.add_argument("--take", type=float, default=25.0, help="take profit %%")
     args = p.parse_args(argv)
 
     dates = ([d.strip() for d in args.dates.split(",") if d.strip()]
              if args.dates else [args.date] if args.date else [None])
-    results = [r for r in (run_one(d, args, args.fills) for d in dates) if r]
+    results = [r for r in (run_one(d, args, None) for d in dates) if r]
     if not results:
         return 1
 
