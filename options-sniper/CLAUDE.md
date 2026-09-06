@@ -60,6 +60,15 @@ So "do not lose" is best served by a stop wide enough to survive noise, not by
 the tightest stop available. A tight stop does not prevent losses; it
 manufactures them.
 
+**Where Salem drew the upper line.** Shown a grid reaching +100%/-50%, he
+called it "مثل المقامرة" — like gambling — and he is right. A -50% stop is not
+a stop; it is letting the contract die and calling it a plan. The measured
+gradient says wider keeps helping, but a gradient is not the whole story: past
+some width a stop stops being a risk control. `MAX_STOP_PCT = 35` is that line,
+and the band kept is where a stop is still a stop — wide enough to sit OUTSIDE
+the noise that took out 78% of trades at -10%, tight enough to still be a
+decision. His loss-rate target is `TARGET_LOSS_RATE = 35` percent of trades.
+
 Do not treat $1.079 as settled. 796 trades came from ~40 distinct contracts
 over 11 sessions and entries on one contract overlap almost completely, so the
 effective sample is far smaller than n suggests, and +40/-25 won 5 sessions
@@ -90,15 +99,34 @@ ticker, score, score_breakdown{flow,technical,catalyst,liquidity}, direction,
 spot, flow_reason, news[],
 technical{level, close, atr, target, stop, entry_rule, expected_move,
           break_distance_atr, volume_ratio, closed_beyond},
+reasoning{links[{step, text, numbers}], gaps[]},
 tiers[{tier, option_symbol, strike, type, expiry, ask, bid, cost, delta,
        open_interest, expected_profit_pct}],
 time_riyadh
 ```
 A tier with `option_symbol: null` means no contract qualified for that budget.
 
+## The reasoning chain — put it in the alert, do not rewrite it
+
+`reasoning.links` is the causal chain Salem asked for, built in `reasoning.py`
+from numbers already computed:
+
+> "السهم الفلاني كسر المقاومة وسيصل السعر كذا، فإن هذا معناه العقد صاحب
+>  السترايك كذا سيرتفع، اشتر الآن."
+
+It runs one way — stock, then contract: the break, the target it implies, what
+invalidates it, what the target does to the strike, what delta turns that stock
+move into, and only then the price. Copy each `text` verbatim. Do not reorder
+it, do not add a link, and do not soften a `gaps` entry: a gap means an input
+was missing, and naming it is the point. `reasoning.links == []` means there was
+no measured break, which is `NO_TRADE`.
+
 ## Entry Alert Template (fill from JSON only, keep Arabic RTL)
 ```
 🚨 {ticker} — تنبيه دخول (نقاط: {score}/100)
+
+لماذا هذه الصفقة:
+{كل سطر من reasoning.links مسبوقاً بـ ←، ثم أي سطر من gaps مسبوقاً بـ ⚠️}
 
 الاتجاه: {📈 كول | 📉 بوت} ({flow_reason})
 السعر الحالي للسهم: ${spot}

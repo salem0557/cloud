@@ -516,9 +516,16 @@ def run_one(date, args, spread_pct):
 # grid, and a maximum on the boundary usually means the real one is outside it.
 # So the grid now runs well past it. Wider is not free: the loss RATE falls but
 # each loss costs more, which is why every row reports both.
-GRID = [(100, 50), (80, 50), (75, 40), (60, 40), (60, 35), (50, 35), (50, 30),
-        (40, 30), (40, 25), (30, 20), (25, 15), (25, 10), (20, 10), (15, 10),
-        (15, 8), (12, 8), (10, 8)]
+# Bounded at both ends, and Salem drew the upper one: +100/-50 "مثل المقامرة".
+# He is right. A -50% stop is not a stop, it is letting the contract die and
+# calling it a plan. The measured gradient says wider keeps helping, but the
+# gradient is not the whole story — past some width the stop stops being a
+# risk control at all. The band kept here is the one where a stop is still a
+# stop: wide enough to sit OUTSIDE the noise that took out 78% of trades at
+# -10%, tight enough to still be a decision.
+MAX_STOP_PCT = 35.0
+GRID = [(60, 35), (50, 35), (50, 30), (40, 30), (40, 25), (30, 20), (25, 15),
+        (25, 10), (20, 10), (15, 10), (15, 8), (12, 8), (10, 8)]
 
 # Salem's target, in his words: losses no more than 35% of all trades entered.
 TARGET_LOSS_RATE = 35.0

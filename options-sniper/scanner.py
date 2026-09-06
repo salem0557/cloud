@@ -19,6 +19,7 @@ venv_boot.ensure(["requests"])
 import config as C
 import finviz
 import journal
+import reasoning
 import market
 import risk
 import state
@@ -186,6 +187,11 @@ def to_payload(cand):
                               "risk", "direction", "spot", "flow_reason",
                               "technical", "news")}
     p["tiers"] = build_tiers(cand)
+    # The causal chain, in the order Salem reads it: the stock broke a level,
+    # the level implies a target, the target moves a strike, the greeks turn
+    # that into a contract move. Built from the numbers already in `p` — it
+    # computes nothing and states no link whose inputs are missing.
+    p["reasoning"] = reasoning.chain(p)
     p["time_riyadh"] = now_riyadh()
     return p
 
