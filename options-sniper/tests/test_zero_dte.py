@@ -150,3 +150,104 @@ def test_expiry_is_requested_by_date_not_by_dte(monkeypatch):
     assert seen["expiry_dates[]"] == ["2026-09-04"]
     assert "expiry_dates" not in seen
     assert "min_dte" not in seen and "max_dte" not in seen
+
+
+# ── The gates from the previous system ──────────────────────────
+import regime  # noqa: E402
+import config as C  # noqa: E402
+
+
+def sbar(t, h, l, c, v=1000):
+    return {"start_time": f"2026-09-04T{t}:00", "date": "2026-09-04",
+            "open": c, "high": h, "low": l, "close": c, "volume": v,
+            "end_time": f"2026-09-04T{t}:00", "closed": True}
+
+
+def tape(closes):
+    """15m bars from a list of closes, starting at the open."""
+    out = []
+    for i, c in enumerate(closes):
+        mins = 9 * 60 + 30 + i * 15
+        out.append(sbar(f"{mins//60:02d}:{mins%60:02d}", c + 0.25, c - 0.25, c))
+    return out
+
+
+CHOP = [100 + (0.4 if i % 2 else -0.4) for i in range(20)]
+
+
+def breakout(bars_up):
+    """A range, then a break of it. `bars_up` decides how late the entry is."""
+    return tape(CHOP + [100.6 + 0.55 * k for k in range(1, bars_up + 1)])
+
+
+def test_a_minute_maps_to_its_fifteen_minute_bar():
+    """The stock signal lives on 15m; the contract tape is per minute."""
+    assert z.bar_key("10:47") == "10:45"
+    assert z.bar_key("10:00") == "10:00"
+    assert z.bar_key("15:29") == "15:15"
+    assert z.bar_key("") == ""
+
+
+def test_chasing_is_rejected_however_good_the_breakout():
+    """Entering 0.30 ATR past the level is a late entry into a move that
+    already happened. Our first run entered at EVERY minute of the session."""
+    ok, why = regime.gate({"agree": 4, "chase_atr": 0.9}, "10:30")
+    assert not ok and "chasing" in why
+    ok, why = regime.gate({"agree": 4, "chase_atr": 0.1}, "10:30")
+    assert ok
+
+
+def test_a_split_committee_is_silent():
+    """The old system sent nothing rather than a weak signal, which is the
+    right default for an alert that gets acted on."""
+    ok, why = regime.gate({"agree": 2, "chase_atr": 0.0}, "10:30")
+    assert not ok and "committee" in why
+
+
+def test_nothing_fires_outside_the_session():
+    assert regime.gate({"agree": 4, "chase_atr": 0.0}, "08:15")[0] is False
+    assert regime.gate({"agree": 4, "chase_atr": 0.0}, "15:45")[0] is False
+    assert regime.time_window("10:30") == "momentum"
+    assert regime.time_window("12:00") == "midday"
+    assert regime.time_window("15:10") == "gamma"
+
+
+def test_no_breakout_is_not_a_signal():
+    """A flat tape must produce nothing at all."""
+    flat = [sbar(f"{9 + (i*15)//60:02d}:{(30 + i*15) % 60:02d}",
+                 100.2, 99.8, 100.0) for i in range(25)]
+    assert all(regime.signal(flat, i) is None for i in range(len(flat)))
+
+
+def test_a_clean_breakout_carries_the_committee_with_it():
+    bars = breakout(2)
+    sig = regime.signal(bars, len(bars) - 1)
+    assert sig["direction"] == "call" and sig["agree"] == 4
+    assert regime.gate(sig, "10:30")[0]
+
+
+def test_the_same_breakout_three_bars_later_is_a_chase():
+    """The signal is identical in every other respect. What changed is that
+    the move already happened — which is what our first run kept buying."""
+    early, late = regime.signal(breakout(2), 21), regime.signal(breakout(5), 24)
+    assert early["direction"] == late["direction"] == "call"
+    assert early["agree"] == late["agree"] == 4
+    assert regime.gate(early, "10:30")[0] is True
+    assert regime.gate(late, "10:30")[0] is False
+
+
+def test_a_straight_line_rally_is_refused_as_exhausted():
+    """RSI pins at 100 and the band is 48-72. Buying the top of a move that is
+    already over is exactly what the RSI ceiling exists to stop."""
+    vertical = tape([100 + i * 0.5 for i in range(25)])
+    assert regime.signal(vertical, 24) is None
+
+
+def test_vwap_sits_below_price_in_a_rally():
+    assert regime.vwap(breakout(5)) < breakout(5)[-1]["close"]
+
+
+def test_the_universe_is_the_liquid_names():
+    """Their 0DTE contracts quote 1-3% wide; the population the first run
+    measured quoted 10-25%, and the spread decides whether +40% is reachable."""
+    assert C.LIQUID_0DTE == ["SPY", "QQQ", "IWM", "NVDA", "TSLA"]

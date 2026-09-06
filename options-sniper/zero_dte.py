@@ -24,13 +24,14 @@ import argparse
 import json
 import statistics
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 import venv_boot
 
 venv_boot.ensure(["requests"])
 
 import config as C
+import regime
 import uw
 from explosion import fill_price          # noqa: E402  the same fill rules
 
@@ -44,6 +45,39 @@ def minute_of(row):
     if "T" in t:
         t = t.split("T", 1)[1]
     return t[:5]
+
+
+def bar_key(minute):
+    """The 15m bar a minute belongs to. 10:47 -> 10:45."""
+    if not minute or len(minute) < 5:
+        return ""
+    try:
+        h, m = int(minute[:2]), int(minute[3:5])
+    except ValueError:
+        return ""
+    return f"{h:02d}:{(m // 15) * 15:02d}"
+
+
+def build_gates(ticker, date, args):
+    """-> {'HH:MM': signal} for every 15m bar of this session that passed.
+
+    Returns None when the stock's bars cannot be had, so the caller can say
+    the gates were skipped rather than silently measure the whole tape again.
+    """
+    try:
+        bars = regime.session_bars(ticker, date)
+    except Exception:
+        return None
+    if len(bars) < 18:
+        return None
+    out, reasons = {}, Counter()
+    for i in range(len(bars)):
+        sig = regime.signal(bars, i)
+        ok, why = regime.gate(sig, (bars[i].get("start_time") or "")[11:16])
+        reasons[why if not ok else "PASS"] += 1
+        if ok:
+            out[bar_key((bars[i].get("start_time") or "")[11:16])] = sig
+    return {"gates": out, "reasons": reasons, "bars": len(bars)}
 
 
 def entry_exit(rows, i, take_pct, stop_pct, max_hold, spread_pct, hard_exit):
@@ -116,6 +150,12 @@ def bucket(name, value):
     if name == "price":
         cost = value * 100
         return f"budget={'$50' if cost <= 50 else '$100' if cost <= 100 else '$200' if cost <= 200 else '>$200'}"
+    if name == "window":
+        return f"when={value}"
+    if name == "agree":
+        return f"committee={value}/4"
+    if name == "chase":
+        return f"chase={'0-0.1' if value <= 0.1 else '0.1-0.2' if value <= 0.2 else '0.2-0.3'} ATR"
     if name == "iv":
         return f"iv={'<50%' if value < 0.5 else '50-100%' if value < 1.0 else '100-200%' if value < 2.0 else '200%+'}"
     if name == "minute_volume":
@@ -128,7 +168,7 @@ def bucket(name, value):
 
 
 FEATURES = ["minute", "price", "minute_volume", "ask_share", "moneyness",
-            "iv"]
+            "iv", "window", "agree", "chase"]
 
 
 def features(rows, i, meta):
@@ -151,15 +191,27 @@ def features(rows, i, meta):
     }
 
 
-def scan_contract(rows, meta, args, spread_pct):
-    """Every minute of this session that could have been an entry."""
+def scan_contract(rows, meta, args, spread_pct, gates=None):
+    """Every minute of this session that could have been an entry.
+
+    `gates` maps 'HH:MM' -> the signal that was live in the 15m bar containing
+    that minute. When it is given, only minutes inside a bar that passed every
+    gate are entries — which is the difference between measuring a strategy and
+    measuring the whole tape.
+    """
     out = []
     for i in range(len(rows) - 1):
         price = rows[i]["close"] or rows[i]["avg_price"]
         if not (args.min_price <= price <= args.max_price):
             continue
-        if minute_of(rows[i]) >= args.hard_exit:
+        minute = minute_of(rows[i])
+        if minute >= args.hard_exit:
             continue
+        sig = None
+        if gates is not None:
+            sig = gates.get(bar_key(minute))
+            if not sig or sig["direction"] != meta.get("type"):
+                continue
         trade = entry_exit(rows, i, args.take, args.stop, args.max_hold,
                            spread_pct, args.hard_exit)
         if not trade:
@@ -167,6 +219,10 @@ def scan_contract(rows, meta, args, spread_pct):
         trade["multiple"] = trade["exit"] / trade["entry"]
         trade["symbol"] = meta["option_symbol"]
         trade.update(features(rows, i, meta))
+        if sig:
+            trade["window"] = regime.time_window(minute)
+            trade["agree"] = sig["agree"]
+            trade["chase"] = round(sig["chase_atr"], 2)
         out.append(trade)
     return out
 
@@ -236,6 +292,7 @@ def run_one(date, args, spread_pct):
     try:
         pool = uw.screen_contracts(is_otm="true", expiry_dates=[date],
                                    min_volume=args.min_volume, type=args.type,
+                                   ticker_symbol=args.tickers or None,
                                    limit=250, date=date)
     except uw.UWError as e:
         print(f"Screener failed: {e}")
@@ -271,6 +328,30 @@ def run_one(date, args, spread_pct):
     print(f"{len(pool)} contracts, taken in the screener's own order "
           f"(volume). One request each.\n")
 
+    # One set of 15m stock bars per ticker, shared by all its contracts.
+    gate_map, gate_note = {}, {}
+    if args.gated:
+        for t in sorted({c.get("ticker") or
+                         (uw.parse_occ(c["option_symbol"]) or {}).get("ticker")
+                         for c in pool}):
+            if not t:
+                continue
+            built = build_gates(t, date, args)
+            if built:
+                gate_map[t] = built["gates"]
+                gate_note[t] = built["reasons"]
+            else:
+                gate_map[t] = None
+        passed = sum(len(g) for g in gate_map.values() if g)
+        print(f"  Gates: {passed} of the session's 15m bars cleared every "
+              f"rule across {len(gate_map)} tickers")
+        merged = Counter()
+        for r in gate_note.values():
+            merged.update(r)
+        for why, n in merged.most_common(6):
+            print(f"    {n:4d}  {why}")
+        print()
+
     tapes, failures, shape_shown = [], [], False
     for n, c in enumerate(pool, 1):
         try:
@@ -299,13 +380,28 @@ def run_one(date, args, spread_pct):
         print("\nNo usable tapes.")
         return None
 
-    obs = [t for c, rows in tapes
-           for t in scan_contract(rows, c, args, spread_pct)]
+    def ticker_of(c):
+        return c.get("ticker") or (uw.parse_occ(c["option_symbol"]) or {}).get("ticker")
+
+    everything = [t for c, rows in tapes
+                  for t in scan_contract(rows, c, args, spread_pct)]
+    obs = everything
+    if args.gated:
+        obs = [t for c, rows in tapes
+               for t in scan_contract(rows, c, args, spread_pct,
+                                      gates=gate_map.get(ticker_of(c)) or {})]
+
     if not obs:
-        print("\nNo minute fell inside the premium band.")
+        print("\nNo entry cleared the gates in this session. That is the "
+              "rule working, not a failure — but it also means this session "
+              "says nothing.")
         return None
 
     print(f"\n{'='*64}")
+    if args.gated:
+        print("  EVERY MINUTE OF THE TAPE (what the last run measured):")
+        summarise(everything, args.take, args.stop)
+        print("\n  ONLY ENTRIES THAT CLEARED THE GATES:")
     stats = summarise(obs, args.take, args.stop)
 
     # The fill-model comparison is dead here: with no quotes all three models
@@ -340,6 +436,15 @@ def main(argv=None):
     p.add_argument("--max-price", type=float, default=2.00)
     p.add_argument("--min-volume", type=int, default=200)
     p.add_argument("--contracts", type=int, default=80)
+    p.add_argument("--tickers", default=",".join(C.LIQUID_0DTE),
+                   help="comma-separated universe. Their 0DTE contracts quote "
+                        "1-3%% wide against 10-25%% for the market at large, "
+                        "and the spread is what decides a +40%% target. "
+                        "Pass an empty string for the whole market.")
+    p.add_argument("--no-gates", dest="gated", action="store_false",
+                   help="measure every minute of the tape, as the first run "
+                        "did, instead of only gated entries")
+    p.set_defaults(gated=True)
     p.add_argument("--type", default=None, choices=["call", "put"])
     p.add_argument("--spread", type=float, default=5.0,
                    help="quoted spread as %% of mid, charged half each way. "

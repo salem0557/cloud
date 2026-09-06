@@ -141,6 +141,30 @@ TRADING_HOURS_PER_DAY = 6.5
 # 15m bars in one regular session — the unit a same-day move is measured in
 BARS_PER_SESSION = int(TRADING_HOURS_PER_DAY * 60 / 15)      # 26
 
+# ── The three gates Salem's previous system had and our test excluded ──
+# Its 0DTE names quote 1-3% wide against the 10-25% of the population we
+# measured, and the spread is what decides whether a +40% target is reachable:
+# at 2% a contract must travel +43%, at 15% it must travel +63%.
+LIQUID_0DTE = ["SPY", "QQQ", "IWM", "NVDA", "TSLA"]
+
+# No chasing: an entry more than this far past the breakout level is a late
+# entry into a move that already happened. The old system used 0.30.
+MAX_CHASE_ATR = 0.30
+
+# Four independent reads - trend, momentum, VWAP side, structure - and at least
+# this many must agree. Below it the old system stayed silent rather than send
+# a weak signal, which is the right default for an alert Salem acts on.
+MIN_AGREEMENT = 3
+
+# (start hour, end hour, name) in Eastern decimal hours.
+SESSION_WINDOWS = [
+    (9.5,  10.0, "open"),          # opening auction chop
+    (10.0, 11.5, "momentum"),      # the window the old system trusted most
+    (11.5, 13.5, "midday"),        # chop
+    (13.5, 15.0, "trend"),
+    (15.0, 15.5, "gamma"),         # theta and gamma both bite here
+]
+
 # ── Scan limits (UW trial = 30,000 requests/day) ────────────────
 MAX_CANDIDATES_PER_SCAN = 25   # tickers we spend chain/candle calls on
 FLOW_ALERT_LIMIT        = 200
