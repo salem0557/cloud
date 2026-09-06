@@ -422,3 +422,22 @@ def test_pooling_by_trade_count_flatters_a_rule_that_fires_on_its_best_days():
     assert round(equal, 3) == 1.035
     assert pooled > equal          # the gap is the warning
     assert sum(1 for _, r in per_session if r > 1.0) == 5   # 5 of 9, not 9 of 9
+
+
+def test_not_losing_and_hitting_the_target_are_different_questions():
+    """Salem accepted +50/-35 on the condition that more trades win. They do —
+    59.3% do not end below cost against 21.6% at +25/-10 — but a trade that
+    times out flat is in that number and never reached the target. The table
+    has to show both columns or the second gets read as the first."""
+    assert round(100 - 40.7, 1) == 59.3
+    assert round(100 - 78.4, 1) == 21.6
+    assert (100 - 40.7) / (100 - 78.4) > 2.5
+
+
+def test_the_live_exit_rule_matches_the_measured_pair():
+    """config.EXIT_RULES carried +50/-35 for 0DTE from the start, written on
+    instinct. The measurement arrived at the same pair, so the live system and
+    the backtest now agree by evidence rather than by coincidence."""
+    zero_dte_row = next(r for r in C.EXIT_RULES if r[0] == 0)
+    assert zero_dte_row[1] == 50 and zero_dte_row[2] == -35
+    assert abs(zero_dte_row[2]) <= z.MAX_STOP_PCT
