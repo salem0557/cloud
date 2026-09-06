@@ -104,9 +104,16 @@ REGULAR_HOURS_ONLY = True   # ignore pre/post-market candles (market_time == "r"
 # and `result_pct` in journal.csv and set these from your own results:
 # if most winners ran well past the take level you cut too early; if most
 # losers passed the stop before reversing you cut too late.
+# The 0DTE row is no longer a guess. Across 9 usable sessions and 766 gated
+# trades, +50/-35 was the pair Salem accepted: 59.3% of trades did not end
+# below cost against 21.6% at +25/-10, and it returned $1.11 pooled, $1.035
+# with every session weighted equally, winning 5 sessions of 9. It held its
+# value through the 25% slippage column. It does NOT meet his 35% loss-rate
+# target — 40.7% is the measured rate — and MAX_STOP_PCT caps the stop at 35
+# because he ruled out anything wider as gambling.
 EXIT_RULES = [
     # (max_dte, take_profit_pct, stop_loss_pct, note)
-    (0,   50, -35, "0DTE: اخرج بالكامل عند الهدف — لا يوجد غد"),
+    (0,   50, -35, "0DTE: اخرج بالكامل عند +50% — لا يوجد غد"),
     (7,   60, -40, "بيع نصف الكمية عند الهدف وارفع الوقف إلى سعر الدخول"),
     (999, 80, -40, "بيع ثلث الكمية عند الهدف واترك الباقي بوقف متحرك"),
 ]

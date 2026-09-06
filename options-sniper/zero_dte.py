@@ -564,7 +564,8 @@ def sweep(tapes, args, spread_of, gate_map, ticker_of):
                 continue
             avg = statistics.mean(o["multiple"] for o in got)
             lost = sum(1 for o in got if o["multiple"] < 1.0) / len(got) * 100
-            pooled[(take, stop, slip)] = (avg, lost, len(got))
+            hit = sum(1 for o in got if o["why"] == "take") / len(got) * 100
+            pooled[(take, stop, slip)] = (avg, lost, len(got), hit)
             if slip == args.slips[0] and len(got) >= 20:
                 rows.append((lost, take, stop, stop / (take + stop) * 100,
                              avg, len(got)))
@@ -601,29 +602,34 @@ def pooled_sweep(results, args):
     print("  (each cell is return per $1; columns charge the stop slipping "
           "through)\n")
     head = "  ".join(f"slip {s:>2.0f}%" for s in slips)
-    print(f"  {'take':>5} {'stop':>5} {'need':>6} {'lost':>6} {'n':>6}  {head}")
+    print(f"  {'take':>5} {'stop':>5} {'need':>6} {'hit':>6} {'nolose':>6} "
+          f"{'n':>6}  {head}  {'even wt':>7}  {'won':>5}")
     seen = set()
     out = []
     for take, stop, _ in keys:
         if (take, stop) in seen:
             continue
         seen.add((take, stop))
-        cells, n_at_base = [], 0
+        cells, n_at_base, per_session, hit_at_base = [], 0, [], 0.0
         for slip in slips:
-            tot = num = lost = 0
+            tot = num = lost = hit_w = 0
             for r in results:
                 got = r.get("sweep", {}).get((take, stop, slip))
                 if got:
-                    avg, lo, n = got
-                    tot += avg * n
-                    lost += lo * n
-                    num += n
+                    tot += got[0] * got[2]
+                    lost += got[1] * got[2]
+                    hit_w += got[3] * got[2]
+                    num += got[2]
             if not num:
                 cells.append(None)
                 continue
             cells.append(tot / num)
             if slip == slips[0]:
                 n_at_base = num
+                hit_at_base = hit_w / num
+                per_session = [r["sweep"][(take, stop, slip)][0] for r in results
+                               if (take, stop, slip) in r.get("sweep", {})
+                               and r["sweep"][(take, stop, slip)][2] >= 20]
         if n_at_base < 100:
             continue
         lost_at_base = None
@@ -635,9 +641,13 @@ def pooled_sweep(results, args):
                 num += got[2]
         if num:
             lost_at_base = tot / num
-        out.append((cells[0] or 0, take, stop, n_at_base, cells, lost_at_base))
+        won = sum(1 for a in per_session if a > 1.0)
+        equal = (sum(per_session) / len(per_session)) if per_session else None
+        out.append((cells[0] or 0, take, stop, n_at_base, cells, lost_at_base,
+                    won, len(per_session), equal, hit_at_base))
     hits = []
-    for _, take, stop, n, cells, lost in sorted(out, reverse=True):
+    for (_, take, stop, n, cells, lost, won, sessions, equal,
+         hit) in sorted(out, reverse=True):
         need = stop / (take + stop) * 100
         body = "  ".join("     -  " if c is None else
                          f"${c:>6.3f}" + ("*" if c > 1.0 else " ")
@@ -647,11 +657,26 @@ def pooled_sweep(results, args):
             target = "  <= 35% TARGET"
             if cells[0] and cells[0] > 1.0:
                 hits.append((take, stop, lost, cells))
-        print(f"  +{take:>3}% -{stop:>3}% {need:>5.1f}% {lost:>5.1f}% {n:>6}"
-              f"  {body}{target}")
+        # The pooled figure weights a session by how many entries it produced,
+        # and the sessions that produced most are the ones the rule liked — so
+        # it flatters a rule that fires more on the days it happens to suit.
+        # The equal-weighted average gives every session one vote, and the
+        # win count says how many actually made money.
+        eq = f"${equal:>6.3f}" if equal is not None else "     - "
+        # "did not lose" and "reached the target" are different questions. A
+        # trade that times out flat did not lose and did not win, and at a wide
+        # stop most of the difference between the two columns is exactly that.
+        keep = 100 - (lost if lost is not None else 0)
+        print(f"  +{take:>3}% -{stop:>3}% {need:>5.1f}% {hit:>5.1f}% "
+              f"{keep:>5.1f}% {n:>6}  {body}  {eq}  {won}/{sessions}{target}")
     print("\n  * = made money. A row that only makes money in the leftmost "
-          "column\n    was measuring the no-slippage assumption, not the "
-          "trade.")
+          "column\n    was measuring the no-slippage assumption, not the trade."
+          "\n  'hit' reached the target; 'nolose' did not end below cost — a "
+          "trade that\n    times out flat is in the second and not the first. "
+          "'even wt' gives every\n    session one vote instead of weighting by "
+          "trade count; 'won' counts sessions."
+          " A pair whose\n    pooled figure beats its equal-weighted one is "
+          "leaning on its busiest days.")
     print(f"\n  Salem's rule: losses no more than {TARGET_LOSS_RATE:.0f}% of "
           "trades entered.")
     if hits:
@@ -746,8 +771,10 @@ def main(argv=None):
     out = C.DATA_DIR / "zero_dte.json"
     try:
         out.write_text(json.dumps(
-            [{k: v for k, v in r.items() if k != "obs"} for r in results],
-            indent=2))
+            [{k: (v if k != "sweep" else
+                  {f"{t}/{st}/{sl}": list(cell) for (t, st, sl), cell in v.items()})
+              for k, v in r.items() if k != "obs"}
+             for r in results], indent=2))
         print(f"\nWrote {out}")
     except OSError:
         pass
