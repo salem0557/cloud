@@ -636,22 +636,35 @@ def by_budget(results, args, ranked=None):
         _budget_table(results, take, stop, why, pairs[0][:2])
 
 
+# A bucket needs this many trades within ONE session before that session is
+# allowed a vote on it. Below it the session average is one or two contracts
+# having a good afternoon.
+MIN_SESSION_TRADES = 10
+
+
 def _budget_table(results, take, stop, why, configured):
     print(f"\n{'='*64}")
     print(f"  +{take}% / -{stop}% BY WHAT THE CONTRACT COST AND HOW FAR OUT")
     print(f"  (the cheap-far-strike question, asked at {why})\n")
     for name, label in (("budget", "cost"), ("moneyness", "distance to strike")):
-        buckets = defaultdict(list)
+        buckets, sessions = defaultdict(list), defaultdict(list)
         for r in results:
             src = (r.get("detail") if (take, stop) == configured
                    else (r.get("splits") or {}).get((take, stop)))
             for key, obs in (src or {}).get(name, {}).items():
                 buckets[key] += obs
+                # The same correction the pooled table needed: this figure
+                # weighted a session by how many entries it produced, and the
+                # sessions that produced most are the ones the rule liked. A
+                # bucket can pool above $1.00 on two good afternoons.
+                if len(obs) >= MIN_SESSION_TRADES:
+                    sessions[key].append(
+                        statistics.mean(o["multiple"] for o in obs))
         if not buckets:
             continue
         print(f"  by {label}")
         print(f"    {'':16s} {'per $1':>8} {'hit':>7} {'lost':>7} {'n':>6} "
-              f"{'contracts':>10}")
+              f"{'contracts':>10} {'even wt':>9} {'won':>6}")
         for key, obs in sorted(buckets.items(),
                                key=lambda kv: -statistics.mean(
                                    o["multiple"] for o in kv[1])):
@@ -661,11 +674,16 @@ def _budget_table(results, take, stop, why, configured):
             hit = sum(1 for o in obs if o["why"] == "take") / len(obs) * 100
             lost = sum(1 for o in obs if o["multiple"] < 1.0) / len(obs) * 100
             cs = len({o["symbol"] for o in obs})
+            per = sessions.get(key) or []
+            equal = f"${statistics.mean(per):>7.3f}" if per else "      - "
+            votes = f"{sum(1 for a in per if a > 1.0)}/{len(per)}" if per else "  -"
             mark = "  *" if avg > 1.0 else "   "
             thin = "  (thin)" if cs < 10 else ""
             print(f"    {key:16s} ${avg:>7.3f}{mark} {hit:>6.1f}% {lost:>6.1f}% "
-                  f"{len(obs):>6} {cs:>10}{thin}")
-        print()
+                  f"{len(obs):>6} {cs:>10} {equal:>9} {votes:>6}{thin}")
+        print("\n    'per $1' pools every trade, so it leans on the busiest "
+              "sessions.\n    'even wt' gives each session one vote; 'won' is "
+              "how many made money.\n")
 
 
 def pooled_sweep(results, args):
