@@ -373,3 +373,20 @@ def test_a_tight_stop_is_triggered_by_noise_not_by_direction():
     wide = z.entry_exit(noise, 0, 40, 25, 15, 0.0, "15:30")
     assert tight["why"] == "stop"          # the bounce alone takes it out
     assert wide["why"] == "timeout"        # the same tape leaves it alone
+
+
+def test_the_grid_runs_past_the_pair_that_won():
+    """+40/-25 was the best pair in the 20-session run and sat exactly at the
+    EDGE of the old grid. A maximum on a boundary usually means the real one is
+    outside it, so the grid has to reach past it before the result can be
+    called an optimum."""
+    assert (40, 25) in z.GRID
+    assert max(t for t, s in z.GRID) > 40
+    assert any(s > 25 for t, s in z.GRID)
+    assert all(stop < take for take, stop in z.GRID)
+
+
+def test_salems_target_is_recorded_as_a_number_the_run_checks():
+    """'Losses no more than 35% of trades entered' — his words, so the run
+    marks the rows that meet it instead of leaving him to scan the column."""
+    assert z.TARGET_LOSS_RATE == 35.0

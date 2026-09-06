@@ -512,8 +512,16 @@ def run_one(date, args, spread_pct):
     return {"date": date, "sweep": pooled, **stats}
 
 
-GRID = [(40, 25), (30, 20), (25, 15), (25, 10), (20, 10), (15, 10), (15, 8),
-        (12, 8), (10, 8)]
+# The 20-session run's best pair, +40/-25, sat exactly at the EDGE of the old
+# grid, and a maximum on the boundary usually means the real one is outside it.
+# So the grid now runs well past it. Wider is not free: the loss RATE falls but
+# each loss costs more, which is why every row reports both.
+GRID = [(100, 50), (80, 50), (75, 40), (60, 40), (60, 35), (50, 35), (50, 30),
+        (40, 30), (40, 25), (30, 20), (25, 15), (25, 10), (20, 10), (15, 10),
+        (15, 8), (12, 8), (10, 8)]
+
+# Salem's target, in his words: losses no more than 35% of all trades entered.
+TARGET_LOSS_RATE = 35.0
 
 
 def sweep(tapes, args, spread_of, gate_map, ticker_of):
@@ -586,7 +594,7 @@ def pooled_sweep(results, args):
     print("  (each cell is return per $1; columns charge the stop slipping "
           "through)\n")
     head = "  ".join(f"slip {s:>2.0f}%" for s in slips)
-    print(f"  {'take':>5} {'stop':>5} {'need':>6} {'n':>6}  {head}")
+    print(f"  {'take':>5} {'stop':>5} {'need':>6} {'lost':>6} {'n':>6}  {head}")
     seen = set()
     out = []
     for take, stop, _ in keys:
@@ -611,16 +619,46 @@ def pooled_sweep(results, args):
                 n_at_base = num
         if n_at_base < 100:
             continue
-        out.append((cells[0] or 0, take, stop, n_at_base, cells))
-    for _, take, stop, n, cells in sorted(out, reverse=True):
+        lost_at_base = None
+        num = tot = 0
+        for r in results:
+            got = r.get("sweep", {}).get((take, stop, slips[0]))
+            if got:
+                tot += got[1] * got[2]
+                num += got[2]
+        if num:
+            lost_at_base = tot / num
+        out.append((cells[0] or 0, take, stop, n_at_base, cells, lost_at_base))
+    hits = []
+    for _, take, stop, n, cells, lost in sorted(out, reverse=True):
         need = stop / (take + stop) * 100
         body = "  ".join("     -  " if c is None else
                          f"${c:>6.3f}" + ("*" if c > 1.0 else " ")
                          for c in cells)
-        print(f"  +{take:>3}% -{stop:>3}% {need:>5.1f}% {n:>6}  {body}")
+        target = ""
+        if lost is not None and lost <= TARGET_LOSS_RATE:
+            target = "  <= 35% TARGET"
+            if cells[0] and cells[0] > 1.0:
+                hits.append((take, stop, lost, cells))
+        print(f"  +{take:>3}% -{stop:>3}% {need:>5.1f}% {lost:>5.1f}% {n:>6}"
+              f"  {body}{target}")
     print("\n  * = made money. A row that only makes money in the leftmost "
           "column\n    was measuring the no-slippage assumption, not the "
           "trade.")
+    print(f"\n  Salem's rule: losses no more than {TARGET_LOSS_RATE:.0f}% of "
+          "trades entered.")
+    if hits:
+        take, stop, lost, cells = hits[0]
+        survives = cells[-1] and cells[-1] > 1.0
+        print(f"  Closest pair that meets it AND makes money: +{take}% / "
+              f"-{stop}%, losing {lost:.1f}%.")
+        print("  " + ("It survives the worst slippage column, so it is about "
+                      "the trade." if survives else
+                      "It does NOT survive the worst slippage column — that is "
+                      "an assumption, not an edge."))
+    else:
+        print("  Nothing in this grid met it while also making money. The "
+              "widest\n  pairs cut the loss RATE but pay more on each loss.")
 
 
 def main(argv=None):
