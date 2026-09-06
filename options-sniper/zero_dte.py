@@ -139,7 +139,7 @@ def build_gates(ticker, date, args):
 
 
 def entry_exit(rows, i, take_pct, stop_pct, max_hold, spread_pct, hard_exit,
-               slip_pct=0.0):
+               slip_pct=0.0, fee=None):
     """One trade: buy at row i, then walk forward minute by minute.
 
     This endpoint serves NO bid/ask — only trade prices — so the spread cannot
@@ -167,10 +167,16 @@ def entry_exit(rows, i, take_pct, stop_pct, max_hold, spread_pct, hard_exit,
     mid_in = rows[i]["close"] or rows[i]["avg_price"]
     if mid_in <= 0:
         return None
-    cost = mid_in * (1 + half)                  # lift the offer
+    # Commission, per contract per side, converted to per-share because the
+    # tape quotes per share. $0.65 on a $0.95 contract is 0.7% each way — a
+    # third of the whole measured edge, and it had never been charged.
+    fee_ps = (C.COMMISSION_PER_CONTRACT if fee is None else fee) / 100.0
+    cost = mid_in * (1 + half) + fee_ps         # lift the offer, pay the fee
     out_factor = 1 - half                       # hit the bid on the way out
-    target = cost * (1 + take_pct / 100.0) / out_factor
-    stop = cost * (1 - stop_pct / 100.0) / out_factor
+    # the target/stop are levels the MID must reach so that, after the bid
+    # side of the spread and the exit fee, the trade nets the stated percent
+    target = (cost * (1 + take_pct / 100.0) + fee_ps) / out_factor
+    stop = (cost * (1 - stop_pct / 100.0) + fee_ps) / out_factor
 
     seen = 0
     for r in rows[i + 1:i + 1 + max_hold]:
@@ -179,18 +185,18 @@ def entry_exit(rows, i, take_pct, stop_pct, max_hold, spread_pct, hard_exit,
         seen += 1
         if r["low"] > 0 and r["low"] <= stop:        # both in one bar -> stop
             filled = stop * (1 - slip_pct / 100.0)
-            return {"exit": max(filled, r["low"]) * out_factor, "entry": cost,
-                    "minutes": seen, "why": "stop"}
+            return {"exit": max(filled, r["low"]) * out_factor - fee_ps,
+                    "entry": cost, "minutes": seen, "why": "stop"}
         if r["high"] >= target:
-            return {"exit": target * out_factor, "entry": cost,
+            return {"exit": target * out_factor - fee_ps, "entry": cost,
                     "minutes": seen, "why": "take"}
 
     if not seen:
         return None
     last = rows[i + seen]
     mid_out = last["close"] or last["avg_price"]
-    return {"exit": max(mid_out, 0.0) * out_factor, "entry": cost,
-            "minutes": seen, "why": "timeout"}
+    return {"exit": max(max(mid_out, 0.0) * out_factor - fee_ps, 0.0),
+            "entry": cost, "minutes": seen, "why": "timeout"}
 
 
 def break_even(take_pct, stop_pct):
@@ -362,7 +368,8 @@ def run_one(date, args, spread_pct):
           f"cut at -{args.stop:.0f}%,")
     print(f"give up after {args.max_hold} minutes, out by {args.hard_exit}.")
     print(f"Spread: each contract charged its own measured width, half each "
-          f"way. Entry premium ${args.min_price}-${args.max_price} "
+          f"way. Commission ${C.COMMISSION_PER_CONTRACT:.2f}/contract/side.\n"
+          f"Entry premium ${args.min_price}-${args.max_price} "
           f"(${args.min_price*100:.0f}-${args.max_price*100:.0f} a contract)\n")
     # expiry_dates, not min_dte/max_dte: the screener measures dte from TODAY,
     # so asking for dte 0 on a past session matched nothing on every date.

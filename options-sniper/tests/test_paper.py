@@ -136,3 +136,41 @@ def test_the_record_is_shown_against_the_backtest_it_is_testing(monkeypatch,
     out = capsys.readouterr().out
     assert "backtest said 43.2%" in out
     assert "backtest said $1.033" in out
+
+
+# ── The two circuit breakers ────────────────────────────────────
+def test_the_daily_loss_cap_closes_the_day(monkeypatch, tmp_path):
+    """At 30 alerts a day and a 41% loss rate a bad session is a certainty. A
+    rule that keeps firing into one turns a thin edge into a large loss."""
+    fresh(monkeypatch, tmp_path)
+    import datetime
+    today = datetime.datetime.now().isoformat(timespec="seconds")
+    paper._save({"open": [], "closed": [
+        {"ticker": "A", "why": "stop", "multiple": 0.70, "cost": 500.0,
+         "closed_at": today},
+        {"ticker": "B", "why": "stop", "multiple": 0.70, "cost": 500.0,
+         "closed_at": today}]})                      # -$300 on paper today
+    monkeypatch.setattr(C, "MAX_DAILY_LOSS_USD", 300)
+    ok, why = paper.may_open("call")
+    assert not ok and "daily loss cap" in why
+
+
+def test_yesterdays_losses_do_not_count_today(monkeypatch, tmp_path):
+    fresh(monkeypatch, tmp_path)
+    paper._save({"open": [], "closed": [
+        {"ticker": "A", "why": "stop", "multiple": 0.5, "cost": 1000.0,
+         "closed_at": "2020-01-01T15:00:00"}]})
+    monkeypatch.setattr(C, "MAX_DAILY_LOSS_USD", 300)
+    assert paper.may_open("call")[0]
+
+
+def test_the_same_direction_cap_stops_the_thirtieth_call(monkeypatch, tmp_path):
+    """Thirty calls on a rally day are one bet placed thirty times."""
+    fresh(monkeypatch, tmp_path)
+    monkeypatch.setattr(C, "MAX_SAME_DIRECTION_OPEN", 2)
+    paper._save({"open": [
+        {"option_symbol": "A", "type": "call", "open": True},
+        {"option_symbol": "B", "type": "call", "open": True}], "closed": []})
+    ok, why = paper.may_open("call")
+    assert not ok and "same bet" in why
+    assert paper.may_open("put")[0]          # the other side is a different bet

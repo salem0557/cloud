@@ -149,6 +149,43 @@ def mark(verbose=True):
     return closed_now
 
 
+def today_pnl_usd(book=None):
+    """Dollars won or lost on paper positions closed today."""
+    book = book or _load()
+    today = datetime.date.today().isoformat()
+    return sum((pos["multiple"] - 1.0) * (pos.get("cost") or 0)
+               for pos in book["closed"]
+               if (pos.get("closed_at") or "")[:10] == today)
+
+
+def open_same_direction(direction, book=None):
+    """How many open paper positions already point the way this alert does."""
+    book = book or _load()
+    return sum(1 for pos in book["open"]
+               if pos.get("open") and pos.get("type") == direction)
+
+
+def may_open(direction):
+    """-> (ok, reason). The two limits no desk goes live without.
+
+    A daily loss cap, because at 30 alerts a day and a 41% loss rate a bad
+    session is a certainty and a rule that fires 30 times into one turns a thin
+    edge into a large loss. And a same-direction cap, because thirty calls on
+    a rally day are one bet placed thirty times, not thirty bets.
+    """
+    if C.MAX_DAILY_LOSS_USD:
+        lost = -today_pnl_usd()
+        if lost >= C.MAX_DAILY_LOSS_USD:
+            return False, (f"daily loss cap: -${lost:.0f} on paper today "
+                           f"(cap ${C.MAX_DAILY_LOSS_USD:.0f})")
+    if C.MAX_SAME_DIRECTION_OPEN:
+        n = open_same_direction(direction)
+        if n >= C.MAX_SAME_DIRECTION_OPEN:
+            return False, (f"{n} {direction}s already open — the same bet "
+                           f"{n} times is not {n} bets")
+    return True, ""
+
+
 def summary(book=None):
     """The running record, in the same terms as the backtest."""
     book = book or _load()

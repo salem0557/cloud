@@ -170,7 +170,24 @@ BARS_PER_SESSION = int(TRADING_HOURS_PER_DAY * 60 / 15)      # 26
 PAPER_MAX_HOLD = 15          # minutes, as in the backtest
 PAPER_HARD_EXIT = "15:30"
 PAPER_MIN_TRADES = 30        # below this the record says nothing either way
-PAPER_BASELINE = {"hit": 43.2, "lost": 41.2, "avg": 1.033}
+PAPER_BASELINE = {"hit": 43.2, "lost": 41.2, "avg": 1.033}   # pre-commission
+
+# ── What no desk would go live without ──────────────────────────
+# Per contract, per side. $0.65 is the common retail rate; some brokers charge
+# $0.50, a few $0. On a $0.95 contract that is 0.7% each way, 1.4% round trip
+# — a third of the whole measured edge, and nothing had charged it. The
+# backtest and the paper book both charge it now.
+COMMISSION_PER_CONTRACT = float(os.environ.get("COMMISSION_PER_CONTRACT") or 0.65)
+
+# Stop alerting for the day once the paper book has lost this much. At 30
+# alerts a day and a 41% loss rate, a bad session is not a possibility, it is
+# a certainty, and a rule that fires 30 times into one is the fastest way to
+# turn a thin edge into a large loss. 0 disables.
+MAX_DAILY_LOSS_USD = float(os.environ.get("MAX_DAILY_LOSS_USD") or 300)
+
+# Thirty calls on a rally day are one bet placed thirty times, not thirty
+# bets. No more than this many open paper positions on the same side.
+MAX_SAME_DIRECTION_OPEN = int(os.environ.get("MAX_SAME_DIRECTION_OPEN") or 4)
 
 # ── The three gates Salem's previous system had and our test excluded ──
 # Its 0DTE names quote 1-3% wide against the 10-25% of the population we
