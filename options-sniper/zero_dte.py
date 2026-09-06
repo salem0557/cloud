@@ -514,13 +514,10 @@ def run_one(date, args, spread_pct):
         print("\n  ONLY ENTRIES THAT CLEARED THE GATES:")
     stats = summarise(obs, args.take, args.stop)
 
-    pooled = sweep(tapes, args, spread_of, gate_map, ticker_of)
-    detail = {"budget": defaultdict(list), "moneyness": defaultdict(list)}
-    for o in obs:
-        detail["budget"][bucket("price", o.get("price"))].append(o)
-        detail["moneyness"][bucket("moneyness", o.get("moneyness"))].append(o)
+    pooled, splits = sweep(tapes, args, spread_of, gate_map, ticker_of)
     report_features(obs, stats["avg"])
-    return {"date": date, "sweep": pooled, "detail": detail, **stats}
+    return {"date": date, "sweep": pooled, "splits": splits,
+            "detail": _split(obs), **stats}
 
 
 # The 20-session run's best pair, +40/-25, sat exactly at the EDGE of the old
@@ -559,7 +556,7 @@ def sweep(tapes, args, spread_of, gate_map, ticker_of):
     print("  (break-even = stop / (take + stop) — the stop is the lever)\n")
     print(f"  {'take':>5} {'stop':>5} {'need':>6} {'lost':>7} {'per $1':>8} "
           f"{'n':>6}")
-    rows, pooled = [], {}
+    rows, pooled, splits = [], {}, {}
     for take, stop in GRID:
         for slip in args.slips:
             got = []
@@ -580,6 +577,13 @@ def sweep(tapes, args, spread_of, gate_map, ticker_of):
             avg_loss = (statistics.mean(1 - o["multiple"] for o in losers) * 100
                         if losers else 0.0)
             pooled[(take, stop, slip)] = (avg, lost, len(got), hit, avg_loss)
+            if slip == args.slips[0]:
+                # Kept because the alternative was a full twenty-session
+                # re-run for every pair we wanted to ask about. The first run
+                # of by_budget answered at +25/-10 — the pair we had already
+                # abandoned — because the split was built from the configured
+                # pair alone and the default had not moved.
+                splits[(take, stop)] = _split(got)
             if slip == args.slips[0] and len(got) >= 20:
                 rows.append((lost, take, stop, stop / (take + stop) * 100,
                              avg, len(got)))
@@ -589,33 +593,59 @@ def sweep(tapes, args, spread_of, gate_map, ticker_of):
               f"${avg:>7.3f} {n:>6}{mark}")
     if not rows:
         print("  Not enough trades at this session to say anything.")
-    return pooled
+    return pooled, splits
 
 
-def by_budget(results, args):
-    """The chosen pair, split by what the contract cost and how far out it was.
+def _split(obs):
+    """The two cuts of the cheap-far-strike question, from one list of trades.
+
+    Price is what he pays; distance to the strike is what the stock has to do
+    for it to pay back. They are not the same cut and a cheap near strike is
+    not a cheap far one.
+    """
+    out = {"budget": defaultdict(list), "moneyness": defaultdict(list)}
+    for o in obs:
+        out["budget"][bucket("price", o.get("price"))].append(o)
+        out["moneyness"][bucket("moneyness", o.get("moneyness"))].append(o)
+    return out
+
+
+def by_budget(results, args, ranked=None):
+    """Cheap or far — split at the configured pair AND at the pair that won.
 
     Salem likes the cheap far strike that costs little and starts moving the
     moment a wave begins. Every run so far said cheap loses — but every run
     said it at +25/-10, and that stop is inside the noise on a contract quoted
-    5% wide. A cheap far strike has enormous gamma and needs room to breathe,
-    so the question of whether it survives at +40/-30 has never actually been
-    asked. This asks it.
+    5% wide. A cheap far strike has enormous gamma and needs room to breathe.
+
+    The first version of this asked only at the configured pair, so a run left
+    on the default answered at +25/-10 again — the pair we had abandoned. The
+    sweep already trades every pair in the grid, so the pair the pooled table
+    ranks first is printed too, whatever the flags said.
 
     Both cuts matter and they are not the same cut. Price is what he pays;
     distance to the strike is what the stock has to do for it to pay back.
     """
-    rows = [r for r in results if r.get("detail")]
-    if not rows:
+    if not any(r.get("detail") for r in results):
         return
-    take, stop = int(args.take), int(args.stop)
+    pairs = [(int(args.take), int(args.stop), "the pair this run used")]
+    for take, stop in (ranked or [])[:1]:
+        if (take, stop) != pairs[0][:2]:
+            pairs.append((take, stop, "the pair the pooled table ranks first"))
+    for take, stop, why in pairs:
+        _budget_table(results, take, stop, why, pairs[0][:2])
+
+
+def _budget_table(results, take, stop, why, configured):
     print(f"\n{'='*64}")
     print(f"  +{take}% / -{stop}% BY WHAT THE CONTRACT COST AND HOW FAR OUT")
-    print("  (the cheap-far-strike question, asked at the pair actually used)\n")
+    print(f"  (the cheap-far-strike question, asked at {why})\n")
     for name, label in (("budget", "cost"), ("moneyness", "distance to strike")):
         buckets = defaultdict(list)
-        for r in rows:
-            for key, obs in (r["detail"].get(name) or {}).items():
+        for r in results:
+            src = (r.get("detail") if (take, stop) == configured
+                   else (r.get("splits") or {}).get((take, stop)))
+            for key, obs in (src or {}).get(name, {}).items():
                 buckets[key] += obs
         if not buckets:
             continue
@@ -709,9 +739,13 @@ def pooled_sweep(results, args):
         out.append((cells[0] or 0, take, stop, n_at_base, cells, lost_at_base,
                     won, len(per_session), equal, hit_at_base,
                     avg_loss_at_base))
-    hits = []
+    hits, ranked = [], []
     for (_, take, stop, n, cells, lost, won, sessions, equal,
          hit, avg_loss) in sorted(out, reverse=True):
+        # Ranked by the equal-weighted figure, not the pooled one: the pooled
+        # average weights a session by how many entries it produced, so it
+        # hands the verdict to the busiest days.
+        ranked.append((equal if equal is not None else 0.0, won, take, stop))
         # stop/(take+stop) assumes every loss is a full stop. It is not: with
         # a 15-minute clock most losers time out somewhere short of the stop,
         # so the real bar is set by the loss actually taken. Printing only the
@@ -766,6 +800,7 @@ def pooled_sweep(results, args):
     else:
         print("  Nothing in this grid met it while also making money. The "
               "widest\n  pairs cut the loss RATE but pay more on each loss.")
+    return [(take, stop) for _, _, take, stop in sorted(ranked, reverse=True)]
 
 
 def main(argv=None):
@@ -841,15 +876,15 @@ def main(argv=None):
         elif len(wins) < len(results) * 0.6:
             print("  A rule that works on some sessions and not others is a "
                   "coin flip with extra steps.")
-        pooled_sweep(results, args)
-        by_budget(results, args)
+        ranked = pooled_sweep(results, args)
+        by_budget(results, args, ranked)
 
     out = C.DATA_DIR / "zero_dte.json"
     try:
         out.write_text(json.dumps(
             [{k: (v if k != "sweep" else
                   {f"{t}/{st}/{sl}": list(cell) for (t, st, sl), cell in v.items()})
-              for k, v in r.items() if k not in ("obs", "detail")}
+              for k, v in r.items() if k not in ("obs", "detail", "splits")}
              for r in results], indent=2))
         print(f"\nWrote {out}")
     except OSError:
