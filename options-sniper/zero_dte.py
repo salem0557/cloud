@@ -138,7 +138,8 @@ def build_gates(ticker, date, args):
             "context": len(bars)}
 
 
-def entry_exit(rows, i, take_pct, stop_pct, max_hold, spread_pct, hard_exit):
+def entry_exit(rows, i, take_pct, stop_pct, max_hold, spread_pct, hard_exit,
+               slip_pct=0.0):
     """One trade: buy at row i, then walk forward minute by minute.
 
     This endpoint serves NO bid/ask — only trade prices — so the spread cannot
@@ -155,9 +156,12 @@ def entry_exit(rows, i, take_pct, stop_pct, max_hold, spread_pct, hard_exit):
     an OHLC bar cannot say which came first, and assuming the good one is how
     a backtest invents a win rate.
 
-    One assumption still favours the trade and cannot be removed from minute
-    bars: the target pays exactly the limit and the stop exactly the stop, so
-    slippage through a fast move is not charged.
+    `slip_pct` charges the assumption the rest of this file cannot test: a
+    0DTE contract in a fast move gaps THROUGH its stop, and the fill is worse
+    than the level. It matters most to the configuration that looks best —
+    a wide stop only pays if the stop actually holds — so it is a parameter
+    rather than a silent zero. The target has no equivalent: a limit order
+    fills at the limit or not at all.
     """
     half = spread_pct / 200.0
     mid_in = rows[i]["close"] or rows[i]["avg_price"]
@@ -174,7 +178,8 @@ def entry_exit(rows, i, take_pct, stop_pct, max_hold, spread_pct, hard_exit):
             break
         seen += 1
         if r["low"] > 0 and r["low"] <= stop:        # both in one bar -> stop
-            return {"exit": stop * out_factor, "entry": cost,
+            filled = stop * (1 - slip_pct / 100.0)
+            return {"exit": max(filled, r["low"]) * out_factor, "entry": cost,
                     "minutes": seen, "why": "stop"}
         if r["high"] >= target:
             return {"exit": target * out_factor, "entry": cost,
@@ -250,7 +255,7 @@ def features(rows, i, meta):
 
 
 def scan_contract(rows, meta, args, spread_pct, gates=None,
-                  take=None, stop=None):
+                  take=None, stop=None, slip=None):
     """Every minute of this session that could have been an entry.
 
     `gates` maps 'HH:MM' -> the signal that was live in the 15m bar containing
@@ -272,7 +277,8 @@ def scan_contract(rows, meta, args, spread_pct, gates=None,
             if not sig or sig["direction"] != meta.get("type"):
                 continue
         trade = entry_exit(rows, i, take or args.take, stop or args.stop,
-                           args.max_hold, spread_pct, args.hard_exit)
+                           args.max_hold, spread_pct, args.hard_exit,
+                           slip_pct=args.slip if slip is None else slip)
         if not trade:
             continue
         trade["multiple"] = trade["exit"] / trade["entry"]
@@ -501,13 +507,28 @@ def run_one(date, args, spread_pct):
         print("\n  ONLY ENTRIES THAT CLEARED THE GATES:")
     stats = summarise(obs, args.take, args.stop)
 
-    sweep(tapes, args, spread_of, gate_map, ticker_of)
+    pooled = sweep(tapes, args, spread_of, gate_map, ticker_of)
     report_features(obs, stats["avg"])
-    return {"date": date, **stats}
+    return {"date": date, "sweep": pooled, **stats}
 
 
-GRID = [(40, 25), (30, 20), (25, 15), (25, 10), (20, 10), (15, 10), (15, 8),
-        (12, 8), (10, 8)]
+# The 20-session run's best pair, +40/-25, sat exactly at the EDGE of the old
+# grid, and a maximum on the boundary usually means the real one is outside it.
+# So the grid now runs well past it. Wider is not free: the loss RATE falls but
+# each loss costs more, which is why every row reports both.
+# Bounded at both ends, and Salem drew the upper one: +100/-50 "مثل المقامرة".
+# He is right. A -50% stop is not a stop, it is letting the contract die and
+# calling it a plan. The measured gradient says wider keeps helping, but the
+# gradient is not the whole story — past some width the stop stops being a
+# risk control at all. The band kept here is the one where a stop is still a
+# stop: wide enough to sit OUTSIDE the noise that took out 78% of trades at
+# -10%, tight enough to still be a decision.
+MAX_STOP_PCT = 35.0
+GRID = [(60, 35), (50, 35), (50, 30), (40, 30), (40, 25), (30, 20), (25, 15),
+        (25, 10), (20, 10), (15, 10), (15, 8), (12, 8), (10, 8)]
+
+# Salem's target, in his words: losses no more than 35% of all trades entered.
+TARGET_LOSS_RATE = 35.0
 
 
 def sweep(tapes, args, spread_of, gate_map, ticker_of):
@@ -527,30 +548,124 @@ def sweep(tapes, args, spread_of, gate_map, ticker_of):
     print("  (break-even = stop / (take + stop) — the stop is the lever)\n")
     print(f"  {'take':>5} {'stop':>5} {'need':>6} {'lost':>7} {'per $1':>8} "
           f"{'n':>6}")
-    rows = []
+    rows, pooled = [], {}
     for take, stop in GRID:
-        got = []
-        for c, tape_rows in tapes:
-            sp = spread_of.get(c["option_symbol"])
-            if sp is None:
+        for slip in args.slips:
+            got = []
+            for c, tape_rows in tapes:
+                sp = spread_of.get(c["option_symbol"])
+                if sp is None:
+                    continue
+                got += scan_contract(tape_rows, c, args, sp,
+                                     gates=(gate_map.get(ticker_of(c)) or {})
+                                     if args.gated else None,
+                                     take=take, stop=stop, slip=slip)
+            if not got:
                 continue
-            got += scan_contract(tape_rows, c, args, sp,
-                                 gates=(gate_map.get(ticker_of(c)) or {})
-                                 if args.gated else None,
-                                 take=take, stop=stop)
-        if len(got) < 20:
-            continue
-        avg = statistics.mean(o["multiple"] for o in got)
-        lost = sum(1 for o in got if o["multiple"] < 1.0) / len(got) * 100
-        need = stop / (take + stop) * 100
-        rows.append((lost, take, stop, need, avg, len(got)))
+            avg = statistics.mean(o["multiple"] for o in got)
+            lost = sum(1 for o in got if o["multiple"] < 1.0) / len(got) * 100
+            pooled[(take, stop, slip)] = (avg, lost, len(got))
+            if slip == args.slips[0] and len(got) >= 20:
+                rows.append((lost, take, stop, stop / (take + stop) * 100,
+                             avg, len(got)))
     for lost, take, stop, need, avg, n in sorted(rows):
         mark = "  <- makes money" if avg > 1.0 else ""
         print(f"  +{take:>3}% -{stop:>3}% {need:>5.1f}% {lost:>6.1f}% "
               f"${avg:>7.3f} {n:>6}{mark}")
     if not rows:
-        print("  Not enough trades at any setting to say anything.")
-    return rows
+        print("  Not enough trades at this session to say anything.")
+    return pooled
+
+
+def pooled_sweep(results, args):
+    """Every take/stop pair pooled across every session, at each slippage.
+
+    A per-session table cannot answer the question. The first twenty-session
+    run had +40/-25 winning five sessions and losing four, and the only way to
+    see that it pooled to $1.079 while +25/-10 pooled to $0.975 was to weight
+    the sessions by hand. The tool should not make its reader do that.
+
+    The slippage columns are the real test of that result. The wide pair only
+    wins if the wide stop actually holds, so it is the configuration MOST
+    exposed to a 0DTE contract gapping through its stop — the one assumption
+    minute bars cannot check. If the ranking survives a 25% slip it is about
+    the setup; if it inverts, it was about an assumption.
+    """
+    keys = sorted({k for r in results for k in r.get("sweep", {})},
+                  key=lambda k: (-k[0], -k[1]))
+    if not keys:
+        return
+    slips = args.slips
+    print(f"\n{'='*64}")
+    print("  POOLED across every session — the table that decides it")
+    print("  (each cell is return per $1; columns charge the stop slipping "
+          "through)\n")
+    head = "  ".join(f"slip {s:>2.0f}%" for s in slips)
+    print(f"  {'take':>5} {'stop':>5} {'need':>6} {'lost':>6} {'n':>6}  {head}")
+    seen = set()
+    out = []
+    for take, stop, _ in keys:
+        if (take, stop) in seen:
+            continue
+        seen.add((take, stop))
+        cells, n_at_base = [], 0
+        for slip in slips:
+            tot = num = lost = 0
+            for r in results:
+                got = r.get("sweep", {}).get((take, stop, slip))
+                if got:
+                    avg, lo, n = got
+                    tot += avg * n
+                    lost += lo * n
+                    num += n
+            if not num:
+                cells.append(None)
+                continue
+            cells.append(tot / num)
+            if slip == slips[0]:
+                n_at_base = num
+        if n_at_base < 100:
+            continue
+        lost_at_base = None
+        num = tot = 0
+        for r in results:
+            got = r.get("sweep", {}).get((take, stop, slips[0]))
+            if got:
+                tot += got[1] * got[2]
+                num += got[2]
+        if num:
+            lost_at_base = tot / num
+        out.append((cells[0] or 0, take, stop, n_at_base, cells, lost_at_base))
+    hits = []
+    for _, take, stop, n, cells, lost in sorted(out, reverse=True):
+        need = stop / (take + stop) * 100
+        body = "  ".join("     -  " if c is None else
+                         f"${c:>6.3f}" + ("*" if c > 1.0 else " ")
+                         for c in cells)
+        target = ""
+        if lost is not None and lost <= TARGET_LOSS_RATE:
+            target = "  <= 35% TARGET"
+            if cells[0] and cells[0] > 1.0:
+                hits.append((take, stop, lost, cells))
+        print(f"  +{take:>3}% -{stop:>3}% {need:>5.1f}% {lost:>5.1f}% {n:>6}"
+              f"  {body}{target}")
+    print("\n  * = made money. A row that only makes money in the leftmost "
+          "column\n    was measuring the no-slippage assumption, not the "
+          "trade.")
+    print(f"\n  Salem's rule: losses no more than {TARGET_LOSS_RATE:.0f}% of "
+          "trades entered.")
+    if hits:
+        take, stop, lost, cells = hits[0]
+        survives = cells[-1] and cells[-1] > 1.0
+        print(f"  Closest pair that meets it AND makes money: +{take}% / "
+              f"-{stop}%, losing {lost:.1f}%.")
+        print("  " + ("It survives the worst slippage column, so it is about "
+                      "the trade." if survives else
+                      "It does NOT survive the worst slippage column — that is "
+                      "an assumption, not an edge."))
+    else:
+        print("  Nothing in this grid met it while also making money. The "
+              "widest\n  pairs cut the loss RATE but pay more on each loss.")
 
 
 def main(argv=None):
@@ -564,6 +679,12 @@ def main(argv=None):
                         "--contracts requests per session.")
 
     p.add_argument("--stop", type=float, default=10.0, help="stop loss %%")
+    p.add_argument("--slip", type=float, default=0.0,
+                   help="how far a stop fills BELOW its level, as %% of the "
+                        "stop price. A 0DTE contract gaps through its stop; "
+                        "0 assumes it never does.")
+    p.add_argument("--slips", default="0,10,25",
+                   help="slippage levels the pooled table compares")
     p.add_argument("--max-hold", type=int, default=15,
                    help="minutes to give the trade before getting out")
     p.add_argument("--hard-exit", default=HARD_EXIT)
@@ -587,6 +708,7 @@ def main(argv=None):
     p.add_argument("--type", default=None, choices=["call", "put"])
     p.add_argument("--take", type=float, default=25.0, help="take profit %%")
     args = p.parse_args(argv)
+    args.slips = [float(x) for x in args.slips.split(",") if x.strip()]
 
     if args.sessions:
         end = args.date or datetime.date.today().isoformat()
@@ -619,6 +741,7 @@ def main(argv=None):
         elif len(wins) < len(results) * 0.6:
             print("  A rule that works on some sessions and not others is a "
                   "coin flip with extra steps.")
+        pooled_sweep(results, args)
 
     out = C.DATA_DIR / "zero_dte.json"
     try:

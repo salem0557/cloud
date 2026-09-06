@@ -337,3 +337,56 @@ def test_the_alert_cap_is_a_volume_limit_not_a_quality_gate(monkeypatch):
     importlib.reload(C)
     assert C.MAX_ALERTS_PER_DAY == 5
     assert C.THRESHOLD == 85          # unchanged: the cap is not the gate
+
+
+# ── What the twenty-session run actually showed ─────────────────
+def test_a_stop_can_fill_below_its_level():
+    """The winning configuration in the 20-session run was the WIDEST pair,
+    +40/-25 pooling to $1.079 against $0.975 for +25/-10. A wide stop only pays
+    if the stop holds, so that result is the one most exposed to a 0DTE
+    contract gapping through it — the assumption minute bars cannot check."""
+    rows = [bar("10:00", 1.0, 1.0, 1.0, 1.0),
+            bar("10:01", 1.0, 1.0, 0.70, 0.70)]
+    clean = z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30", slip_pct=0)
+    slipped = z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30", slip_pct=20)
+    assert clean["why"] == slipped["why"] == "stop"
+    assert clean["exit"] == 0.75
+    assert slipped["exit"] < clean["exit"]
+
+
+def test_slippage_never_fills_below_where_the_contract_traded():
+    """The bar's low is the floor. Charging worse than the worst print of the
+    minute would be inventing a loss."""
+    rows = [bar("10:00", 1.0, 1.0, 1.0, 1.0),
+            bar("10:01", 1.0, 1.0, 0.74, 0.74)]
+    t = z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30", slip_pct=90)
+    assert t["exit"] == 0.74          # not 0.075
+
+
+def test_a_tight_stop_is_triggered_by_noise_not_by_direction():
+    """78-88% of trades stopped out at -10%. On a contract quoted 5% wide the
+    stop sits inside the minute-to-minute bounce, so it fires whether or not
+    the read was right. This is why 'small profit, no loss' measured worse."""
+    noise = [bar("10:00", 1.0, 1.0, 1.0, 1.0)]
+    noise += [bar(f"10:{m:02d}", 1.0, 1.02, 0.89, 1.0) for m in range(1, 6)]
+    tight = z.entry_exit(noise, 0, 25, 10, 15, 0.0, "15:30")
+    wide = z.entry_exit(noise, 0, 40, 25, 15, 0.0, "15:30")
+    assert tight["why"] == "stop"          # the bounce alone takes it out
+    assert wide["why"] == "timeout"        # the same tape leaves it alone
+
+
+def test_the_grid_runs_past_the_pair_that_won():
+    """+40/-25 was the best pair in the 20-session run and sat exactly at the
+    EDGE of the old grid. A maximum on a boundary usually means the real one is
+    outside it, so the grid has to reach past it before the result can be
+    called an optimum."""
+    assert (40, 25) in z.GRID
+    assert max(t for t, s in z.GRID) > 40
+    assert any(s > 25 for t, s in z.GRID)
+    assert all(stop < take for take, stop in z.GRID)
+
+
+def test_salems_target_is_recorded_as_a_number_the_run_checks():
+    """'Losses no more than 35% of trades entered' — his words, so the run
+    marks the rows that meet it instead of leaving him to scan the column."""
+    assert z.TARGET_LOSS_RATE == 35.0
