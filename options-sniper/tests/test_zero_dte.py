@@ -390,3 +390,35 @@ def test_salems_target_is_recorded_as_a_number_the_run_checks():
     """'Losses no more than 35% of trades entered' — his words, so the run
     marks the rows that meet it instead of leaving him to scan the column."""
     assert z.TARGET_LOSS_RATE == 35.0
+
+
+# ── Reading the pooled table honestly ───────────────────────────
+def test_the_sweep_survives_being_written_to_disk():
+    """The 20-session run printed its whole result and then crashed on
+    json.dumps: the sweep is keyed by (take, stop, slip) tuples, and JSON keys
+    must be strings. Nothing was lost from the screen, but nothing was saved."""
+    import json
+    r = {"date": "2026-09-04", "avg": 1.1, "loss_rate": 40.3,
+         "sweep": {(50, 35, 0.0): (1.119, 40.3, 796)}}
+    encoded = {k: (v if k != "sweep" else
+                   {f"{t}/{st}/{sl}": list(c) for (t, st, sl), c in v.items()})
+               for k, v in r.items()}
+    assert json.loads(json.dumps(encoded))["sweep"]["50/35/0.0"][0] == 1.119
+
+
+def test_pooling_by_trade_count_flatters_a_rule_that_fires_on_its_best_days():
+    """At +50/-35 the pooled figure is $1.111 but the equal-weighted one is
+    $1.035, because the five winning sessions produced 557 of the 766 trades
+    and the four losing sessions only 209. A rule that fires more on the days
+    that suit it will always look better pooled than it would session by
+    session, so the table has to show both."""
+    per_session = [(143, 1.167), (133, 1.180), (75, 1.224), (30, 1.211),
+                   (176, 1.216), (30, 0.706), (30, 0.804), (29, 0.843),
+                   (120, 0.963)]
+    n = sum(t for t, _ in per_session)
+    pooled = sum(t * r for t, r in per_session) / n
+    equal = sum(r for _, r in per_session) / len(per_session)
+    assert round(pooled, 3) == 1.111
+    assert round(equal, 3) == 1.035
+    assert pooled > equal          # the gap is the warning
+    assert sum(1 for _, r in per_session if r > 1.0) == 5   # 5 of 9, not 9 of 9
