@@ -45,73 +45,70 @@ def chain(payload, tier=None):
     # 1. What the stock did — the only observed fact in the chain.
     if level and close:
         word = "كسر المقاومة" if up else "كسر الدعم"
-        beyond = "وأغلق فوقها" if up else "وأغلق تحتها"
+        beyond = "وثبت فوقها" if up else "وثبت تحتها"
         if not tech.get("closed_beyond"):
-            beyond = "ولم تُغلق الشمعة بعد خلفها"
+            beyond = "ولسه ما ثبت خلفها"
         links.append(_link(
             "break",
-            f"{payload.get('ticker','')} {word} {level:g} على فريم "
-            f"{C.CANDLE_SIZE} {beyond} عند {close:g}"
-            + (f"، بحجم {vol:g}× المتوسط" if vol else ""),
+            f"{payload.get('ticker','')} {word} {level:g} {beyond}"
+            + (f"، وحجم التداول {vol:g} ضعف المعتاد" if vol else ""),
             {"level": level, "close": close, "volume_ratio": vol}))
     else:
-        gaps.append("لا يوجد كسر مقاس — لا سلسلة بلا مستوى")
+        gaps.append("ما فيه كسر — لا توجد فكرة أصلاً")
         return {"links": [], "gaps": gaps, "direction": direction}
 
     # 2. Where that break says price goes, and what says otherwise.
-    if target and atr:
+    if target:
         distance = abs(target - close)
+        way = "يطلع" if up else "ينزل"
         links.append(_link(
             "target",
-            f"المدى المتوقع {atr:g} لكل شمعة، فالهدف {target:g} — "
-            f"على بُعد {distance:.2f}$ من السعر الآن"
-            + (f" ({distance/atr:.1f} مدى)" if atr else ""),
+            f"المتوقع {way} إلى {target:g} — يعني {distance:.2f}$ من سعره الحين",
             {"target": target, "atr": atr, "distance": round(distance, 2)}))
     else:
-        gaps.append("لا هدف محسوب")
+        gaps.append("ما فيه هدف محسوب")
     if stop:
+        back = "رجع تحت" if up else "رجع فوق"
         links.append(_link(
             "invalidation",
-            f"الفكرة تسقط إذا رجع السعر تحت {stop:g}"
-            if up else f"الفكرة تسقط إذا رجع السعر فوق {stop:g}",
+            f"لو {back} {stop:g} — الفكرة انتهت، اخرج",
             {"stop": stop}))
 
     # 3. Which strike that move actually reaches — the link Salem named.
     pick = tier or _first_priced(payload)
     if not pick:
-        gaps.append("لا عقد ضمن الميزانية — لا يمكن ربط الحركة بعقد")
+        gaps.append("ما فيه عقد داخل الميزانية")
         return {"links": links, "gaps": gaps, "direction": direction}
 
     strike, delta = _num(pick.get("strike")), _num(pick.get("delta"))
     ask, cost = _num(pick.get("ask")), _num(pick.get("cost"))
     if strike and spot and target:
-        now_state = _moneyness(strike, spot, up)
-        then_state = _moneyness(strike, target, up)
-        moved = (f"من {now_state} إلى {then_state}"
-                 if now_state != then_state else f"يبقى {then_state}")
+        reaches = (target >= strike) if up else (target <= strike)
         links.append(_link(
             "strike",
-            f"عند {target:g} يصبح الإضراب {strike:g} {moved}",
+            f"عند {target:g} يصير عقد {strike:g} رابح"
+            if reaches else
+            f"عقد {strike:g} يقرب من الربح بس ما يوصله عند {target:g}",
             {"strike": strike, "spot": spot, "target": target}))
 
     # 4. What that means for the contract's price — through the greeks only.
     move = _num(tech.get("expected_move"))
     profit = pick.get("expected_profit_pct")
     if delta and move:
-        per_dollar = abs(delta) * 100
+        cents = abs(delta) * 100
+        verb = "يصعده" if up else "ينزله"
         links.append(_link(
             "greeks",
-            f"دلتا العقد {abs(delta):.2f} — أي {per_dollar:.0f} سنت لكل دولار "
-            f"يتحركه السهم. حركة {move:g}$ ≈ {abs(delta)*move:.2f}$ في العقد",
+            f"كل دولار {verb} السهم يزيد العقد {cents:.0f} سنت — "
+            f"فحركة {move:g}$ تقريباً {abs(delta)*move:+.2f}$",
             {"delta": delta, "expected_move": move}))
     elif move:
-        gaps.append("الدلتا غير متاحة — لا يمكن تحويل حركة السهم إلى حركة العقد")
+        gaps.append("الدلتا ناقصة — ما أقدر أحسب حركة العقد")
 
     if profit is not None and cost:
         links.append(_link(
             "contract",
-            f"الشراء الآن بـ {ask:g}$ ({cost:.0f}$ للعقد)، "
-            f"والتقدير عند بلوغ الهدف {profit:+.0f}% — تقدير بالدلتا وليس وعداً",
+            f"تكلفته الحين {cost:.0f}$، ولو وصل الهدف ≈ {profit:+.0f}% (تقدير)",
             {"ask": ask, "cost": cost, "expected_profit_pct": profit}))
     return {"links": links, "gaps": gaps, "direction": direction}
 

@@ -145,6 +145,13 @@ it, do not add a link, and do not soften a `gaps` entry: a gap means an input
 was missing, and naming it is the point. `reasoning.links == []` means there was
 no measured break, which is `NO_TRADE`.
 
+**Keep it plain.** Salem read the first version and said it was hard to follow.
+The wording is deliberately colloquial and jargon-free — "عند 185.1 يصير عقد 185
+رابح", not "من خارج المال إلى داخل المال"; "كل دولار يصعده السهم يزيد العقد 44
+سنت", not "دلتا العقد 0.44". ATR, premium, ask-side, sweep and moneyness are
+all real and all true and none of them help him decide in the ten seconds he
+has. A test asserts they never reappear in the message.
+
 ## Entry Alert Template (fill from JSON only, keep Arabic RTL)
 ```
 🚨 {ticker} — تنبيه دخول (نقاط: {score}/100)

@@ -11,6 +11,12 @@ about the message is real: it is rendered by the same compose() the live
 scanner uses, from a payload with the same shape, with the reasoning chain
 built by the same reasoning.chain(). What arrives on the phone is exactly what
 a real alert will look like, minus the truth of the figures.
+
+The exit plan is built by scoring.exit_rule(), not written out here. The first
+version hand-wrote it as a tuple where compose() expects a dict and crashed on
+send — a sample that drifts from the live shape is not a preview of anything,
+so every field it cannot copy verbatim is computed by the same function the
+scanner uses.
 """
 import sys
 
@@ -19,7 +25,9 @@ import venv_boot
 venv_boot.ensure(["requests"])
 
 import reasoning
-from compose import compose
+import config as C
+from compose import compose, render_entry
+from scoring import exit_rule
 from telegram_send import send
 
 BANNER = "🧪 رسالة تجريبية — الأرقام عيّنة وليست صفقة حقيقية\n" + "─" * 28
@@ -47,14 +55,12 @@ def payload():
              "strike": 185.0, "type": "call", "expiry": "2026-09-11", "dte": 5,
              "ask": 1.85, "bid": 1.78, "cost": 185.0, "delta": 0.44,
              "gamma": 0.09, "theta": -0.12, "open_interest": 4210,
-             "expected_profit_pct": 61.0,
-             "exit": (60, -40, "بيع نصف الكمية عند الهدف وارفع الوقف")},
+             "expected_profit_pct": 61.0, "exit": exit_rule(5)},
             {"tier": "🟡 <100$", "option_symbol": "NVDA260911C00187500",
              "strike": 187.5, "type": "call", "expiry": "2026-09-11", "dte": 5,
              "ask": 0.95, "bid": 0.90, "cost": 95.0, "delta": 0.31,
              "gamma": 0.11, "theta": -0.10, "open_interest": 2870,
-             "expected_profit_pct": 74.0,
-             "exit": (60, -40, "بيع نصف الكمية عند الهدف وارفع الوقف")},
+             "expected_profit_pct": 74.0, "exit": exit_rule(5)},
             {"tier": "🔴 <50$", "option_symbol": None},
         ],
         "time_riyadh": "17:42",
@@ -64,9 +70,17 @@ def payload():
 
 
 def main(argv=None):
-    dry = "--dry-run" in (argv or sys.argv[1:])
+    args = argv if argv is not None else sys.argv[1:]
+    dry = "--dry-run" in args
     p = payload()
-    body = compose("entry", p)
+    # --plain forces the deterministic renderer. Railway runs with
+    # USE_CLAUDE_COMPOSER=0, so that is the path a real alert takes there; a
+    # local dry run without this flag goes through the composer instead and
+    # shows a message Salem will never receive. The first version of this file
+    # crashed in render_entry on his container while printing fine on mine,
+    # because the test only ever exercised the other path.
+    body = (render_entry(p) if "--plain" in args or not C.USE_CLAUDE_COMPOSER
+            else compose("entry", p))
     msg = f"{BANNER}\n\n{body}\n\n{'─' * 28}\n🧪 انتهت الرسالة التجريبية"
     if dry:
         print(msg)

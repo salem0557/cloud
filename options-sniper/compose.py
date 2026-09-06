@@ -27,80 +27,70 @@ def _required_present(p):
 
 # ── Deterministic renderer ──────────────────────────────────────
 def render_entry(p):
+    """The alert, deterministic. This is the path Railway takes.
+
+    Salem read the first version and said it was hard to follow. It was: it led
+    with a score, then flow jargon, then a target, then three contracts, then a
+    separate exit plan — five blocks before the first instruction. And the
+    reasoning chain, the part that says WHY, never appeared here at all. It had
+    been wired into the payload and into the Claude composer's instructions,
+    and this renderer — the one that actually runs, since USE_CLAUDE_COMPOSER
+    is 0 on the container — was never given it.
+
+    So the order is now the order a decision is made in: what happened, where
+    it goes, what kills it, what to buy, when to get out. Anything that is not
+    one of those is gone.
+    """
     tech = p["technical"]
-    lines = [
-        (f"🚨 {p['ticker']} — تنبيه دخول (نقاط: {p['score']}/100"
-         + (f" بعد خصم {p['risk']['penalty']:g} مخاطر)"
-            if (p.get('risk') or {}).get('penalty') else ")")),
-        "",
-        f"الاتجاه: {DIRECTION_AR.get(p['direction'], p['direction'])} ({p.get('flow_reason', 'تدفق خيارات غير اعتيادي')})",
-        f"السعر الحالي للسهم: ${p['spot']:.2f}",
-        f"الهدف: ${tech['target']:.2f} (كسر ${tech['level']:.2f} + {C.TARGET_ATR_MULT}×ATR)",
-        f"نقطة الدخول: {tech['entry_rule']}",
-        f"   ← الكسر مؤكد على شمعة 15د مُغلقة ({tech.get('bar_time', '')})",
-        f"وقف الخسارة (السهم): ${tech['stop']:.2f}",
-        "",
-        "العقود المرشحة:",
-    ]
+    up = p["direction"] == "call"
+    head = f"🚨 {p['ticker']} — {'كول 📈' if up else 'بوت 📉'}"
+    if (p.get("risk") or {}).get("penalty"):
+        head += f"  ({p['score']}/100 بعد خصم المخاطر)"
+    else:
+        head += f"  ({p['score']}/100)"
+    lines = [head, ""]
+
+    # WHY, in Salem's own order: the stock first, the contract second.
+    chain = (p.get("reasoning") or {}).get("links") or []
+    if chain:
+        lines += [l["text"] for l in chain]
+    else:                                   # no chain -> say the essentials
+        lines += [
+            f"كسر {tech['level']:.2f}، والمتوقع يوصل {tech['target']:.2f}",
+            f"لو رجع {'تحت' if up else 'فوق'} {tech['stop']:.2f} — اخرج",
+        ]
+    for gap in (p.get("reasoning") or {}).get("gaps") or []:
+        lines.append(f"⚠️ {gap}")
+
+    lines += ["", "اشترِ الآن:"]
     for t in p.get("tiers", []):
         if not t.get("option_symbol"):
-            lines.append(f"{t['tier']}: لا يوجد عقد مناسب (سيولة/سعر)")
+            lines.append(f"{t['tier']}: ما فيه عقد مناسب")
             continue
-        kind = "C" if t["type"] == "call" else "P"
-        dte = t.get("dte")
-        tag = " ⚡0DTE" if dte == 0 else (f" ({dte}ي)" if dte is not None else "")
-        lines.append(
-            f"{t['tier']}: {t['strike']:g}{kind}{tag} @ ${t['ask']:.2f} → "
-            f"تكلفة ${t['cost']:.0f} — ربح متوقع ~{t['expected_profit_pct']:.0f}%"
-        )
+        kind = "كول" if t["type"] == "call" else "بوت"
+        tag = " ⚡اليوم" if t.get("dte") == 0 else ""
+        lines.append(f"{t['tier']}: {t['strike']:g} {kind}{tag} @ ${t['ask']:.2f} "
+                     f"→ {t['cost']:.0f}$ للعقد")
+
+    # One exit line, not a table. Tiers almost always share a rule; when they
+    # do not, the differing one gets its own line rather than a legend.
     plans = {}
     for t in p.get("tiers", []):
         e = t.get("exit")
         if e:
-            plans.setdefault((e["take_pct"], e["stop_pct"], e["note"]), []).append(t["tier"][0])
+            plans.setdefault((e["take_pct"], e["stop_pct"]), []).append(t["tier"][0])
     if plans:
-        lines += ["", "خطة الخروج (على العقد لا السهم):"]
-        for (take, stop, note), marks in plans.items():
-            who = " ".join(marks)
-            lines.append(f"{who} جني ربح +{take}% | وقف خسارة {stop}%")
-            if note:
-                lines.append(f"   ← {note}")
+        lines.append("")
+        for (take, stop), marks in plans.items():
+            who = "" if len(plans) == 1 else " ".join(marks) + "  "
+            lines.append(f"{who}بِع عند +{take}%  |  اقطع عند {stop}%")
     if any(t.get("dte") == 0 for t in p.get("tiers", [])):
-        lines.append(f"   ← اخرج من 0DTE قبل {C.ZERO_DTE_HARD_EXIT_ET} بتوقيت نيويورك مهما كانت النتيجة")
+        lines.append(f"اخرج قبل {C.ZERO_DTE_HARD_EXIT_ET} نيويورك مهما صار")
 
-    expiries = [t.get("expiry") for t in p.get("tiers", []) if t.get("expiry")]
-    lines += [
-        "",
-        f"انتهاء الصلاحية: {sorted(set(expiries))[0] if expiries else '—'}",
-        f"⏰ {p.get('time_riyadh', '')}",
-        "⚠️ الربح المتوقع تقدير (دلتا+جاما−ثيتا) وليس ضماناً",
-    ]
-
+    lines += ["", f"⏰ {p.get('time_riyadh', '')} — الأرقام تقديرية لا مضمونة"]
     a = p.get("analyst")
-    if a:
-        head = {"TAKE": "✅ رأي المحلل", "WAIT": "⏸ رأي المحلل",
-                "SKIP": "⛔ رأي المحلل"}.get(a.get("verdict"), "رأي المحلل")
-        lines += ["", f"{head} — قناعة {a.get('conviction', '؟')}"]
-        br = a.get("base_rate") or {}
-        if br.get("available"):
-            lines.append(f"   المعدل التاريخي لهذا النوع: {br.get('hit_rate')}% "
-                         f"(ن={br.get('count')}) — تقييمه {a.get('vs_base_rate', '؟')}")
-        else:
-            lines.append(f"   ⚠️ بلا مرجع تاريخي ({br.get('reason', 'غير متاح')})")
-        if a.get("reading"):
-            lines.append(f"   {a['reading']}")
-        for c in (a.get("concerns") or [])[:3]:
-            lines.append(f"   • {c}")
-        if a.get("tier"):
-            lines.append(f"   العقد المفضّل لدى المحلل: {a['tier']}")
-
-    flags = (p.get("risk") or {}).get("flags") or []
-    if flags:
-        penalty = p["risk"]["penalty"]
-        lines += ["", f"⚠️ مخاطر محسوبة (خُصمت {penalty:g} نقطة):"]
-        lines += [f"   • {f}" for f in flags]
-    if p.get("news"):
-        lines += ["", "📰 " + " | ".join(str(n) for n in p["news"][:2])]
+    if a and a.get("reading"):
+        lines += ["", f"🧠 {a['reading']}"]
     return "\n".join(lines)
 
 
