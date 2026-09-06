@@ -36,8 +36,36 @@ is measured per contract rather than assumed.
 
 **No whitelist of tickers.** Salem's other standing point: UBER was a surprise
 nobody had on a list, and a fixed universe would have excluded it by
-definition. Liquidity is a measured filter (`--max-spread`, from the daily
-NBBO), never a list of names.
+definition. Liquidity is a measured filter (`--max-spread`), never a list of
+names.
+
+### What 11 sessions and 796 trades actually said (2026-08-10 to 09-04)
+
+The rule holds. The obvious way to implement it does not.
+
+| take / stop | pooled per $1 | trades stopped out |
+|-------------|---------------|--------------------|
+| +40% / -25% | **$1.079** | ~45% |
+| +30% / -20% | $1.034 | ~50% |
+| +25% / -15% | $0.989 | ~60% |
+| +25% / -10% | $0.975 | 78.4% |
+| +15% / -10% | $0.966 | ~80% |
+
+A clean gradient: the WIDER the pair, the better. A -10% stop on a 0DTE
+contract quoted 5% wide sits inside the minute-to-minute bounce, so it fires
+whether or not the direction was right — 78% of trades were stopped out, and
+almost none of that was being wrong about the move.
+
+So "do not lose" is best served by a stop wide enough to survive noise, not by
+the tightest stop available. A tight stop does not prevent losses; it
+manufactures them.
+
+Do not treat $1.079 as settled. 796 trades came from ~40 distinct contracts
+over 11 sessions and entries on one contract overlap almost completely, so the
+effective sample is far smaller than n suggests, and +40/-25 won 5 sessions
+while losing 4. It is also the configuration most exposed to a stop gapping
+through its level, which is why `--slips` exists: if a ranking only survives at
+zero slippage it was measuring the assumption, not the trade.
 
 ## Hard Rules (non-negotiable)
 - If data looks stale, incomplete, or contradictory → output exactly: `NO_TRADE: <سبب مختصر>`
