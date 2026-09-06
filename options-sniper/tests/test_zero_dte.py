@@ -35,8 +35,8 @@ def test_the_spread_is_charged_at_both_ends():
     the print and the exit gives back 5%."""
     rows = [bar("10:00", 1.0, 1.0, 1.0, 1.0),
             bar("10:01", 1.0, 5.0, 1.0, 5.0)]
-    free = z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30")
-    paid = z.entry_exit(rows, 0, 40, 25, 15, 10.0, "15:30")
+    free = z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30", fee=0)
+    paid = z.entry_exit(rows, 0, 40, 25, 15, 10.0, "15:30", fee=0)
     assert free["entry"] == 1.0 and paid["entry"] == 1.05
     assert round(free["multiple"] if "multiple" in free
                  else free["exit"] / free["entry"], 4) == 1.4
@@ -49,7 +49,7 @@ def test_a_minute_holding_both_target_and_stop_counts_as_the_stop():
     backtest manufactures a win rate."""
     rows = [bar("10:00", 1.0, 1.0, 1.0, 1.0, bid=0.99, ask=1.00),
             bar("10:01", 1.0, 1.50, 0.70, 1.0, bid=0.99, ask=1.00)]
-    t = z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30")
+    t = z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30", fee=0)
     assert t["why"] == "stop"
     assert t["exit"] == 0.75                    # entry 1.00, stop -25%
 
@@ -59,7 +59,7 @@ def test_the_target_pays_the_limit_price_not_the_spike():
     for a print nobody's order reached."""
     rows = [bar("10:00", 1.0, 1.0, 1.0, 1.0, bid=0.99, ask=1.00),
             bar("10:01", 1.0, 3.00, 1.0, 2.9, bid=2.80, ask=2.90)]
-    t = z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30")
+    t = z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30", fee=0)
     assert t["why"] == "take" and t["exit"] == 1.40
 
 
@@ -69,7 +69,7 @@ def test_the_spread_can_turn_a_winner_into_a_loser():
     is paid for — and on a 0DTE contract the round trip is not small."""
     rows = [bar("10:00", 1.0, 1.0, 1.0, 1.0, bid=0.99, ask=1.00),
             bar("10:01", 1.0, 1.45, 1.0, 1.4, bid=1.20, ask=1.45)]
-    assert z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30")["why"] == "take"
+    assert z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30", fee=0)["why"] == "take"
     assert z.entry_exit(rows, 0, 40, 25, 15, 30.0, "15:30")["why"] != "take"
 
 
@@ -89,7 +89,7 @@ def test_nothing_is_held_past_the_hard_exit():
     rows = [bar("15:28", 1.0, 1.0, 1.0, 1.0, bid=0.99, ask=1.00),
             bar("15:29", 1.0, 1.05, 0.98, 1.0, bid=0.99, ask=1.01),
             bar("15:31", 1.0, 2.00, 1.0, 2.0, bid=1.99, ask=2.01)]
-    t = z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30")
+    t = z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30", fee=0)
     assert t["why"] == "timeout"                # the 2x minute is past the exit
     assert t["minutes"] == 1
 
@@ -97,12 +97,12 @@ def test_nothing_is_held_past_the_hard_exit():
 def test_an_entry_with_no_minutes_left_is_not_a_trade():
     rows = [bar("15:29", 1.0, 1.0, 1.0, 1.0, bid=0.99, ask=1.00),
             bar("15:31", 1.0, 2.0, 1.0, 2.0, bid=1.99, ask=2.01)]
-    assert z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30") is None
+    assert z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30", fee=0) is None
 
 
 def test_a_contract_with_no_price_is_skipped():
     rows = [bar("10:00", 0, 0, 0, 0), bar("10:01", 0, 0, 0, 0)]
-    assert z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30") is None
+    assert z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30", fee=0) is None
 
 
 # ── Reading the minute ──────────────────────────────────────────
@@ -347,8 +347,8 @@ def test_a_stop_can_fill_below_its_level():
     contract gapping through it — the assumption minute bars cannot check."""
     rows = [bar("10:00", 1.0, 1.0, 1.0, 1.0),
             bar("10:01", 1.0, 1.0, 0.70, 0.70)]
-    clean = z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30", slip_pct=0)
-    slipped = z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30", slip_pct=20)
+    clean = z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30", slip_pct=0, fee=0)
+    slipped = z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30", slip_pct=20, fee=0)
     assert clean["why"] == slipped["why"] == "stop"
     assert clean["exit"] == 0.75
     assert slipped["exit"] < clean["exit"]
@@ -359,7 +359,7 @@ def test_slippage_never_fills_below_where_the_contract_traded():
     minute would be inventing a loss."""
     rows = [bar("10:00", 1.0, 1.0, 1.0, 1.0),
             bar("10:01", 1.0, 1.0, 0.74, 0.74)]
-    t = z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30", slip_pct=90)
+    t = z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30", slip_pct=90, fee=0)
     assert t["exit"] == 0.74          # not 0.075
 
 
@@ -452,3 +452,28 @@ def test_the_live_exit_rule_is_the_pair_that_wins_most_often():
     assert zero_dte_row[1] == 40 and zero_dte_row[2] == -30
     assert abs(zero_dte_row[2]) <= z.MAX_STOP_PCT
     assert (40, 30) in z.GRID
+
+
+
+# ── Commissions, which nothing had charged ──────────────────────
+def test_the_commission_is_charged_on_both_sides():
+    """$0.65 a contract each way on a $1.00 contract is 0.65% in and 0.65%
+    out. The trade still nets exactly +40% — the contract simply has to
+    travel further to get there, which is the whole point of charging it."""
+    rows = [bar("10:00", 1.0, 1.0, 1.0, 1.0),
+            bar("10:01", 1.0, 9.0, 1.0, 9.0)]
+    free = z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30", fee=0)
+    paid = z.entry_exit(rows, 0, 40, 25, 15, 0.0, "15:30", fee=0.65)
+    assert paid["entry"] > free["entry"]                 # paid to get in
+    assert round(paid["exit"] / paid["entry"], 4) == 1.4 # still nets +40%
+    assert paid["exit"] > free["exit"]                   # mid had to go higher
+
+
+def test_a_flat_timeout_loses_the_round_trip():
+    """The honest cost of a trade that goes nowhere: two commissions and the
+    spread. On a cheap contract that is not small."""
+    rows = [bar("10:00", 0.50, 0.50, 0.50, 0.50)]
+    rows += [bar(f"10:{m:02d}", 0.50, 0.50, 0.50, 0.50) for m in range(1, 4)]
+    t = z.entry_exit(rows, 0, 40, 25, 3, 4.0, "15:30", fee=0.65)
+    assert t["why"] == "timeout"
+    assert t["multiple"] < 0.95 if "multiple" in t else t["exit"] / t["entry"] < 0.95
