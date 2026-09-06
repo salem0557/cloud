@@ -206,6 +206,14 @@ else:
                "0 rows. Market closed, or the token is wrong — check the log "
                "line above for 'got HTML, not CSV'")
 
+# ── Session ─────────────────────────────────────────────────────
+import market as _mk  # noqa: E402
+_now = _mk.now_et()
+if _mk.is_open(_now):
+    report("session", OK, f"open, {_mk.minutes_to_close(_now)} min to the bell")
+else:
+    report("session", WARN, _mk.reason())
+
 # ── Paper book ──────────────────────────────────────────────────
 section("6. Paper book")
 import paper  # noqa: E402
