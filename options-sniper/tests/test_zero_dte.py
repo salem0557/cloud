@@ -499,3 +499,36 @@ def test_a_thin_split_is_dropped_rather_than_ranked():
     obs = [{"multiple": 1.4, "why": "take", "symbol": "A"} for _ in range(19)]
     assert len(obs) < 20                    # below the floor by_budget applies
     assert st.mean(o["multiple"] for o in obs) > 1.0   # and it would have "won"
+
+
+def test_the_split_reads_the_pair_the_table_ranked_not_the_default(capsys):
+    """The first version asked only at the configured pair, so a run left on
+    the default answered at +25/-10 — the pair we had already abandoned. The
+    sweep trades every pair in the grid, so the split must be able to read one
+    it was not configured with."""
+    class A:
+        take, stop = 25.0, 10.0
+    cheap = [{"multiple": 0.9, "why": "stop", "symbol": f"C{i}"}
+             for i in range(30)]
+    rich = [{"multiple": 1.4, "why": "take", "symbol": f"R{i}"}
+            for i in range(30)]
+    results = [{
+        "detail": {"budget": {"budget=$50": cheap}, "moneyness": {}},
+        "splits": {(40, 30): {"budget": {"budget=$50": rich},
+                              "moneyness": {}}},
+    }]
+    z.by_budget(results, A(), ranked=[(40, 30)])
+    out = capsys.readouterr().out
+    assert "+25% / -10%" in out and "+40% / -30%" in out
+    assert "$  0.900" in out          # the configured pair, from "detail"
+    assert "$  1.400" in out          # the ranked pair, from "splits"
+
+
+def test_the_sweep_keeps_every_pair_so_the_question_costs_no_extra_run():
+    """Re-asking used to mean a whole twenty-session re-run. The observations
+    already exist inside the sweep; keeping them is the difference between an
+    answer and another API bill."""
+    import inspect
+    src = inspect.getsource(z.sweep)
+    assert "splits[(take, stop)] = _split(got)" in src
+    assert "return pooled, splits" in src
