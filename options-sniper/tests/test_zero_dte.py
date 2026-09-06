@@ -425,19 +425,30 @@ def test_pooling_by_trade_count_flatters_a_rule_that_fires_on_its_best_days():
 
 
 def test_not_losing_and_hitting_the_target_are_different_questions():
-    """Salem accepted +50/-35 on the condition that more trades win. They do —
-    59.3% do not end below cost against 21.6% at +25/-10 — but a trade that
-    times out flat is in that number and never reached the target. The table
-    has to show both columns or the second gets read as the first."""
-    assert round(100 - 40.7, 1) == 59.3
-    assert round(100 - 78.4, 1) == 21.6
-    assert (100 - 40.7) / (100 - 78.4) > 2.5
+    """A trade that times out flat did not lose and did not win. Showing only
+    the loss rate let the second be read as the first: at +60/-35, 59.3% do
+    not lose but only 25.6% ever reach the target."""
+    assert round(100 - 40.7, 1) == 59.3          # did not lose
+    assert 25.6 < 59.3                            # but did not win either
+    assert (100 - 40.7) / (100 - 78.4) > 2.5     # still 2.7x the tight pair
 
 
-def test_the_live_exit_rule_matches_the_measured_pair():
-    """config.EXIT_RULES carried +50/-35 for 0DTE from the start, written on
-    instinct. The measurement arrived at the same pair, so the live system and
-    the backtest now agree by evidence rather than by coincidence."""
+def test_the_naive_break_even_understates_a_wide_pair():
+    """stop/(take+stop) assumes every loss is a full stop. With a 15-minute
+    clock most losers time out short of it, which is why +60/-35 returned
+    $1.126 while 'hitting' 25.6% against a nominal 36.8% bar. Comparing hit to
+    the naive figure would have thrown away the best row in the table."""
+    naive = 35 / (60 + 35) * 100
+    assert round(naive, 1) == 36.8
+    real = 15.2 / (60 + 15.2) * 100      # the loss actually taken, ~15%
+    assert real < 25.6 < naive
+
+
+def test_the_live_exit_rule_is_the_pair_that_wins_most_often():
+    """Salem's condition was more winning trades. +40/-30 reaches the target
+    43.2% of the time against 32.8% for +50/-35, for the same money — $1.033
+    against $1.035 with every session weighted equally."""
     zero_dte_row = next(r for r in C.EXIT_RULES if r[0] == 0)
-    assert zero_dte_row[1] == 50 and zero_dte_row[2] == -35
+    assert zero_dte_row[1] == 40 and zero_dte_row[2] == -30
     assert abs(zero_dte_row[2]) <= z.MAX_STOP_PCT
+    assert (40, 30) in z.GRID
