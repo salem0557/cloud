@@ -188,7 +188,20 @@ BARS_PER_SESSION = int(TRADING_HOURS_PER_DAY * 60 / 15)      # 26
 # comparable. The baseline is what 796 gated trades over 9 sessions said at
 # +40/-30; if the paper month lands far below it, the backtest was measuring
 # its own assumptions and that is the thing worth knowing.
-PAPER_MAX_HOLD = 15          # minutes, as in the backtest
+# How long a same-day trade is given before it is abandoned. ONE constant, so
+# the paper book, the backtest default and the alert cannot drift apart.
+#
+# Salem raised it from 15 to 30 after the timeout finding: a third to a half
+# of gated trades were timing out, and the median winner took 8-10 minutes
+# against a 15-minute limit, so a trade needing 16 was being recorded as a
+# failed setup when it was a failed deadline.
+#
+# This is his call and it is made BEFORE the measurement confirms it. Holding
+# a same-day contract longer is not free -- theta is the entire reason a
+# deadline exists -- so the hold table in zero_dte.py is what says whether it
+# was right. If 30 returns less than 15 there, this comes back down.
+MAX_HOLD_MIN = int(os.environ.get("MAX_HOLD_MIN") or 30)
+PAPER_MAX_HOLD = MAX_HOLD_MIN
 PAPER_HARD_EXIT = "15:30"
 PAPER_MIN_TRADES = 30        # below this the record says nothing either way
 # Measured at +40/-30 -- the pair EXIT_RULES[0] actually uses -- over 1,612
@@ -205,6 +218,30 @@ PAPER_BASELINE = {"hit": 31.3, "lost": 57.1, "avg": 0.994}
 # call, so nothing is changed on his behalf; this is recorded so the choice is
 # made against a number rather than a memory.
 WALK_FORWARD = {"pair": "+60/-35", "avg": 1.010, "sessions": 8, "won": 5}
+
+# ── Settled questions, so they are not re-litigated ─────────────
+# SKIPPING THE MIDDAY WINDOW: tested and REJECTED.
+#
+# The midday returned $0.79-$0.90 in five separate sessions while momentum
+# returned $1.14-$1.38, so --skip-windows midday was built to test it. Run at
+# +60/-35 across the same 20 sessions:
+#
+#                          pooled      walk-forward
+#     everything          $1.021        $1.010   5/8 sessions
+#     midday skipped      $1.087        $0.979   4/7 sessions
+#
+# The pooled figure went UP and the honest one went DOWN. Skipping removed 486
+# trades; the two busiest sessions improved and lifted the pooled average,
+# while 2026-08-27 fell $0.906 -> $0.750, 08-17 $0.773 -> $0.696 and 08-20
+# $0.821 -> $0.787 -- on those days the midday trades were the best on offer,
+# and removing them left the worst. The chosen pair also became less stable
+# (3 changes over 9 decisions, against 2 over 10).
+#
+# The pattern was real in those sessions and did not repeat. Acting on it
+# would have cost about three cents per dollar while showing a nicer table.
+# The flag stays, because the next hypothesis deserves the same test.
+SETTLED = {"skip midday": "rejected: pooled $1.021->$1.087 but "
+                          "walk-forward $1.010->$0.979"}
 
 # ── What no desk would go live without ──────────────────────────
 # Per contract, per side. $0.65 is the common retail rate; some brokers charge

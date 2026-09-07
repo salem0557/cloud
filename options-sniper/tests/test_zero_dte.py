@@ -279,7 +279,9 @@ def test_the_stop_is_the_lever():
 def test_the_grid_pairs_every_target_with_a_matching_stop():
     """Tuning one without the other is what makes a small target look safe."""
     assert (25, 10) in z.GRID and (40, 25) in z.GRID
-    assert all(stop < take for take, stop in z.GRID)
+    # The core grid only. The hit-rate ladder deliberately breaks this, which
+    # is the whole point of it being a separate list.
+    assert all(stop < take for take, stop in z.CORE_GRID)
 
 
 # ── The two bugs the first gated run exposed ────────────────────
@@ -389,7 +391,7 @@ def test_the_grid_runs_past_the_pair_that_won():
     assert (40, 25) in z.GRID
     assert max(t for t, s in z.GRID) > 40
     assert any(s > 25 for t, s in z.GRID)
-    assert all(stop < take for take, stop in z.GRID)
+    assert all(stop < take for take, stop in z.CORE_GRID)
 
 
 def test_salems_target_is_recorded_as_a_number_the_run_checks():
@@ -818,3 +820,114 @@ def test_the_paper_baseline_matches_the_rule_the_paper_book_uses():
     _dte, take, stop, _note = C.EXIT_RULES[0]
     assert (take, abs(stop)) == (40, 30)
     assert C.PAPER_BASELINE == {"hit": 31.3, "lost": 57.1, "avg": 0.994}
+
+
+def test_skipping_the_midday_stays_recorded_as_rejected():
+    """Tested at +60/-35 over the same 20 sessions: pooled rose $1.021 ->
+    $1.087 while walk-forward fell $1.010 -> $0.979. The pattern was real in
+    those sessions and did not repeat. Recorded so it is not re-argued from
+    the pooled table six weeks from now."""
+    import config as C
+    assert "rejected" in C.SETTLED["skip midday"]
+
+
+# ── Three filters that raise the QUALITY, tested one at a time ──
+def test_the_committee_size_can_be_overridden_for_a_test():
+    """4/4 beat 3/4 in four of the five sessions that had both. That is a
+    hypothesis read off the sessions, so it becomes a flag and the
+    walk-forward figure decides it — the same treatment the midday got."""
+    import regime
+    sig = {"agree": 3, "chase_atr": 0.1, "direction": "call"}
+    assert regime.gate(sig, "10:30")[0]                       # default is 3
+    assert not regime.gate(sig, "10:30", min_agree=4)[0]
+    sig["agree"] = 4
+    assert regime.gate(sig, "10:30", min_agree=4)[0]
+
+
+def test_gex_and_iv_are_not_gates_because_they_do_not_live_there():
+    """Dealer positioning is fetched after these gates are built, and IV is a
+    property of the contract minute, not of the stock's signal. Putting either
+    here would read a field that is not populated yet."""
+    import inspect, regime
+    src = inspect.getsource(regime.gate)
+    assert "gex" not in src and "max_iv" not in src
+
+
+def test_an_iv_filter_refuses_a_minute_with_no_iv_at_all():
+    """"Could not check" is not "checked out". A minute with no IV is refused
+    when the filter is on, rather than silently passing."""
+    class A:
+        min_price, max_price, hard_exit = 0.05, 5.0, "15:30"
+        take, stop, max_hold, slip = 60, 35, 15, 0.0
+        max_iv = 0.5
+    rows = [bar("10:00", 1.0, 1.2, 0.9, 1.0) for _ in range(20)]
+    for r in rows:
+        r["iv"] = None
+    assert z.scan_contract(rows, {"option_symbol": "X", "type": "call"},
+                           A(), 4.0) == []
+    for r in rows:
+        r["iv"] = 0.9                       # present, but above the cap
+    assert z.scan_contract(rows, {"option_symbol": "X", "type": "call"},
+                           A(), 4.0) == []
+    for r in rows:
+        r["iv"] = 0.3                       # inside it
+    assert z.scan_contract(rows, {"option_symbol": "X", "type": "call"},
+                           A(), 4.0)
+
+
+# ── The clock, not the analysis, may be what fails ─────────────
+def test_the_hold_time_can_be_varied_without_touching_the_pair():
+    """Roughly a third of gated trades TIME OUT, and the median winner takes
+    8-10 minutes against a 15-minute limit. A trade needing 16 minutes is
+    recorded as a failure of the setup when it was a failure of the deadline."""
+    class A:
+        min_price, max_price, hard_exit = 0.05, 5.0, "15:30"
+        take, stop, slip, max_iv = 60, 35, 0.0, None
+        max_hold = 5
+    # climbs steadily: reaches +60% around minute 12, so a 5-minute clock
+    # times it out and a 20-minute one collects it
+    rows = [bar(f"10:{m:02d}", 1.0 + m * 0.06, 1.0 + m * 0.06,
+                1.0 + m * 0.06, 1.0 + m * 0.06) for m in range(25)]
+    meta = {"option_symbol": "X", "type": "call"}
+    short = z.scan_contract(rows, meta, A(), 2.0)
+    long_ = z.scan_contract(rows, meta, A(), 2.0, hold=20)
+    assert short and long_
+    assert sum(1 for t in short if t["why"] == "take") == 0
+    assert sum(1 for t in long_ if t["why"] == "take") > 0
+
+
+def test_the_clock_table_says_it_is_pooled_and_needs_confirming():
+    """It sees every session, which is the same flaw the pooled pair table
+    has. Saying so on the table is the difference between a lead and a claim."""
+    import inspect
+    src = inspect.getsource(z.hold_sweep)
+    assert "WALK-FORWARD" in src and "Pooled" in src
+
+
+# ── The 45% hit rate, answered rather than argued ──────────────
+def test_the_ladder_reaches_the_hit_rate_that_was_asked_for():
+    """A 45% hit rate is easy: a smaller move is reached more often. The
+    ladder walks the target down against a fixed stop so that hit rate shows
+    up in the table on real sessions, instead of being described."""
+    assert all(stop == 35 for _take, stop in z.HIT_LADDER)
+    assert min(t for t, _s in z.HIT_LADDER) <= 15
+    assert all(p not in z.CORE_GRID for p in z.HIT_LADDER)
+
+
+def test_a_ladder_row_needs_more_than_it_can_plausibly_hit():
+    """+20% against a -35% stop needs 63.6% to break even. That is the price
+    of the hit rate, and it is arithmetic, not opinion."""
+    for take, stop in z.HIT_LADDER:
+        need = stop / (take + stop) * 100
+        if take <= 25:
+            assert need > 55          # a bar no measured pair has cleared
+    assert 35 / (20 + 35) * 100 > 63
+
+
+def test_the_report_names_the_highest_hit_pair_and_what_it_returns():
+    """Printed from the table rather than asserted, and printed beside the
+    figure that hit rate has to beat."""
+    import inspect
+    src = inspect.getsource(z.pooled_sweep)
+    assert "Highest hit rate in this grid" in src
+    assert "A hit rate is not an edge" in src

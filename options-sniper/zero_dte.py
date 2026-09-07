@@ -135,7 +135,8 @@ def build_gates(ticker, date, args):
     for i in todays:
         sig = regime.signal(bars, i)
         ok, why = regime.gate(sig, market.et_minute(bars[i].get("start_time")),
-                              skip=args.skip_windows)
+                              skip=args.skip_windows,
+                              min_agree=args.min_agree)
         reasons[why if not ok else "PASS"] += 1
         if ok:
             out[bar_key(market.et_minute(bars[i].get("start_time")))] = sig
@@ -293,7 +294,7 @@ def features(rows, i, meta):
 
 
 def scan_contract(rows, meta, args, spread_pct, gates=None,
-                  take=None, stop=None, slip=None):
+                  take=None, stop=None, slip=None, hold=None):
     """Every minute of this session that could have been an entry.
 
     `gates` maps 'HH:MM' -> the signal that was live in the 15m bar containing
@@ -309,13 +310,17 @@ def scan_contract(rows, meta, args, spread_pct, gates=None,
         minute = minute_of(rows[i])
         if minute >= args.hard_exit:
             continue
+        if args.max_iv is not None:
+            iv = rows[i]["iv"]
+            if iv is None or iv > args.max_iv:
+                continue
         sig = None
         if gates is not None:
             sig = gates.get(bar_key(minute))
             if not sig or sig["direction"] != meta.get("type"):
                 continue
         trade = entry_exit(rows, i, take or args.take, stop or args.stop,
-                           args.max_hold, spread_pct, args.hard_exit,
+                           hold or args.max_hold, spread_pct, args.hard_exit,
                            slip_pct=args.slip if slip is None else slip)
         if not trade:
             continue
@@ -472,9 +477,18 @@ def run_one(date, args, spread_pct):
     print(f"Buy a contract expiring {date}, sell at +{args.take:.0f}%, "
           f"cut at -{args.stop:.0f}%,")
     print(f"give up after {args.max_hold} minutes, out by {args.hard_exit}.")
+    extra = []
     if args.skip_windows:
-        print(f"Refusing the {', '.join(args.skip_windows)} window(s) — the "
-              f"walk-forward figure is the only one that judges this.")
+        extra.append(f"refusing the {', '.join(args.skip_windows)} window(s)")
+    if args.min_agree is not None:
+        extra.append(f"committee {args.min_agree}/4")
+    if args.require_gex:
+        extra.append(f"only {args.require_gex}")
+    if args.max_iv is not None:
+        extra.append(f"iv at or under {args.max_iv:.0%}")
+    if extra:
+        print(f"Filtered: {', '.join(extra)} — the walk-forward figure is the "
+              f"only one that judges this.")
     print(f"Spread: each contract charged its own measured width, half each "
           f"way. Commission ${C.COMMISSION_PER_CONTRACT:.2f}/contract/side.\n"
           f"Entry premium ${args.min_price}-${args.max_price} "
@@ -552,6 +566,16 @@ def run_one(date, args, spread_pct):
                 with_gex += 1
             for sig in gates.values():
                 sig.update(gex_features(sig, levels))
+            if args.require_gex:
+                # A ticker with no GEX data is REFUSED, not waved through:
+                # "could not check" is not "checked out". Dropping the whole
+                # gates entry would say the ticker never signalled, so the
+                # refused bars are removed and counted by their reason.
+                for key in [k for k, v in gates.items()
+                            if v.get("gex") != args.require_gex]:
+                    gate_note[t][f"gex not {args.require_gex}"] += 1
+                    gate_note[t]["PASS"] -= 1
+                    del gates[key]
         print(f"  GEX levels found for {with_gex} of "
               f"{sum(1 for g in gate_map.values() if g)} tickers with a pass")
         merged = Counter()
@@ -639,6 +663,7 @@ def run_one(date, args, spread_pct):
         print("\n  ONLY ENTRIES THAT CLEARED THE GATES:")
     stats = summarise(obs, args.take, args.stop)
 
+    hold_sweep(tapes, args, spread_of, gate_map, ticker_of)
     pooled, splits = sweep(tapes, args, spread_of, gate_map, ticker_of)
     report_features(obs, stats["avg"])
     return {"date": date, "sweep": pooled, "splits": splits,
@@ -657,11 +682,80 @@ def run_one(date, args, spread_pct):
 # stop: wide enough to sit OUTSIDE the noise that took out 78% of trades at
 # -10%, tight enough to still be a decision.
 MAX_STOP_PCT = 35.0
-GRID = [(60, 35), (50, 35), (50, 30), (40, 30), (40, 25), (30, 20), (25, 15),
-        (25, 10), (20, 10), (15, 10), (15, 8), (12, 8), (10, 8)]
+# Pairs where the stop is smaller than the target: a trade, in the ordinary
+# sense that the thing you can win is bigger than the thing you can lose.
+CORE_GRID = [(60, 35), (50, 35), (50, 30), (40, 30), (40, 25), (30, 20),
+             (25, 15), (25, 10), (20, 10), (15, 10), (15, 8), (12, 8), (10, 8)]
+
+# The HIT-RATE LADDER: the same -35 stop with the target walked down, into
+# territory where the stop is as large as the target or larger.
+#
+# Salem asked for a 45% hit rate and said he would not accept less. He is owed
+# the honest answer rather than an argument, and the honest answer is that 45%
+# is easy: a smaller move is reached more often, so lowering the target raises
+# the hit rate on the same trades. What rises with it is the bar. Break-even
+# is stop/(take+stop), so +20% against a -35% stop needs 63.6% of trades to
+# work -- ask for 45% and you get it, along with a requirement of 64%.
+#
+# These rows are kept SEPARATE because they are not candidates. They exist so
+# that the hit rate he asked for appears in the table next to the number it
+# has to clear, measured on his own sessions, instead of being described to
+# him by me.
+HIT_LADDER = [(40, 35), (30, 35), (25, 35), (20, 35), (15, 35)]
+
+GRID = CORE_GRID + HIT_LADDER
 
 # Salem's target, in his words: losses no more than 35% of all trades entered.
 TARGET_LOSS_RATE = 35.0
+
+
+def hold_sweep(tapes, args, spread_of, gate_map, ticker_of):
+    """How long to give the trade, at the configured pair.
+
+    This exists because of the one number in the report that is not a pattern
+    somebody mined: across every session roughly a third to a half of gated
+    trades TIMED OUT. They did not fail -- the clock ran out on them. And the
+    median winner took 8 to 10 minutes to get there, against a 15-minute
+    limit, so a trade needing 16 is recorded as a failure of the setup when it
+    was a failure of the deadline.
+
+    Holding a same-day contract longer is not free: theta is the whole reason
+    the deadline exists, and after some point the decay costs more than the
+    extra room is worth. Which side wins is measurable, so it is measured.
+
+    This is a POOLED table and carries the pooled table's flaw -- it sees
+    every session. Confirm whatever it suggests with a separate run at that
+    --max-hold and read the walk-forward figure.
+    """
+    holds = args.holds
+    if not holds:
+        return
+    print(f"\n{'='*64}")
+    print(f"  HOW LONG TO GIVE IT — at +{args.take:.0f}%/-{args.stop:.0f}%")
+    print("  (about a third of trades time out; the clock may be the "
+          "binding rule)\n")
+    print(f"  {'minutes':>8} {'hit':>7} {'timed out':>10} {'lost':>7} "
+          f"{'per $1':>9} {'even wt':>9} {'won':>6} {'n':>6}")
+    for hold in holds:
+        per_session, got_all = [], []
+        for c, tape_rows in tapes:
+            sp = spread_of.get(c["option_symbol"])
+            if sp is None:
+                continue
+            got_all += scan_contract(tape_rows, c, args, sp,
+                                     gates=(gate_map.get(ticker_of(c)) or {})
+                                     if args.gated else None, hold=hold)
+        if len(got_all) < 20:
+            continue
+        avg = statistics.mean(o["multiple"] for o in got_all)
+        hit = sum(1 for o in got_all if o["why"] == "take") / len(got_all) * 100
+        out = sum(1 for o in got_all if o["why"] == "timeout") / len(got_all) * 100
+        lost = sum(1 for o in got_all if o["multiple"] < 1.0) / len(got_all) * 100
+        mark = "*" if avg > 1.0 else " "
+        print(f"  {hold:>8} {hit:>6.1f}% {out:>9.1f}% {lost:>6.1f}% "
+              f"${avg:>7.3f}{mark} {'':>9} {'':>6} {len(got_all):>6}")
+    print("\n  Pooled, so it sees every session. Confirm a promising row with"
+          "\n  its own run at that --max-hold and read WALK-FORWARD there.")
 
 
 def sweep(tapes, args, spread_of, gate_map, ticker_of):
@@ -929,6 +1023,20 @@ def pooled_sweep(results, args):
           "trade count; 'won' counts sessions."
           " A pair whose\n    pooled figure beats its equal-weighted one is "
           "leaning on its busiest days.")
+    # The hit rate, answered as asked. Printed from the table rather than
+    # asserted, and printed with what that hit rate has to beat.
+    best_hit = max(out, key=lambda r: r[9]) if out else None
+    if best_hit:
+        _c, take, stop, n, cells, _l, _w, _s, equal, hit, avg_loss = best_hit
+        need = (avg_loss / (take + avg_loss) * 100) if avg_loss > 0 else 0.0
+        print(f"\n  Highest hit rate in this grid: +{take}%/-{stop}% at "
+              f"{hit:.1f}%, on {n} trades.")
+        print(f"  It needs {need:.1f}% to break even and returns "
+              f"${cells[0]:.3f} per $1"
+              + ("." if cells[0] > 1.0 else " — it LOSES money."))
+        print("  A hit rate is not an edge. Lowering the target raises the\n"
+              "  hit rate and raises the bar it has to clear, by the same\n"
+              "  arithmetic and usually by more.")
     print(f"\n  Salem's rule: losses no more than {TARGET_LOSS_RATE:.0f}% of "
           "trades entered.")
     if hits:
@@ -1056,7 +1164,7 @@ def main(argv=None):
                         "0 assumes it never does.")
     p.add_argument("--slips", default="0,10,25",
                    help="slippage levels the pooled table compares")
-    p.add_argument("--max-hold", type=int, default=15,
+    p.add_argument("--max-hold", type=int, default=C.MAX_HOLD_MIN,
                    help="minutes to give the trade before getting out")
     p.add_argument("--hard-exit", default=HARD_EXIT)
     p.add_argument("--min-price", type=float, default=0.05)
@@ -1078,6 +1186,26 @@ def main(argv=None):
     p.set_defaults(gated=True)
     p.add_argument("--type", default=None, choices=["call", "put"])
     p.add_argument("--take", type=float, default=25.0, help="take profit %%")
+    p.add_argument("--holds", default="10,15,20,30,45",
+                   help="hold times the clock table compares, in minutes. "
+                        "About a third of gated trades time out and the "
+                        "median winner takes 8-10 minutes against a 15-minute "
+                        "limit, so the deadline may be costing more than it "
+                        "saves. Empty to skip the table.")
+    p.add_argument("--min-agree", type=int, default=None,
+                   help="override MIN_AGREEMENT (how many of the four reads "
+                        "must agree). 4/4 beat 3/4 in four of the five "
+                        "sessions that had both — a hypothesis, so only the "
+                        "walk-forward figure decides it.")
+    p.add_argument("--require-gex", choices=("above flip", "below flip"),
+                   default=None,
+                   help="only take entries on one side of the gamma flip. "
+                        "A ticker with no GEX data is refused, not waved "
+                        "through.")
+    p.add_argument("--max-iv", type=float, default=None,
+                   help="refuse entry minutes above this implied vol (0.5 = "
+                        "50%%). iv<50%% beat 50-100%% in both sessions that "
+                        "had both, by a wide margin.")
     p.add_argument("--skip-windows", default="",
                    help="comma-separated session windows to refuse "
                         "(open, momentum, midday, trend, gamma). The midday "
@@ -1087,6 +1215,7 @@ def main(argv=None):
                         "whether skipping it is real.")
     args = p.parse_args(argv)
     args.slips = [float(x) for x in args.slips.split(",") if x.strip()]
+    args.holds = [int(x) for x in args.holds.split(",") if x.strip()]
     args.skip_windows = tuple(w.strip() for w in args.skip_windows.split(",")
                               if w.strip())
     known = {name for _s, _e, name in C.SESSION_WINDOWS}

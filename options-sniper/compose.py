@@ -91,6 +91,12 @@ def render_entry(p):
             who = "" if len(plans) == 1 else " ".join(marks) + "  "
             lines.append(f"{who}بِع عند +{take}%  |  اقطع عند {stop}%")
     if any(t.get("dte") == 0 for t in p.get("tiers", [])):
+        # The paper book has always closed a position after MAX_HOLD_MIN and
+        # scored it as a timeout, and the alert never mentioned that a clock
+        # existed. So the record was being kept against a rule its reader had
+        # never been told, and a trade he held for an hour was compared to one
+        # the book abandoned in fifteen minutes.
+        lines.append(f"ما تحرك خلال {C.MAX_HOLD_MIN} دقيقة؟ اخرج — الفكرة ماتت")
         lines.append(f"اخرج قبل {C.ZERO_DTE_HARD_EXIT_ET} نيويورك مهما صار")
 
     if p.get("caution"):

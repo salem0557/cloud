@@ -55,3 +55,13 @@ def test_the_stamp_says_the_price_is_of_that_moment():
     out = compose.render_entry(_payload([_tier(1.85, 185)]))
     assert "16:47:12" in out
     assert "هذا سعر تلك اللحظة" in out
+
+
+def test_the_alert_states_the_clock_the_paper_book_scores_against():
+    """The paper book has always closed a position after MAX_HOLD_MIN and
+    called it a timeout, while the alert never mentioned a clock at all. The
+    record was being kept against a rule its reader had never been told."""
+    import config as C
+    out = compose.render_entry(_payload([_tier(1.85, 185)]))
+    assert f"{C.MAX_HOLD_MIN} دقيقة" in out
+    assert C.ZERO_DTE_HARD_EXIT_ET in out
