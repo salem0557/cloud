@@ -818,3 +818,12 @@ def test_the_paper_baseline_matches_the_rule_the_paper_book_uses():
     _dte, take, stop, _note = C.EXIT_RULES[0]
     assert (take, abs(stop)) == (40, 30)
     assert C.PAPER_BASELINE == {"hit": 31.3, "lost": 57.1, "avg": 0.994}
+
+
+def test_skipping_the_midday_stays_recorded_as_rejected():
+    """Tested at +60/-35 over the same 20 sessions: pooled rose $1.021 ->
+    $1.087 while walk-forward fell $1.010 -> $0.979. The pattern was real in
+    those sessions and did not repeat. Recorded so it is not re-argued from
+    the pooled table six weeks from now."""
+    import config as C
+    assert "rejected" in C.SETTLED["skip midday"]

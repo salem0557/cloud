@@ -206,6 +206,30 @@ PAPER_BASELINE = {"hit": 31.3, "lost": 57.1, "avg": 0.994}
 # made against a number rather than a memory.
 WALK_FORWARD = {"pair": "+60/-35", "avg": 1.010, "sessions": 8, "won": 5}
 
+# ── Settled questions, so they are not re-litigated ─────────────
+# SKIPPING THE MIDDAY WINDOW: tested and REJECTED.
+#
+# The midday returned $0.79-$0.90 in five separate sessions while momentum
+# returned $1.14-$1.38, so --skip-windows midday was built to test it. Run at
+# +60/-35 across the same 20 sessions:
+#
+#                          pooled      walk-forward
+#     everything          $1.021        $1.010   5/8 sessions
+#     midday skipped      $1.087        $0.979   4/7 sessions
+#
+# The pooled figure went UP and the honest one went DOWN. Skipping removed 486
+# trades; the two busiest sessions improved and lifted the pooled average,
+# while 2026-08-27 fell $0.906 -> $0.750, 08-17 $0.773 -> $0.696 and 08-20
+# $0.821 -> $0.787 -- on those days the midday trades were the best on offer,
+# and removing them left the worst. The chosen pair also became less stable
+# (3 changes over 9 decisions, against 2 over 10).
+#
+# The pattern was real in those sessions and did not repeat. Acting on it
+# would have cost about three cents per dollar while showing a nicer table.
+# The flag stays, because the next hypothesis deserves the same test.
+SETTLED = {"skip midday": "rejected: pooled $1.021->$1.087 but "
+                          "walk-forward $1.010->$0.979"}
+
 # ── What no desk would go live without ──────────────────────────
 # Per contract, per side. $0.65 is the common retail rate; some brokers charge
 # $0.50, a few $0. On a $0.95 contract that is 0.7% each way, 1.4% round trip
