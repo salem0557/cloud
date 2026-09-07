@@ -11,6 +11,15 @@ message_thread_id, not chat_id. Sending without it puts every message in the
 group's General topic, which looks like the split working until you open the
 group and find both feeds in the wrong place.
 """
+import venv_boot
+
+# This one is also run by hand from the Railway console to prove the wiring
+# ("python telegram_send.py"), and that console's `python` is the system one
+# while the service runs inside /opt/venv. Every other entrypoint boots the
+# venv before importing requests; this file imported it at the top and died
+# with ModuleNotFoundError, which reads like a broken install.
+venv_boot.ensure(["requests"])
+
 import requests
 
 import config as C
@@ -52,5 +61,21 @@ def send(text: str, chat_id: str = None, topic: str = None) -> bool:
 
 
 if __name__ == "__main__":
-    ok = send("✅ اختبار: بوت التنبيهات يعمل")
-    print("sent" if ok else "NOT sent — check TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID in .env")
+    where = f"chat {TELEGRAM_CHAT_ID or '(unset)'}"
+    if C.TELEGRAM_TOPIC_ID:
+        where += f", topic {C.TELEGRAM_TOPIC_ID}"
+    print(f"alerts  -> {where}")
+    paper = C.TELEGRAM_PAPER_CHAT_ID or TELEGRAM_CHAT_ID
+    pw = f"chat {paper or '(unset)'}"
+    if C.TELEGRAM_PAPER_TOPIC_ID:
+        pw += f", topic {C.TELEGRAM_PAPER_TOPIC_ID}"
+    print(f"paper   -> {pw}\n")
+    # Both destinations, because the whole point of the split is that they are
+    # different places, and one test message cannot show that.
+    ok = send("✅ اختبار: قناة التنبيهات")
+    ok_paper = send_paper("✅ اختبار: قناة التداول الورقي")
+    print("alerts:", "sent" if ok else "NOT sent")
+    print("paper :", "sent" if ok_paper else "NOT sent")
+    if not (ok and ok_paper):
+        print("\nCheck TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID, and that the bot\n"
+              "is an admin allowed to post in that topic.")
