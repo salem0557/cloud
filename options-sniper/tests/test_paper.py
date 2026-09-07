@@ -14,7 +14,8 @@ import zero_dte
 
 
 def bar(t, o, h, l, c):
-    return {"time": f"2026-09-04T{t}:00", "open": o, "high": h, "low": l,
+    # -04:00: the fixture states Eastern rather than leaving it assumed.
+    return {"time": f"2026-09-04T{t}:00-04:00", "open": o, "high": h, "low": l,
             "close": c, "avg_price": c, "bid": 0.0, "ask": 0.0, "volume": 100,
             "ask_volume": 60, "bid_volume": 40, "iv": 0.5,
             "ask_px": c * 1.02, "bid_px": c * 0.98, "_keys": []}

@@ -11,7 +11,10 @@ import zero_dte as z
 
 
 def bar(t, o, h, l, c, bid=0.0, ask=0.0, vol=100):
-    return {"time": f"2026-09-04T{t}:00", "open": o, "high": h, "low": l,
+    # -04:00 makes the fixture say Eastern out loud. Naive strings were read
+    # as UTC by the code and as Eastern by whoever wrote the test, which is
+    # the exact confusion that put the hard exit four hours early.
+    return {"time": f"2026-09-04T{t}:00-04:00", "open": o, "high": h, "low": l,
             "close": c, "avg_price": c, "bid": bid, "ask": ask, "volume": vol,
             "ask_volume": 60, "bid_volume": 40, "iv": 0.5, "delta": 0.3,
             "_keys": []}
@@ -107,7 +110,10 @@ def test_a_contract_with_no_price_is_skipped():
 
 # ── Reading the minute ──────────────────────────────────────────
 def test_the_minute_is_read_from_the_timestamp():
-    assert z.minute_of({"time": "2026-09-04T10:47:00"}) == "10:47"
+    # UW sends UTC. 14:47Z is 10:47 in New York, and every clock rule in this
+    # file is written in New York time.
+    assert z.minute_of({"time": "2026-09-04T14:47:00Z"}) == "10:47"
+    assert z.minute_of({"time": "2026-09-04T10:47:00-04:00"}) == "10:47"
     assert z.minute_of({"time": "09:31:00"}) == "09:31"
     assert z.minute_of({}) == ""
 
@@ -736,3 +742,32 @@ def test_each_hour_reports_why_its_minutes_were_unusable(capsys):
     out = capsys.readouterr().out
     assert "09:00" in out and "15:00" in out
     assert "0%" in out                       # neither hour usable
+
+
+# ── The clock: UW sends UTC, every rule here is written in New York ──
+def test_the_hard_exit_is_a_new_york_time_not_a_utc_one():
+    """"15:30" was being compared against a UTC timestamp, so entries stopped
+    at 11:30 New York and the whole afternoon of every session sat silently
+    outside the test. The numbers looked plausible, which is why it lasted."""
+    import market
+    assert market.et_minute("2026-09-04T19:30:00Z") == "15:30"   # the real cut
+    assert market.et_minute("2026-09-04T15:30:00Z") == "11:30"   # what it cut
+
+
+def test_the_session_runs_from_0930_to_1600_new_york():
+    import market
+    assert market.et_minute("2026-09-04T13:30:00Z") == "09:30"
+    assert market.et_minute("2026-09-04T20:00:00Z") == "16:00"
+
+
+def test_an_offset_that_is_already_eastern_is_left_alone():
+    import market
+    assert market.et_minute("2026-09-04T10:47:00-04:00") == "10:47"
+
+
+def test_a_bare_time_is_passed_through_rather_than_guessed():
+    """No date and no zone means nothing to convert; inventing a day would be
+    worse than leaving it."""
+    import market
+    assert market.et_minute("09:31:00") == "09:31"
+    assert market.et_minute("") == ""
