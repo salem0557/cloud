@@ -25,6 +25,32 @@ def now_et():
     return datetime.datetime.now(_ET)
 
 
+def et_minute(ts):
+    """'HH:MM' in New York, from an ISO timestamp in whatever zone UW sends.
+
+    UW serves these in UTC. Every clock rule in this project is written in
+    Eastern -- the 15:30 hard exit, SESSION_WINDOWS, the time-of-day buckets --
+    so slicing the string straight out of the payload compares an Eastern
+    number against a UTC one, and every rule lands four hours from where it was
+    meant to. Nothing in the read path ever converted, so the error was
+    invisible: the numbers all looked like plausible session times.
+    """
+    if not ts:
+        return ""
+    if "T" not in ts:
+        # A bare "HH:MM:SS" carries no date and no zone, so there is nothing
+        # to convert; pass it through rather than guess a day.
+        return ts[:5]
+    try:
+        t = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return ts.split("T", 1)[1][:5]
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=datetime.timezone.utc)
+    et = t.astimezone(_ET) if _ET else t - datetime.timedelta(hours=4)
+    return et.strftime("%H:%M")
+
+
 def easter(year):
     """Gregorian Easter Sunday. Good Friday is the market holiday, two days
     before. Computed rather than tabulated so the calendar never expires."""

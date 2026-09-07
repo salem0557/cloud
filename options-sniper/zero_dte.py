@@ -32,6 +32,7 @@ import venv_boot
 venv_boot.ensure(["requests"])
 
 import config as C
+import market
 import regime
 import uw
 from explosion import fill_price          # noqa: E402  the same fill rules
@@ -41,11 +42,14 @@ HARD_EXIT = "15:30"          # a 0DTE contract is not held into the close
 
 
 def minute_of(row):
-    """'HH:MM' in Eastern, from whatever timestamp the row carries."""
-    t = row.get("time") or ""
-    if "T" in t:
-        t = t.split("T", 1)[1]
-    return t[:5]
+    """'HH:MM' in Eastern, from whatever timestamp the row carries.
+
+    It used to slice the string, which is what the docstring already claimed
+    it did NOT do: UW sends UTC, so "15:30" as a hard exit was cutting entries
+    at 11:30 New York, and the whole afternoon of every session was silently
+    outside the test.
+    """
+    return market.et_minute(row.get("time") or "")
 
 
 def trading_days(end, count):
@@ -130,10 +134,10 @@ def build_gates(ticker, date, args):
     out, reasons = {}, Counter()
     for i in todays:
         sig = regime.signal(bars, i)
-        ok, why = regime.gate(sig, (bars[i].get("start_time") or "")[11:16])
+        ok, why = regime.gate(sig, market.et_minute(bars[i].get("start_time")))
         reasons[why if not ok else "PASS"] += 1
         if ok:
-            out[bar_key((bars[i].get("start_time") or "")[11:16])] = sig
+            out[bar_key(market.et_minute(bars[i].get("start_time")))] = sig
     return {"gates": out, "reasons": reasons, "bars": len(todays),
             "context": len(bars)}
 
@@ -351,7 +355,7 @@ def clock_bias(tapes, args):
             price = r["close"] or r["avg_price"]
             if not price:
                 continue
-            hour = minute_of(r)[:2] + ":00"
+            hour = (minute_of(r) or "??")[:2] + ":00"
             if price > args.max_price:
                 rows[hour][1] += 1
             elif price < args.min_price:
@@ -371,8 +375,15 @@ def clock_bias(tapes, args):
             continue
         print(f"    {hour:>6} {ok:>9} {dear:>9} {cheap:>10} "
               f"{ok / tot * 100:>7.0f}%")
+    # Split at noon New York, which is only meaningful now that these hours
+    # ARE New York. The first version compared UTC hours against "12:00" and
+    # found an empty morning, then reported 0% usable and concluded the band
+    # excluded the morning entirely. It excluded nothing; the bug was mine.
     morning = [v for h, v in rows.items() if h < "12:00"]
     afternoon = [v for h, v in rows.items() if h >= "12:00"]
+    if not morning or not afternoon:
+        print("\n    Only one half of the session carried rows — no comparison.")
+        return
 
     def usable(chunk):
         ok = sum(c[0] for c in chunk)
