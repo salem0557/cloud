@@ -203,7 +203,9 @@ p.write_text(json.dumps(rows,indent=2)); print(rows)"
 
 ## تشغيل يدوي للاختبار
 ```bash
-railway run python telegram_send.py              # رسالة اختبار
+railway run python telegram_send.py              # رسالة اختبار للقسمين
+railway run python intro.py --dry-run            # معاينة رسائل وصف الأقسام
+railway run python intro.py                      # إرسالها (ثم ثبّتها Pin)
 railway run python scanner.py --dry-run --limit 5  # فحص بلا إرسال
 railway run python -m pytest tests -q            # 32 اختبار
 ```

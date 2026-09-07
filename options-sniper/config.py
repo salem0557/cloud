@@ -280,10 +280,16 @@ CLAUDE_TIMEOUT_SEC  = 300
 # Discovery runs on the same clock as the bars it judges. 15m candles close at
 # :00/:15/:30/:45, so a 30-minute scan only ever evaluated half of them for
 # tickers not yet on the shortlist — a ticker whose flow started at :32 and
-# broke at :45 was not looked at until the next hour. At 15 minutes every bar
-# close gets a discovery pass. Costs ~3,150 UW requests a day against a 30,000
-# allowance.
-SCAN_EVERY_MIN    = 15
+# broke at :45 was not looked at until the next hour.
+#
+# Salem asked for 10, in his words: "انا اريده ان يمسح كل 10 دقائق يضع قوائم
+# مراقبة يراقبها على شمعة 15 دقيقة". That is not the same clock as the bars,
+# and deliberately so: at 15 the scan and the bar close land together, so a
+# name that only starts looking interesting mid-bar waits a full bar to be
+# discovered. At 10 the passes fall at :00/:10/:20/:30/:40/:50, which puts a
+# discovery pass inside every 15m bar as well as on its close.
+# Costs ~4,700 UW requests a day against a 30,000 allowance.
+SCAN_EVERY_MIN    = 10
 MONITOR_EVERY_MIN = 5
 HEARTBEAT_MIN     = 60      # a line in the log so a healthy idle service is
                             # distinguishable from a dead one over a weekend
