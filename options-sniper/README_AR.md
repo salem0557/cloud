@@ -348,10 +348,16 @@ python check.py
 هذا هو الاختبار الذي يصف صفقتك فعلاً (عقود تنتهي نفس اليوم).
 
 ```bash
-python zero_dte.py --sessions 20 --contracts 40 --take 40 --stop 30
+python zero_dte.py --sessions 20 --contracts 40 --take 60 --stop 35
+
+# اختبار فرضية واحدة في كل تشغيل — الحكم دائماً WALK-FORWARD
+python zero_dte.py --sessions 20 --contracts 40 --take 60 --stop 35 --min-agree 4
+python zero_dte.py --sessions 20 --contracts 40 --take 60 --stop 35 --max-iv 0.5
 python zero_dte.py --sessions 20 --contracts 40 --take 60 --stop 35 \
-                   --skip-windows midday       # اختبار: هل استبعاد الظهيرة يفيد؟
+                   --require-gex "above flip"
 ```
+
+⚠️ **غيّر شيئاً واحداً في كل تشغيل.** تغييران معاً = لا تعرف أيهما فعل ماذا.
 
 **اقرأ `WALK-FORWARD` في آخر التقرير، لا الجدول المجمّع.** المجمّع يختار
 أفضل زوج من كل الجلسات ثم يحاسبه على نفس الجلسات — رقمه متفائل حتماً.
@@ -359,6 +365,9 @@ walk-forward يختار من الجلسات السابقة ويحاسب على �
 
 النوافذ: `open` (9:30-10) · `momentum` (10-11:30) · `midday` (11:30-13:30) ·
 `trend` (13:30-15) · `gamma` (15-15:30) — بتوقيت نيويورك.
+
+**استبعاد الظهيرة جُرّب ورُفض** — المجمّع ارتفع $1.021→$1.087 بينما
+walk-forward نزل $1.010→$0.979. مسجّل في `config.SETTLED`.
 
 ## 1. الباك-تست — `python backtest.py`
 
