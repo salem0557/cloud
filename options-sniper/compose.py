@@ -49,7 +49,21 @@ def render_entry(p):
         head += f"  ({p['score']}/100 بعد خصم المخاطر)"
     else:
         head += f"  ({p['score']}/100)"
-    lines = [head, ""]
+    lines = [head]
+    # "اذا تجمعت كل العوامل و التحليلات تدعم توقعك" — the four scores ARE that
+    # question, and until now the alert folded them into one number, so a 88
+    # built on three strong reads and one weak one looked identical to a 88
+    # where everything agreed. Salem judges by whether the factors line up, so
+    # he is shown whether they line up.
+    b = p.get("score_breakdown") or {}
+    if b:
+        w = C.WEIGHTS
+        parts = [f"{ar} {b[k]:.0f}/{w[k]}" for k, ar in
+                 (("flow", "تدفق"), ("technical", "فني"),
+                  ("catalyst", "خبر"), ("liquidity", "سيولة")) if k in b]
+        if parts:
+            lines.append(" · ".join(parts))
+    lines.append("")
 
     # WHY, in Salem's own order: the stock first, the contract second.
     chain = (p.get("reasoning") or {}).get("links") or []
