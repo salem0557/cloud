@@ -771,3 +771,50 @@ def test_a_bare_time_is_passed_through_rather_than_guessed():
     import market
     assert market.et_minute("09:31:00") == "09:31"
     assert market.et_minute("") == ""
+
+
+# ── Skipping a session window, as a question and not an answer ──
+def _sig(agree=4, chase=0.1):
+    return {"agree": agree, "chase_atr": chase, "direction": "call"}
+
+
+def test_a_skipped_window_is_refused_and_says_which_one():
+    """The midday returned $0.79-$0.90 in five separate sessions while the
+    momentum window returned $1.14-$1.38. That was read OFF the sessions, so
+    it is a hypothesis: making it a parameter is how it gets tested instead of
+    asserted."""
+    import regime
+    ok, why = regime.gate(_sig(), "12:30", skip=("midday",))
+    assert not ok and "midday" in why
+    ok, why = regime.gate(_sig(), "10:30", skip=("midday",))
+    assert ok and why == "momentum"
+
+
+def test_skipping_nothing_leaves_every_window_open():
+    import regime
+    for minute, expect in (("09:45", "open"), ("10:30", "momentum"),
+                           ("12:30", "midday"), ("14:00", "trend"),
+                           ("15:15", "gamma")):
+        ok, why = regime.gate(_sig(), minute)
+        assert ok and why == expect
+
+
+def test_the_window_filter_runs_after_the_rules_that_cost_nothing():
+    """A bar that never broke out is reported as 'no breakout', not as a
+    skipped window — otherwise the reason column would blame the filter for
+    rejections it had nothing to do with."""
+    import regime
+    ok, why = regime.gate(None, "12:30", skip=("midday",))
+    assert not ok and why == "no breakout"
+    ok, why = regime.gate(_sig(agree=1), "12:30", skip=("midday",))
+    assert not ok and "committee" in why
+
+
+def test_the_paper_baseline_matches_the_rule_the_paper_book_uses():
+    """The baseline was measured at +40/-30 and EXIT_RULES[0] must still be
+    that pair, or the paper record compares itself to a different experiment
+    — which is exactly what the pre-clock-fix baseline was doing."""
+    import config as C
+    _dte, take, stop, _note = C.EXIT_RULES[0]
+    assert (take, abs(stop)) == (40, 30)
+    assert C.PAPER_BASELINE == {"hit": 31.3, "lost": 57.1, "avg": 0.994}

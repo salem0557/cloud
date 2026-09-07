@@ -135,8 +135,12 @@ def test_the_record_is_shown_against_the_backtest_it_is_testing(monkeypatch,
          "multiple": 1.4 if i % 2 else 0.7} for i in range(40)]})
     paper.report()
     out = capsys.readouterr().out
-    assert "backtest said 43.2%" in out
-    assert "backtest said $1.033" in out
+    # Read from config, not typed: a hardcoded baseline breaks every time the
+    # measurement is honestly re-taken, which is pressure to leave a stale one.
+    assert f"backtest said {C.PAPER_BASELINE['hit']:.1f}%" in out
+    # Pooled, not equal-weighted: the paper book aggregates every closed trade,
+    # so the only honest comparison is against the figure built the same way.
+    assert f"backtest said ${C.PAPER_BASELINE['avg']:.3f} pooled" in out
 
 
 # ── The two circuit breakers ────────────────────────────────────
@@ -243,7 +247,7 @@ def test_the_daily_summary_shows_today_beside_the_record():
                                    closed("timeout", 0.98)]}
     msg = paper.daily_message(book)
     assert "اليوم: 3 صفقات" in msg
-    assert "الاختبار قال 43.2%" in msg          # the number being tested
+    assert f"الاختبار قال {C.PAPER_BASELINE['hit']:.1f}%" in msg
     assert "الرقم لا يعني شيئاً بعد" in msg      # under 30 trades
 
 
