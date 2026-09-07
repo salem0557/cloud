@@ -188,7 +188,20 @@ BARS_PER_SESSION = int(TRADING_HOURS_PER_DAY * 60 / 15)      # 26
 # comparable. The baseline is what 796 gated trades over 9 sessions said at
 # +40/-30; if the paper month lands far below it, the backtest was measuring
 # its own assumptions and that is the thing worth knowing.
-PAPER_MAX_HOLD = 15          # minutes, as in the backtest
+# How long a same-day trade is given before it is abandoned. ONE constant, so
+# the paper book, the backtest default and the alert cannot drift apart.
+#
+# Salem raised it from 15 to 30 after the timeout finding: a third to a half
+# of gated trades were timing out, and the median winner took 8-10 minutes
+# against a 15-minute limit, so a trade needing 16 was being recorded as a
+# failed setup when it was a failed deadline.
+#
+# This is his call and it is made BEFORE the measurement confirms it. Holding
+# a same-day contract longer is not free -- theta is the entire reason a
+# deadline exists -- so the hold table in zero_dte.py is what says whether it
+# was right. If 30 returns less than 15 there, this comes back down.
+MAX_HOLD_MIN = int(os.environ.get("MAX_HOLD_MIN") or 30)
+PAPER_MAX_HOLD = MAX_HOLD_MIN
 PAPER_HARD_EXIT = "15:30"
 PAPER_MIN_TRADES = 30        # below this the record says nothing either way
 # Measured at +40/-30 -- the pair EXIT_RULES[0] actually uses -- over 1,612

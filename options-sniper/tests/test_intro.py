@@ -102,3 +102,15 @@ def test_the_market_wide_feed_is_the_cheap_lever():
     count stays a number someone has to justify."""
     import config as C
     assert C.FLOW_ALERT_LIMIT > C.MAX_CANDIDATES_PER_SCAN
+
+
+def test_the_pinned_header_reads_the_hold_from_config(monkeypatch):
+    """It hardcoded 15. A pinned message with a stale number is the exact trap
+    this file was written to avoid."""
+    monkeypatch.setattr(C, "MAX_HOLD_MIN", 45)
+    assert "45 دقيقة" in intro.paper_text()
+
+
+def test_the_paper_book_and_the_backtest_share_one_clock():
+    """Two constants drift; one cannot."""
+    assert C.PAPER_MAX_HOLD == C.MAX_HOLD_MIN

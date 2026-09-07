@@ -1164,7 +1164,7 @@ def main(argv=None):
                         "0 assumes it never does.")
     p.add_argument("--slips", default="0,10,25",
                    help="slippage levels the pooled table compares")
-    p.add_argument("--max-hold", type=int, default=15,
+    p.add_argument("--max-hold", type=int, default=C.MAX_HOLD_MIN,
                    help="minutes to give the trade before getting out")
     p.add_argument("--hard-exit", default=HARD_EXIT)
     p.add_argument("--min-price", type=float, default=0.05)
