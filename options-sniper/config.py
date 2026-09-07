@@ -47,6 +47,12 @@ TELEGRAM_CHAT_ID = _clean("TELEGRAM_CHAT_ID")
 # 4 minutes" would otherwise bury the handful of alerts Salem acts on. Unset,
 # both go to the same chat.
 TELEGRAM_PAPER_CHAT_ID = _clean("TELEGRAM_PAPER_CHAT_ID")
+# Salem's two destinations turned out to be two TOPICS in one forum group, not
+# two chats: t.me/c/<group>/943 for alerts and .../944 for the paper record
+# share the group id and differ only in the topic. Telegram routes that with
+# message_thread_id, so without these both topics get the group's General.
+TELEGRAM_TOPIC_ID       = _clean("TELEGRAM_TOPIC_ID")
+TELEGRAM_PAPER_TOPIC_ID = _clean("TELEGRAM_PAPER_TOPIC_ID")
 
 # ── Scoring (agreed design: 30/30/20/20, threshold 85) ──────────
 WEIGHTS = {"flow": 30, "technical": 30, "catalyst": 20, "liquidity": 20}

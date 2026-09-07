@@ -125,7 +125,10 @@ crontab crontab.txt               # عدّل SNIPER= لمسارك أولاً
 |---|---|
 | `UW_API_KEY` | مفتاح Unusual Whales |
 | `TELEGRAM_BOT_TOKEN` | توكن البوت |
-| `TELEGRAM_CHAT_ID` | رقم الشات |
+| `TELEGRAM_CHAT_ID` | رقم الشات (مجموعة بمواضيع: `-100` + رقم المجموعة) |
+| `TELEGRAM_TOPIC_ID` | رقم موضوع التنبيهات — اتركه فارغاً إن لم تكن مجموعة مواضيع |
+| `TELEGRAM_PAPER_CHAT_ID` | شات التداول الورقي — فارغ = نفس الشات |
+| `TELEGRAM_PAPER_TOPIC_ID` | رقم موضوع التداول الورقي |
 | `USE_CLAUDE_COMPOSER` | `0` |
 | `SNIPER_DATA_DIR` | `/data` |
 | `FINVIZ_AUTH` | توكن Finviz Elite |
