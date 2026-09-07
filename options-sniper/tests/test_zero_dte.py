@@ -694,3 +694,45 @@ def test_an_unstable_choice_is_reported_as_the_result(capsys):
 def test_too_few_sessions_says_so_instead_of_inventing_a_verdict(capsys):
     z.walk_forward([_sess("2026-08-10", {(40, 30): 1.1})], _Args(), min_train=4)
     assert "needs more than 4 sessions" in capsys.readouterr().out
+
+
+# ── The budget band is also a clock ────────────────────────────
+def _tape(prices, hour):
+    return [{"time": f"2026-09-08T{hour}:{m:02d}:00-04:00",
+             "close": p, "avg_price": p, "high": p, "low": p, "open": p,
+             "volume": 100, "ask_volume": 50, "bid_volume": 50,
+             "ask_px": p, "bid_px": p, "iv": 0.4}
+            for m, p in enumerate(prices)]
+
+
+class _CArgs:
+    min_price, max_price = 0.05, 2.0
+
+
+def test_the_band_is_reported_as_a_time_filter_when_it_acts_like_one(capsys):
+    """A same-day contract is dearer in the morning at the same strike --
+    the afternoon one has less life left. So a $2 ceiling quietly selects
+    afternoons, and every figure would describe afternoon 0DTE while calling
+    itself 0DTE."""
+    dear_am = _tape([3.5] * 30, "10")          # priced out all morning
+    cheap_pm = _tape([1.2] * 30, "14")         # inside the band all afternoon
+    clock_bias_input = [({}, dear_am + cheap_pm)]
+    z.clock_bias(clock_bias_input, _CArgs())
+    out = capsys.readouterr().out
+    assert "morning 0% usable vs afternoon 100%" in out
+    assert "is a TIME filter" in out
+
+
+def test_an_even_band_is_not_accused_of_bias(capsys):
+    even = _tape([1.0] * 30, "10") + _tape([1.0] * 30, "14")
+    z.clock_bias([({}, even)], _CArgs())
+    out = capsys.readouterr().out
+    assert "does not obviously favour either half" in out
+
+
+def test_each_hour_reports_why_its_minutes_were_unusable(capsys):
+    tape = _tape([3.0] * 25, "09") + _tape([0.01] * 25, "15")
+    z.clock_bias([({}, tape)], _CArgs())
+    out = capsys.readouterr().out
+    assert "09:00" in out and "15:00" in out
+    assert "0%" in out                       # neither hour usable

@@ -327,6 +327,70 @@ def scan_contract(rows, meta, args, spread_pct, gates=None,
     return out
 
 
+def clock_bias(tapes, args):
+    """Does the budget filter also decide WHAT TIME OF DAY we can trade?
+
+    This is not a statistics question, it is an options question. A same-day
+    contract is worth more in the morning than in the afternoon at the same
+    strike, because the afternoon one has less life left. So "only contracts
+    between $0.05 and $2.00" is not just a wallet rule -- late in the day far
+    more contracts fall into that band simply because theta has eaten them.
+
+    If that is happening, every measurement in this file describes AFTERNOON
+    0DTE trading and calls itself 0DTE trading. And the afternoon is the half
+    of the session where decay is fastest, which is a different trade with a
+    different edge.
+
+    So this counts, hour by hour, how many minutes were inside the band and
+    how many were priced out. It is the difference between choosing to trade
+    the afternoon and being pushed there without noticing.
+    """
+    rows = defaultdict(lambda: [0, 0, 0])
+    for _c, tape in tapes:
+        for r in tape:
+            price = r["close"] or r["avg_price"]
+            if not price:
+                continue
+            hour = minute_of(r)[:2] + ":00"
+            if price > args.max_price:
+                rows[hour][1] += 1
+            elif price < args.min_price:
+                rows[hour][2] += 1
+            else:
+                rows[hour][0] += 1
+    if not rows:
+        return
+    print(f"\n  WHY A MINUTE COULD BE AN ENTRY — the budget is also a clock")
+    print(f"  (entry premium ${args.min_price}-${args.max_price})\n")
+    print(f"    {'hour':>6} {'in band':>9} {'too dear':>9} {'too cheap':>10} "
+          f"{'usable':>8}")
+    for hour in sorted(rows):
+        ok, dear, cheap = rows[hour]
+        tot = ok + dear + cheap
+        if tot < 20:
+            continue
+        print(f"    {hour:>6} {ok:>9} {dear:>9} {cheap:>10} "
+              f"{ok / tot * 100:>7.0f}%")
+    morning = [v for h, v in rows.items() if h < "12:00"]
+    afternoon = [v for h, v in rows.items() if h >= "12:00"]
+
+    def usable(chunk):
+        ok = sum(c[0] for c in chunk)
+        tot = sum(sum(c) for c in chunk)
+        return (ok / tot * 100) if tot else 0.0
+
+    am, pm = usable(morning), usable(afternoon)
+    print(f"\n    morning {am:.0f}% usable vs afternoon {pm:.0f}%")
+    if pm > am * 1.5:
+        print("    The band is a TIME filter, not only a wallet one: the same\n"
+              "    strike is dearer in the morning because it still has life\n"
+              "    left. Every figure in this file is afternoon 0DTE.")
+    elif am > pm * 1.5:
+        print("    The band skews toward the morning.")
+    else:
+        print("    The band does not obviously favour either half.")
+
+
 def summarise(obs, take, stop, label=""):
     if not obs:
         print("  no trades")
@@ -536,6 +600,7 @@ def run_one(date, args, spread_pct):
     def ticker_of(c):
         return c.get("ticker") or (uw.parse_occ(c["option_symbol"]) or {}).get("ticker")
 
+    clock_bias(tapes, args)
     everything = [t for c, rows in tapes
                   for t in scan_contract(rows, c, args,
                                          spread_of[c["option_symbol"]])]
