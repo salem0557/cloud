@@ -532,3 +532,25 @@ def test_the_sweep_keeps_every_pair_so_the_question_costs_no_extra_run():
     src = inspect.getsource(z.sweep)
     assert "splits[(take, stop)] = _split(got)" in src
     assert "return pooled, splits" in src
+
+
+def test_the_budget_table_gives_each_session_one_vote(capsys):
+    """The same flaw the pooled table had: weighting a bucket by trade count
+    hands the verdict to the busiest sessions. A tier that pools above $1.00
+    on two good afternoons and loses on four quiet ones is not a tier that
+    works — the equal-weighted column has to say so."""
+    class A:
+        take, stop = 40.0, 30.0
+
+    def sess(mult, n=12):
+        return {"detail": {"budget": {"budget=$50": [
+            {"multiple": mult, "why": "take" if mult > 1 else "stop",
+             "symbol": f"S{mult}{i}"} for i in range(n)]},
+            "moneyness": {}}}
+
+    # one loud winner, two quiet losers: pools up, equal-weights down
+    z.by_budget([sess(2.0, 40), sess(0.8), sess(0.8)], A())
+    out = capsys.readouterr().out
+    assert "$  1.550" in out          # pooled — flattered by the loud session
+    assert "$  1.200" in out           # equal weight, (2.0 + 0.8 + 0.8) / 3
+    assert "1/3" in out                # one session of three actually won
