@@ -279,7 +279,9 @@ def test_the_stop_is_the_lever():
 def test_the_grid_pairs_every_target_with_a_matching_stop():
     """Tuning one without the other is what makes a small target look safe."""
     assert (25, 10) in z.GRID and (40, 25) in z.GRID
-    assert all(stop < take for take, stop in z.GRID)
+    # The core grid only. The hit-rate ladder deliberately breaks this, which
+    # is the whole point of it being a separate list.
+    assert all(stop < take for take, stop in z.CORE_GRID)
 
 
 # ── The two bugs the first gated run exposed ────────────────────
@@ -389,7 +391,7 @@ def test_the_grid_runs_past_the_pair_that_won():
     assert (40, 25) in z.GRID
     assert max(t for t, s in z.GRID) > 40
     assert any(s > 25 for t, s in z.GRID)
-    assert all(stop < take for take, stop in z.GRID)
+    assert all(stop < take for take, stop in z.CORE_GRID)
 
 
 def test_salems_target_is_recorded_as_a_number_the_run_checks():
@@ -900,3 +902,32 @@ def test_the_clock_table_says_it_is_pooled_and_needs_confirming():
     import inspect
     src = inspect.getsource(z.hold_sweep)
     assert "WALK-FORWARD" in src and "Pooled" in src
+
+
+# ── The 45% hit rate, answered rather than argued ──────────────
+def test_the_ladder_reaches_the_hit_rate_that_was_asked_for():
+    """A 45% hit rate is easy: a smaller move is reached more often. The
+    ladder walks the target down against a fixed stop so that hit rate shows
+    up in the table on real sessions, instead of being described."""
+    assert all(stop == 35 for _take, stop in z.HIT_LADDER)
+    assert min(t for t, _s in z.HIT_LADDER) <= 15
+    assert all(p not in z.CORE_GRID for p in z.HIT_LADDER)
+
+
+def test_a_ladder_row_needs_more_than_it_can_plausibly_hit():
+    """+20% against a -35% stop needs 63.6% to break even. That is the price
+    of the hit rate, and it is arithmetic, not opinion."""
+    for take, stop in z.HIT_LADDER:
+        need = stop / (take + stop) * 100
+        if take <= 25:
+            assert need > 55          # a bar no measured pair has cleared
+    assert 35 / (20 + 35) * 100 > 63
+
+
+def test_the_report_names_the_highest_hit_pair_and_what_it_returns():
+    """Printed from the table rather than asserted, and printed beside the
+    figure that hit rate has to beat."""
+    import inspect
+    src = inspect.getsource(z.pooled_sweep)
+    assert "Highest hit rate in this grid" in src
+    assert "A hit rate is not an edge" in src

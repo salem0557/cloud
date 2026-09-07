@@ -682,8 +682,28 @@ def run_one(date, args, spread_pct):
 # stop: wide enough to sit OUTSIDE the noise that took out 78% of trades at
 # -10%, tight enough to still be a decision.
 MAX_STOP_PCT = 35.0
-GRID = [(60, 35), (50, 35), (50, 30), (40, 30), (40, 25), (30, 20), (25, 15),
-        (25, 10), (20, 10), (15, 10), (15, 8), (12, 8), (10, 8)]
+# Pairs where the stop is smaller than the target: a trade, in the ordinary
+# sense that the thing you can win is bigger than the thing you can lose.
+CORE_GRID = [(60, 35), (50, 35), (50, 30), (40, 30), (40, 25), (30, 20),
+             (25, 15), (25, 10), (20, 10), (15, 10), (15, 8), (12, 8), (10, 8)]
+
+# The HIT-RATE LADDER: the same -35 stop with the target walked down, into
+# territory where the stop is as large as the target or larger.
+#
+# Salem asked for a 45% hit rate and said he would not accept less. He is owed
+# the honest answer rather than an argument, and the honest answer is that 45%
+# is easy: a smaller move is reached more often, so lowering the target raises
+# the hit rate on the same trades. What rises with it is the bar. Break-even
+# is stop/(take+stop), so +20% against a -35% stop needs 63.6% of trades to
+# work -- ask for 45% and you get it, along with a requirement of 64%.
+#
+# These rows are kept SEPARATE because they are not candidates. They exist so
+# that the hit rate he asked for appears in the table next to the number it
+# has to clear, measured on his own sessions, instead of being described to
+# him by me.
+HIT_LADDER = [(40, 35), (30, 35), (25, 35), (20, 35), (15, 35)]
+
+GRID = CORE_GRID + HIT_LADDER
 
 # Salem's target, in his words: losses no more than 35% of all trades entered.
 TARGET_LOSS_RATE = 35.0
@@ -1003,6 +1023,20 @@ def pooled_sweep(results, args):
           "trade count; 'won' counts sessions."
           " A pair whose\n    pooled figure beats its equal-weighted one is "
           "leaning on its busiest days.")
+    # The hit rate, answered as asked. Printed from the table rather than
+    # asserted, and printed with what that hit rate has to beat.
+    best_hit = max(out, key=lambda r: r[9]) if out else None
+    if best_hit:
+        _c, take, stop, n, cells, _l, _w, _s, equal, hit, avg_loss = best_hit
+        need = (avg_loss / (take + avg_loss) * 100) if avg_loss > 0 else 0.0
+        print(f"\n  Highest hit rate in this grid: +{take}%/-{stop}% at "
+              f"{hit:.1f}%, on {n} trades.")
+        print(f"  It needs {need:.1f}% to break even and returns "
+              f"${cells[0]:.3f} per $1"
+              + ("." if cells[0] > 1.0 else " — it LOSES money."))
+        print("  A hit rate is not an edge. Lowering the target raises the\n"
+              "  hit rate and raises the bar it has to clear, by the same\n"
+              "  arithmetic and usually by more.")
     print(f"\n  Salem's rule: losses no more than {TARGET_LOSS_RATE:.0f}% of "
           "trades entered.")
     if hits:
