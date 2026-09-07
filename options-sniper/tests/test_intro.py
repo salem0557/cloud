@@ -67,3 +67,38 @@ def test_a_dry_run_sends_nothing(monkeypatch, capsys):
     monkeypatch.setattr(intro, "send_paper", boom)
     intro.main(["--dry-run"])
     assert "هذا القسم" in capsys.readouterr().out
+
+
+# ── The request budget ─────────────────────────────────────────
+def test_every_request_is_counted_by_endpoint(monkeypatch):
+    """Widening the scan is a budget decision, and the budget was being
+    estimated by hand from the code — a guess dressed as a number."""
+    import uw
+    uw.REQUESTS["total"] = 0
+    uw.REQUESTS["by_path"] = {}
+    uw._count("/api/stock/NVDA/ohlc/15m")
+    uw._count("/api/stock/TSLA/ohlc/15m")
+    uw._count("/api/option-trades/flow-alerts")
+    assert uw.REQUESTS["total"] == 3
+    # the ticker is collapsed: the question is which endpoint spent the budget
+    assert uw.REQUESTS["by_path"]["/api/stock/*/ohlc/15m"] == 2
+    assert uw.REQUESTS["by_path"]["/api/option-trades/flow-alerts"] == 1
+    assert "UW requests: 3" in uw.spent()
+
+
+def test_the_widened_scan_stays_inside_the_daily_allowance():
+    """30,000 a day. A widening that cannot be afforded is not a widening,
+    it is an outage in the middle of a session."""
+    import config as C
+    scans = 390 // C.SCAN_EVERY_MIN
+    per_scan = 1 + C.MAX_FINVIZ_LOOKUPS + 3 * C.MAX_CANDIDATES_PER_SCAN
+    monitor = (390 // C.MONITOR_EVERY_MIN) * 15 * 3      # a generous shortlist
+    assert scans * per_scan + monitor < 30_000
+
+
+def test_the_market_wide_feed_is_the_cheap_lever():
+    """One request sees every ticker UW flags; the cost is the per-candidate
+    work that follows. So the feed limit may be large while the candidate
+    count stays a number someone has to justify."""
+    import config as C
+    assert C.FLOW_ALERT_LIMIT > C.MAX_CANDIDATES_PER_SCAN

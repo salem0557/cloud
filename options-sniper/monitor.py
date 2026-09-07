@@ -49,7 +49,10 @@ def save_json(path, data):
 
 
 def now_riyadh():
-    return datetime.datetime.now().strftime("%H:%M")
+    # Seconds, not just minutes: this stamp is what tells Salem how old the
+    # quoted contract price is, and the gap he is guarding against is itself
+    # measured in minutes.
+    return datetime.datetime.now().strftime("%H:%M:%S")
 
 
 # ── Exit monitoring: positions.json ─────────────────────────────
@@ -296,6 +299,7 @@ def main(dry_run=False):
     exits = check_positions(dry_run)
     entries = check_shortlist(dry_run)
     print(f"exits: {exits}  entries: {entries}")
+    print(uw.spent())
 
 
 if __name__ == "__main__":

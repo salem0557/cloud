@@ -226,6 +226,19 @@ LIQUID_0DTE = ["SPY", "QQQ", "IWM", "NVDA", "TSLA"]
 # entry into a move that already happened. The old system used 0.30.
 MAX_CHASE_ATR = 0.30
 
+# The same idea, but on the CONTRACT instead of the stock, and for the gap
+# between the alert being sent and Salem reading it. In his words: "لي ان
+# شاهدته ارتفع قبل دخولي اتجاهله". Every measured figure in this project
+# assumes entry at the price shown in the alert; pay 10% more and the +40%
+# target becomes about +27% off a base that is 10% higher, while the stop sits
+# further away in dollars. So the message prints a ceiling.
+#
+# Be clear about what this number is: 10 is a POLICY, not a measurement. The
+# backtest entered at the signal minute and never simulated a late fill, so
+# nothing here measured what chasing the contract costs. It is set at the
+# level where the arithmetic above stops resembling what was measured.
+MAX_CHASE_PCT = float(os.environ.get("MAX_CHASE_PCT") or 10)
+
 # Four independent reads - trend, momentum, VWAP side, structure - and at least
 # this many must agree. Below it the old system stayed silent rather than send
 # a weak signal, which is the right default for an alert Salem acts on.
@@ -241,15 +254,35 @@ SESSION_WINDOWS = [
 ]
 
 # ── Scan limits (UW trial = 30,000 requests/day) ────────────────
-MAX_CANDIDATES_PER_SCAN = 25   # tickers we spend chain/candle calls on
-FLOW_ALERT_LIMIT        = 200
+# ── How wide the net is thrown ──────────────────────────────────
+# Salem asked to widen this, and the reason is in the measurement, not in a
+# preference: in the 20-session test 9 sessions produced ZERO qualified
+# entries, and every session that lost had the rule firing on only 1-2
+# contracts. Two contracts in a day is luck, not a result. The sessions with
+# five or more contracts all made money.
+#
+# Scanning "the whole market" literally is not on the table: 6,000 tickers x 3
+# requests x 39 scans a day is ~700,000 requests against a 30,000 allowance.
+# But the market-wide part is already nearly free — ONE request to the flow
+# alerts feed sees every ticker UW flags. The cost is entirely in the
+# per-candidate work afterwards (candles + chain + news = 3 requests each).
+#
+# So the widening is split: raise the free part a lot, the paid part in a step
+# that can be measured. Every run now prints uw.spent(); read it before the
+# next raise instead of estimating from here.
+#
+#   per scan  = 1 (flow feed) + FINVIZ_LOOKUPS + 3 x CANDIDATES  (+ risk calls)
+#   per day   = that x ~39 scans, plus the monitor's ~3 per shortlist name
+FLOW_ALERT_LIMIT        = int(os.environ.get("FLOW_ALERT_LIMIT") or 500)
+MAX_CANDIDATES_PER_SCAN = int(os.environ.get("MAX_CANDIDATES_PER_SCAN") or 60)
 MIN_TICKER_PREMIUM      = 250_000   # skip tickers below this daily premium
 
 # ── Finviz Elite (candidate discovery only — never scored) ──────
-MAX_FINVIZ_MOVERS  = 40     # rows to pull from the screener
-MAX_FINVIZ_LOOKUPS = 15     # of those, how many get a UW per-ticker flow call.
-                            # Each is one request; the trial allows 30,000/day,
-                            # so 15 x ~14 scans/day is comfortably inside it.
+# Finviz costs nothing per ticker: one screener request returns every row, and
+# the subscription is flat. Only the UW lookups that follow are metered, which
+# is why MOVERS can be raised freely and LOOKUPS is the number that matters.
+MAX_FINVIZ_MOVERS  = int(os.environ.get("MAX_FINVIZ_MOVERS") or 100)
+MAX_FINVIZ_LOOKUPS = int(os.environ.get("MAX_FINVIZ_LOOKUPS") or 40)
 
 # ── Risk checks (risk.py) — deductions only, never bonuses ──────
 # These exist because a summed score cannot see a setup that is internally

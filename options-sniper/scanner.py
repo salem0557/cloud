@@ -35,7 +35,10 @@ from telegram_send import send
 
 
 def now_riyadh():
-    return datetime.datetime.now().strftime("%H:%M")
+    # Seconds, not just minutes: this stamp is what tells Salem how old the
+    # quoted contract price is, and the gap he is guarding against is itself
+    # measured in minutes.
+    return datetime.datetime.now().strftime("%H:%M:%S")
 
 
 # ── Aggregate UW flow alerts per ticker ─────────────────────────
@@ -306,6 +309,7 @@ def main(dry_run=False, limit_tickers=None):
         else:
             state.release_alert(cand["ticker"])
     print(f"Alerts sent: {sent}")
+    print(uw.spent())
     return sent
 
 

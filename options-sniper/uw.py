@@ -41,9 +41,35 @@ def _num(v, default=0.0):
         return default
 
 
+# Every request that leaves this module, counted. Widening the scan is a
+# request-budget decision, and the budget was being estimated by hand from the
+# code — which is a guess dressed as a number. This makes each run report what
+# it actually spent, so the next widening is decided from a measurement.
+REQUESTS = {"total": 0, "by_path": {}}
+
+
+def spent():
+    """A one-line summary of this process's UW usage so far."""
+    top = sorted(REQUESTS["by_path"].items(), key=lambda kv: -kv[1])[:5]
+    detail = "  ".join(f"{p} x{n}" for p, n in top)
+    return f"UW requests: {REQUESTS['total']}   {detail}"
+
+
+def _count(path):
+    # Collapse /api/stock/NVDA/ohlc/15m to /api/stock/*/ohlc/15m: the useful
+    # question is which ENDPOINT the budget went to, not which ticker.
+    parts = path.split("/")
+    if len(parts) > 3 and parts[3] and parts[3] not in ("flow-alerts",):
+        parts[3] = "*"
+    key = "/".join(parts)
+    REQUESTS["total"] += 1
+    REQUESTS["by_path"][key] = REQUESTS["by_path"].get(key, 0) + 1
+
+
 def _get(path, params=None, retries=3):
     if not C.UW_API_KEY:
         raise UWError("UW_API_KEY is empty — fill .env before running")
+    _count(path)
     url = f"{C.UW_BASE}{path}"
     for attempt in range(retries):
         try:
@@ -630,6 +656,26 @@ def screen_contracts(**filters):
 _gex_cache, _tech_cache, _intraday_cache = {}, {}, {}
 
 
+def _live_bucket(as_of, minutes=5):
+    """The cache key's time component, or "" for a historical read.
+
+    These caches are keyed by (ticker, as_of, period) and never expire, which
+    is correct in a backtest: `as_of` pins a past session whose bars will not
+    change again. Live it is a trap. The scheduler calls scanner.main and
+    monitor.main IN PROCESS, so the module stays loaded from the open to the
+    close — an intraday figure cached on the first pass of the day would be
+    served, unchanged, for the next six hours while the price moved.
+
+    Nothing on the live path reads these today. That is exactly why it needs
+    guarding now: the failure is silent, and would arrive as an alert quoting
+    a level the stock left hours ago.
+    """
+    if as_of:
+        return ""
+    now = datetime.datetime.now()
+    return now.strftime("%Y-%m-%d %H:") + f"{now.minute // minutes:02d}"
+
+
 def gex_levels(ticker, date=None):
     """GET /api/stock/{ticker}/gex-levels — where dealer hedging changes sign.
 
@@ -638,7 +684,7 @@ def gex_levels(ticker, date=None):
     amplifies it. That is a mechanical reason a breakout continues or dies,
     and nothing in a contract's own tape contains it.
     """
-    key = (ticker, date)
+    key = (ticker, date, _live_bucket(date))
     if key in _gex_cache:
         return _gex_cache[key]
     try:
@@ -669,7 +715,7 @@ def stock_technicals(ticker, as_of=None, period=14):
     `as_of` (YYYY-MM-DD) walks the window back, so a backtest sees what was
     knowable on the entry date and nothing after it.
     """
-    key = (ticker, as_of or "", period)
+    key = (ticker, as_of or "", period, _live_bucket(as_of))
     if key in _tech_cache:
         return _tech_cache[key]
     bars = candles(ticker, candle_size="1d", timeframe="6M", limit=120,
@@ -733,7 +779,7 @@ def intraday_technicals(ticker, as_of=None, period=14):
     not n. It is the honest answer to "how far can this stock travel before the
     close", which is the only distance a same-day contract can use.
     """
-    key = (ticker, as_of or "", period)
+    key = (ticker, as_of or "", period, _live_bucket(as_of))
     if key in _intraday_cache:
         return _intraday_cache[key]
     # limit=500, not 200: UW applies the limit to the raw rows, which include

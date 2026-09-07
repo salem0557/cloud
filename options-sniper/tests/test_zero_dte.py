@@ -554,3 +554,38 @@ def test_the_budget_table_gives_each_session_one_vote(capsys):
     assert "$  1.550" in out          # pooled — flattered by the loud session
     assert "$  1.200" in out           # equal weight, (2.0 + 0.8 + 0.8) / 3
     assert "1/3" in out                # one session of three actually won
+
+
+# ── The quoted price, and how old it is ────────────────────────
+def test_a_backtest_read_keeps_one_cache_key_forever():
+    """`as_of` pins a past session whose bars will not change again, so the
+    key must not carry a clock — a backtest that re-fetched every five minutes
+    would burn the API allowance to receive identical rows."""
+    import uw
+    assert uw._live_bucket("2026-08-14") == ""
+
+
+def test_a_live_read_expires_within_the_scan_interval():
+    """The scheduler runs scanner and monitor IN PROCESS, so the module stays
+    loaded from open to close. A key without a clock would serve the first
+    pass of the day's numbers for the next six hours."""
+    import datetime as dt, uw
+
+    class _Clock(dt.datetime):
+        now_at = None
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls.now_at
+
+    real = uw.datetime.datetime
+    uw.datetime.datetime = _Clock
+    try:
+        _Clock.now_at = dt.datetime(2026, 9, 8, 16, 32)
+        a = uw._live_bucket(None)
+        _Clock.now_at = dt.datetime(2026, 9, 8, 16, 34)
+        assert uw._live_bucket(None) == a         # stable inside one bucket
+        _Clock.now_at = dt.datetime(2026, 9, 8, 16, 36)
+        assert uw._live_bucket(None) != a         # and moves on to the next
+    finally:
+        uw.datetime.datetime = real
