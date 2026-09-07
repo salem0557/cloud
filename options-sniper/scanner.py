@@ -309,6 +309,7 @@ def main(dry_run=False, limit_tickers=None):
         else:
             state.release_alert(cand["ticker"])
     print(f"Alerts sent: {sent}")
+    print(uw.spent())
     return sent
 
 

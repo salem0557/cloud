@@ -299,6 +299,7 @@ def main(dry_run=False):
     exits = check_positions(dry_run)
     entries = check_shortlist(dry_run)
     print(f"exits: {exits}  entries: {entries}")
+    print(uw.spent())
 
 
 if __name__ == "__main__":

@@ -41,9 +41,35 @@ def _num(v, default=0.0):
         return default
 
 
+# Every request that leaves this module, counted. Widening the scan is a
+# request-budget decision, and the budget was being estimated by hand from the
+# code — which is a guess dressed as a number. This makes each run report what
+# it actually spent, so the next widening is decided from a measurement.
+REQUESTS = {"total": 0, "by_path": {}}
+
+
+def spent():
+    """A one-line summary of this process's UW usage so far."""
+    top = sorted(REQUESTS["by_path"].items(), key=lambda kv: -kv[1])[:5]
+    detail = "  ".join(f"{p} x{n}" for p, n in top)
+    return f"UW requests: {REQUESTS['total']}   {detail}"
+
+
+def _count(path):
+    # Collapse /api/stock/NVDA/ohlc/15m to /api/stock/*/ohlc/15m: the useful
+    # question is which ENDPOINT the budget went to, not which ticker.
+    parts = path.split("/")
+    if len(parts) > 3 and parts[3] and parts[3] not in ("flow-alerts",):
+        parts[3] = "*"
+    key = "/".join(parts)
+    REQUESTS["total"] += 1
+    REQUESTS["by_path"][key] = REQUESTS["by_path"].get(key, 0) + 1
+
+
 def _get(path, params=None, retries=3):
     if not C.UW_API_KEY:
         raise UWError("UW_API_KEY is empty — fill .env before running")
+    _count(path)
     url = f"{C.UW_BASE}{path}"
     for attempt in range(retries):
         try:
