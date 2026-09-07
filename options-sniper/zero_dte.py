@@ -237,7 +237,34 @@ def bucket(name, value):
 
 
 FEATURES = ["minute", "price", "minute_volume", "ask_share", "moneyness",
-            "iv", "window", "agree", "chase"]
+            "iv", "window", "agree", "chase", "gex", "wall"]
+
+
+def gex_features(sig, levels):
+    """Which side of the dealers' book this entry sits on. Two facts, no theory.
+
+    `gex`  — is the stock above or below the gamma flip at the break. Which
+             side helps a +40% scalp is exactly what the table is for, so this
+             does not encode an expectation either way.
+    `wall` — is the relevant wall (call wall for calls, put wall for puts)
+             within one ATR AHEAD of price. A wall inside the move the trade
+             needs is a place dealers lean against it; beyond one ATR the
+             trade has usually paid or died before reaching it.
+    """
+    out = {"gex": None, "wall": None}
+    if not levels or not sig:
+        return out
+    price, atr = sig.get("close") or 0, sig.get("atr") or 0
+    flip = levels.get("gamma_flip")
+    if flip and price:
+        out["gex"] = "above flip" if price > flip else "below flip"
+    up = sig.get("direction") == "call"
+    wall = levels.get("call_wall") if up else levels.get("put_wall")
+    if wall and price and atr > 0:
+        ahead = (wall - price) if up else (price - wall)
+        out["wall"] = ("behind" if ahead <= 0 else
+                       "within 1 ATR" if ahead <= atr else "clear")
+    return out
 
 
 def features(rows, i, meta):
@@ -294,6 +321,8 @@ def scan_contract(rows, meta, args, spread_pct, gates=None,
             trade["window"] = regime.time_window(minute)
             trade["agree"] = sig["agree"]
             trade["chase"] = round(sig["chase_atr"], 2)
+            trade["gex"] = sig.get("gex")
+            trade["wall"] = sig.get("wall")
         out.append(trade)
     return out
 
@@ -430,6 +459,22 @@ def run_one(date, args, spread_pct):
         scored = sum(sum(r.values()) for r in gate_note.values())
         print(f"  Gates: {passed} of {scored} of the session's 15m bars "
               f"cleared every rule, across {len(gate_map)} tickers")
+        # Dealer positioning for that day, one request per ticker, stamped on
+        # every bar that passed so the feature table can split by it. Salem's
+        # question is whether a break holds or reverses at once; the gamma
+        # flip is the one mechanical answer to that, and it is measured here
+        # BEFORE it is allowed anywhere near a live alert.
+        with_gex = 0
+        for t, gates in gate_map.items():
+            if not gates:
+                continue
+            levels = uw.gex_levels(t, date=date)
+            if levels:
+                with_gex += 1
+            for sig in gates.values():
+                sig.update(gex_features(sig, levels))
+        print(f"  GEX levels found for {with_gex} of "
+              f"{sum(1 for g in gate_map.values() if g)} tickers with a pass")
         merged = Counter()
         for r in gate_note.values():
             merged.update(r)

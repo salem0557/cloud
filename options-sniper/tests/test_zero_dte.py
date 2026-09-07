@@ -589,3 +589,45 @@ def test_a_live_read_expires_within_the_scan_interval():
         assert uw._live_bucket(None) != a         # and moves on to the next
     finally:
         uw.datetime.datetime = real
+
+
+# ── Dealer positioning as a measured feature, not a belief ──────
+def test_gex_side_is_a_fact_about_price_not_a_prediction():
+    """The bucket says which side of the flip the entry was on. Whether that
+    side helped is the table's job — so a call and a put at the same price
+    get the same label."""
+    lv = {"gamma_flip": 100.0, "call_wall": 105.0, "put_wall": 95.0}
+    call = {"direction": "call", "close": 101.0, "atr": 2.0}
+    put = {"direction": "put", "close": 101.0, "atr": 2.0}
+    assert z.gex_features(call, lv)["gex"] == "above flip"
+    assert z.gex_features(put, lv)["gex"] == "above flip"
+    assert z.gex_features({"direction": "call", "close": 99.0, "atr": 2.0},
+                          lv)["gex"] == "below flip"
+
+
+def test_the_wall_that_matters_is_the_one_in_the_trade_s_path():
+    """A call cares about the call wall ahead of it; a put about the put wall
+    below. 'Within 1 ATR' means the wall sits inside the move the trade
+    needs; 'behind' means price already passed it."""
+    lv = {"gamma_flip": 100.0, "call_wall": 105.0, "put_wall": 95.0}
+    assert z.gex_features({"direction": "call", "close": 104.0, "atr": 2.0},
+                          lv)["wall"] == "within 1 ATR"
+    assert z.gex_features({"direction": "call", "close": 101.0, "atr": 2.0},
+                          lv)["wall"] == "clear"
+    assert z.gex_features({"direction": "call", "close": 106.0, "atr": 2.0},
+                          lv)["wall"] == "behind"
+    assert z.gex_features({"direction": "put", "close": 96.0, "atr": 2.0},
+                          lv)["wall"] == "within 1 ATR"
+
+
+def test_no_levels_means_unknown_not_a_default_side():
+    """A ticker UW has no GEX for must land in 'gex=?', never be counted on
+    either side."""
+    out = z.gex_features({"direction": "call", "close": 100.0, "atr": 1.0}, None)
+    assert out == {"gex": None, "wall": None}
+    assert z.bucket("gex", None) == "gex=?"
+    assert z.bucket("gex", "below flip") == "gex=below flip"
+
+
+def test_gex_and_wall_are_reported_beside_the_other_features():
+    assert "gex" in z.FEATURES and "wall" in z.FEATURES
