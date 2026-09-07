@@ -226,6 +226,19 @@ LIQUID_0DTE = ["SPY", "QQQ", "IWM", "NVDA", "TSLA"]
 # entry into a move that already happened. The old system used 0.30.
 MAX_CHASE_ATR = 0.30
 
+# The same idea, but on the CONTRACT instead of the stock, and for the gap
+# between the alert being sent and Salem reading it. In his words: "لي ان
+# شاهدته ارتفع قبل دخولي اتجاهله". Every measured figure in this project
+# assumes entry at the price shown in the alert; pay 10% more and the +40%
+# target becomes about +27% off a base that is 10% higher, while the stop sits
+# further away in dollars. So the message prints a ceiling.
+#
+# Be clear about what this number is: 10 is a POLICY, not a measurement. The
+# backtest entered at the signal minute and never simulated a late fill, so
+# nothing here measured what chasing the contract costs. It is set at the
+# level where the arithmetic above stops resembling what was measured.
+MAX_CHASE_PCT = float(os.environ.get("MAX_CHASE_PCT") or 10)
+
 # Four independent reads - trend, momentum, VWAP side, structure - and at least
 # this many must agree. Below it the old system stayed silent rather than send
 # a weak signal, which is the right default for an alert Salem acts on.

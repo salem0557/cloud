@@ -69,8 +69,14 @@ def render_entry(p):
             continue
         kind = "كول" if t["type"] == "call" else "بوت"
         tag = " ⚡اليوم" if t.get("dte") == 0 else ""
+        # The ceiling, per contract. Salem reads the alert minutes after it is
+        # sent, and by then the contract may have moved: "لي ان شاهدته ارتفع
+        # قبل دخولي اتجاهله". Everything measured assumes entry at the price
+        # below, so the message says out loud where that stops being true.
+        cap = t["ask"] * (1 + C.MAX_CHASE_PCT / 100.0)
         lines.append(f"{t['tier']}: {t['strike']:g} {kind}{tag} @ ${t['ask']:.2f} "
                      f"→ {t['cost']:.0f}$ للعقد")
+        lines.append(f"    لا تشتري فوق ${cap:.2f}")
 
     # One exit line, not a table. Tiers almost always share a rule; when they
     # do not, the differing one gets its own line rather than a legend.
@@ -89,7 +95,12 @@ def render_entry(p):
 
     if p.get("caution"):
         lines += ["", f"⚠️ {p['caution']}"]
-    lines += ["", f"⏰ {p.get('time_riyadh', '')} — الأرقام تقديرية لا مضمونة"]
+    # The price is read at the moment the message is built, so this stamp is
+    # also the price's age. Without it he cannot tell a fresh quote from one
+    # that sat in a retry queue.
+    lines += ["",
+              f"⏰ {p.get('time_riyadh', '')} — هذا سعر تلك اللحظة",
+              "تحقق من السعر قبل الشراء. الأرقام تقديرية لا مضمونة."]
     a = p.get("analyst")
     if a and a.get("reading"):
         lines += ["", f"🧠 {a['reading']}"]
