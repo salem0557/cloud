@@ -237,7 +237,34 @@ def bucket(name, value):
 
 
 FEATURES = ["minute", "price", "minute_volume", "ask_share", "moneyness",
-            "iv", "window", "agree", "chase"]
+            "iv", "window", "agree", "chase", "gex", "wall"]
+
+
+def gex_features(sig, levels):
+    """Which side of the dealers' book this entry sits on. Two facts, no theory.
+
+    `gex`  — is the stock above or below the gamma flip at the break. Which
+             side helps a +40% scalp is exactly what the table is for, so this
+             does not encode an expectation either way.
+    `wall` — is the relevant wall (call wall for calls, put wall for puts)
+             within one ATR AHEAD of price. A wall inside the move the trade
+             needs is a place dealers lean against it; beyond one ATR the
+             trade has usually paid or died before reaching it.
+    """
+    out = {"gex": None, "wall": None}
+    if not levels or not sig:
+        return out
+    price, atr = sig.get("close") or 0, sig.get("atr") or 0
+    flip = levels.get("gamma_flip")
+    if flip and price:
+        out["gex"] = "above flip" if price > flip else "below flip"
+    up = sig.get("direction") == "call"
+    wall = levels.get("call_wall") if up else levels.get("put_wall")
+    if wall and price and atr > 0:
+        ahead = (wall - price) if up else (price - wall)
+        out["wall"] = ("behind" if ahead <= 0 else
+                       "within 1 ATR" if ahead <= atr else "clear")
+    return out
 
 
 def features(rows, i, meta):
@@ -294,8 +321,74 @@ def scan_contract(rows, meta, args, spread_pct, gates=None,
             trade["window"] = regime.time_window(minute)
             trade["agree"] = sig["agree"]
             trade["chase"] = round(sig["chase_atr"], 2)
+            trade["gex"] = sig.get("gex")
+            trade["wall"] = sig.get("wall")
         out.append(trade)
     return out
+
+
+def clock_bias(tapes, args):
+    """Does the budget filter also decide WHAT TIME OF DAY we can trade?
+
+    This is not a statistics question, it is an options question. A same-day
+    contract is worth more in the morning than in the afternoon at the same
+    strike, because the afternoon one has less life left. So "only contracts
+    between $0.05 and $2.00" is not just a wallet rule -- late in the day far
+    more contracts fall into that band simply because theta has eaten them.
+
+    If that is happening, every measurement in this file describes AFTERNOON
+    0DTE trading and calls itself 0DTE trading. And the afternoon is the half
+    of the session where decay is fastest, which is a different trade with a
+    different edge.
+
+    So this counts, hour by hour, how many minutes were inside the band and
+    how many were priced out. It is the difference between choosing to trade
+    the afternoon and being pushed there without noticing.
+    """
+    rows = defaultdict(lambda: [0, 0, 0])
+    for _c, tape in tapes:
+        for r in tape:
+            price = r["close"] or r["avg_price"]
+            if not price:
+                continue
+            hour = minute_of(r)[:2] + ":00"
+            if price > args.max_price:
+                rows[hour][1] += 1
+            elif price < args.min_price:
+                rows[hour][2] += 1
+            else:
+                rows[hour][0] += 1
+    if not rows:
+        return
+    print(f"\n  WHY A MINUTE COULD BE AN ENTRY — the budget is also a clock")
+    print(f"  (entry premium ${args.min_price}-${args.max_price})\n")
+    print(f"    {'hour':>6} {'in band':>9} {'too dear':>9} {'too cheap':>10} "
+          f"{'usable':>8}")
+    for hour in sorted(rows):
+        ok, dear, cheap = rows[hour]
+        tot = ok + dear + cheap
+        if tot < 20:
+            continue
+        print(f"    {hour:>6} {ok:>9} {dear:>9} {cheap:>10} "
+              f"{ok / tot * 100:>7.0f}%")
+    morning = [v for h, v in rows.items() if h < "12:00"]
+    afternoon = [v for h, v in rows.items() if h >= "12:00"]
+
+    def usable(chunk):
+        ok = sum(c[0] for c in chunk)
+        tot = sum(sum(c) for c in chunk)
+        return (ok / tot * 100) if tot else 0.0
+
+    am, pm = usable(morning), usable(afternoon)
+    print(f"\n    morning {am:.0f}% usable vs afternoon {pm:.0f}%")
+    if pm > am * 1.5:
+        print("    The band is a TIME filter, not only a wallet one: the same\n"
+              "    strike is dearer in the morning because it still has life\n"
+              "    left. Every figure in this file is afternoon 0DTE.")
+    elif am > pm * 1.5:
+        print("    The band skews toward the morning.")
+    else:
+        print("    The band does not obviously favour either half.")
 
 
 def summarise(obs, take, stop, label=""):
@@ -430,6 +523,22 @@ def run_one(date, args, spread_pct):
         scored = sum(sum(r.values()) for r in gate_note.values())
         print(f"  Gates: {passed} of {scored} of the session's 15m bars "
               f"cleared every rule, across {len(gate_map)} tickers")
+        # Dealer positioning for that day, one request per ticker, stamped on
+        # every bar that passed so the feature table can split by it. Salem's
+        # question is whether a break holds or reverses at once; the gamma
+        # flip is the one mechanical answer to that, and it is measured here
+        # BEFORE it is allowed anywhere near a live alert.
+        with_gex = 0
+        for t, gates in gate_map.items():
+            if not gates:
+                continue
+            levels = uw.gex_levels(t, date=date)
+            if levels:
+                with_gex += 1
+            for sig in gates.values():
+                sig.update(gex_features(sig, levels))
+        print(f"  GEX levels found for {with_gex} of "
+              f"{sum(1 for g in gate_map.values() if g)} tickers with a pass")
         merged = Counter()
         for r in gate_note.values():
             merged.update(r)
@@ -491,6 +600,7 @@ def run_one(date, args, spread_pct):
     def ticker_of(c):
         return c.get("ticker") or (uw.parse_occ(c["option_symbol"]) or {}).get("ticker")
 
+    clock_bias(tapes, args)
     everything = [t for c, rows in tapes
                   for t in scan_contract(rows, c, args,
                                          spread_of[c["option_symbol"]])]
@@ -821,6 +931,99 @@ def pooled_sweep(results, args):
     return [(take, stop) for _, _, take, stop in sorted(ranked, reverse=True)]
 
 
+def walk_forward(results, args, min_train=4):
+    """Choose the pair on sessions already seen; score it on the next one.
+
+    This is the honest version of the pooled table, and it exists because that
+    table has a flaw worth naming plainly: it ranks all thirteen pairs on all
+    nine sessions, picks the winner, and then reports that winner's figure on
+    the same nine sessions. Whatever pair happens to suit this sample will
+    appear at the top, and its number is guaranteed to be too kind. Every grid
+    search does this; most backtests never say so.
+
+    Walk-forward removes the loop. Sessions are put in date order. At each
+    step the pair is chosen using ONLY the sessions before it — by equal
+    weight, so a busy session cannot buy the decision — and then scored on the
+    next session, which had no say in the choice. What comes out is a series
+    of returns from decisions that could actually have been made in advance.
+
+    If the walk-forward average is near the pooled one, the edge is about the
+    trade. If it collapses, the pooled figure was measuring hindsight. And if
+    the chosen pair keeps changing from step to step, there was never a best
+    pair to find -- that instability IS the result, so it is printed too.
+    """
+    dated = sorted((r for r in results if r.get("sweep")),
+                   key=lambda r: r["date"])
+    if len(dated) <= min_train:
+        print(f"\n  Walk-forward needs more than {min_train} sessions with "
+              f"trades; this run has {len(dated)}.")
+        return
+    slip = args.slips[0]
+
+    def per_session(r, take, stop):
+        got = r["sweep"].get((take, stop, slip))
+        # A session that produced almost nothing at this pair is noise in both
+        # directions, and letting it vote was how two-contract days ended up
+        # deciding which pair looked best.
+        return got[0] if got and got[2] >= 20 else None
+
+    print(f"\n{'='*64}")
+    print("  WALK-FORWARD — the pair chosen BEFORE the session it is judged on")
+    print("  (each row: trained on every earlier session, scored on this one)\n")
+    print(f"  {'session':>12} {'chosen':>12} {'trained on':>11} "
+          f"{'that session':>13}")
+    oos, chosen_seq = [], []
+    for k in range(min_train, len(dated)):
+        train, test = dated[:k], dated[k]
+        best, best_avg = None, None
+        for take, stop in GRID:
+            vals = [v for v in (per_session(r, take, stop) for r in train)
+                    if v is not None]
+            if len(vals) < min_train:
+                continue
+            avg = statistics.mean(vals)
+            if best_avg is None or avg > best_avg:
+                best, best_avg = (take, stop), avg
+        if best is None:
+            continue
+        got = per_session(test, *best)
+        chosen_seq.append(best)
+        mark = ""
+        if got is None:
+            shown = "    (thin)"
+        else:
+            oos.append(got)
+            shown = f"${got:>7.3f}"
+            mark = "  <-" if got > 1.0 else ""
+        print(f"  {test['date']:>12} {'+%d/-%d' % best:>12} "
+              f"{len(train):>8} sess {shown:>13}{mark}")
+
+    if not oos:
+        print("\n  No out-of-sample session carried enough trades to score.")
+        return
+    avg = statistics.mean(oos)
+    won = sum(1 for a in oos if a > 1.0)
+    print(f"\n  Out of sample: ${avg:.3f} per $1 across {len(oos)} sessions, "
+          f"{won} of {len(oos)} profitable.")
+    # The stability of the choice is a result in itself, not a footnote.
+    # Counted as transitions rather than distinct values: a pair that settles
+    # after one early change is a parameter, while one that keeps swapping is
+    # the grid chasing whichever session came last.
+    moves = sum(1 for a, b in zip(chosen_seq, chosen_seq[1:]) if a != b)
+    print(f"  The chosen pair changed {moves} time(s) over "
+          f"{len(chosen_seq)} decisions "
+          + ("— it settled, which is what a real parameter does."
+             if moves * 3 <= len(chosen_seq) else
+             "— it never settled, so there was no best pair to find."))
+    if avg <= 1.0:
+        print("  VERDICT: chosen in advance, this rule did NOT make money.\n"
+              "  The pooled table's figure was the benefit of hindsight.")
+    else:
+        print("  VERDICT: it survived being chosen in advance. That is the\n"
+              "  only figure in this file that was not helped by knowing\n"
+              "  the answer first.")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--dates", help="comma-separated sessions to test")
@@ -896,6 +1099,7 @@ def main(argv=None):
                   "coin flip with extra steps.")
         ranked = pooled_sweep(results, args)
         by_budget(results, args, ranked)
+        walk_forward(results, args)
 
     out = C.DATA_DIR / "zero_dte.json"
     try:

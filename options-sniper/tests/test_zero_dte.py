@@ -589,3 +589,150 @@ def test_a_live_read_expires_within_the_scan_interval():
         assert uw._live_bucket(None) != a         # and moves on to the next
     finally:
         uw.datetime.datetime = real
+
+
+# ── Dealer positioning as a measured feature, not a belief ──────
+def test_gex_side_is_a_fact_about_price_not_a_prediction():
+    """The bucket says which side of the flip the entry was on. Whether that
+    side helped is the table's job — so a call and a put at the same price
+    get the same label."""
+    lv = {"gamma_flip": 100.0, "call_wall": 105.0, "put_wall": 95.0}
+    call = {"direction": "call", "close": 101.0, "atr": 2.0}
+    put = {"direction": "put", "close": 101.0, "atr": 2.0}
+    assert z.gex_features(call, lv)["gex"] == "above flip"
+    assert z.gex_features(put, lv)["gex"] == "above flip"
+    assert z.gex_features({"direction": "call", "close": 99.0, "atr": 2.0},
+                          lv)["gex"] == "below flip"
+
+
+def test_the_wall_that_matters_is_the_one_in_the_trade_s_path():
+    """A call cares about the call wall ahead of it; a put about the put wall
+    below. 'Within 1 ATR' means the wall sits inside the move the trade
+    needs; 'behind' means price already passed it."""
+    lv = {"gamma_flip": 100.0, "call_wall": 105.0, "put_wall": 95.0}
+    assert z.gex_features({"direction": "call", "close": 104.0, "atr": 2.0},
+                          lv)["wall"] == "within 1 ATR"
+    assert z.gex_features({"direction": "call", "close": 101.0, "atr": 2.0},
+                          lv)["wall"] == "clear"
+    assert z.gex_features({"direction": "call", "close": 106.0, "atr": 2.0},
+                          lv)["wall"] == "behind"
+    assert z.gex_features({"direction": "put", "close": 96.0, "atr": 2.0},
+                          lv)["wall"] == "within 1 ATR"
+
+
+def test_no_levels_means_unknown_not_a_default_side():
+    """A ticker UW has no GEX for must land in 'gex=?', never be counted on
+    either side."""
+    out = z.gex_features({"direction": "call", "close": 100.0, "atr": 1.0}, None)
+    assert out == {"gex": None, "wall": None}
+    assert z.bucket("gex", None) == "gex=?"
+    assert z.bucket("gex", "below flip") == "gex=below flip"
+
+
+def test_gex_and_wall_are_reported_beside_the_other_features():
+    assert "gex" in z.FEATURES and "wall" in z.FEATURES
+
+
+# ── Walk-forward: the only figure not helped by knowing the answer ──
+def _sess(date, table):
+    """table: {(take, stop): per-$1} at slip 0, 40 trades each."""
+    return {"date": date,
+            "sweep": {(t, s, 0.0): (v, 0.0, 40, 0.0, 0.0)
+                      for (t, s), v in table.items()}}
+
+
+class _Args:
+    slips = [0.0]
+
+
+def test_the_pair_is_chosen_only_from_earlier_sessions(capsys):
+    """The pooled table ranks every pair on every session, picks the winner,
+    then reports that winner on the same sessions. Walk-forward removes the
+    loop: here +40/-30 is best on the first four, so it is what gets scored on
+    the fifth -- even though +60/-35 wins that one."""
+    early = {(40, 30): 1.20, (60, 35): 0.80}
+    late = {(40, 30): 0.90, (60, 35): 1.50}
+    results = [_sess(f"2026-08-1{i}", early) for i in range(4)]
+    results.append(_sess("2026-08-20", late))
+    z.walk_forward(results, _Args(), min_train=4)
+    out = capsys.readouterr().out
+    assert "+40/-30" in out           # chosen on what came before
+    assert "$  0.900" in out          # scored on what it had not seen
+    assert "did NOT make money" in out
+
+
+def test_a_thin_session_gets_no_vote_in_the_choice(capsys):
+    """Two-contract days deciding which pair looks best is how the pooled
+    figure got flattered in the first place."""
+    thin = {"date": "2026-08-19",
+            "sweep": {(40, 30, 0.0): (3.0, 0.0, 8, 0.0, 0.0)}}   # 8 trades
+    solid = [_sess(f"2026-08-1{i}", {(40, 30): 1.10, (60, 35): 0.90})
+             for i in range(4)]
+    z.walk_forward(solid + [thin], _Args(), min_train=4)
+    out = capsys.readouterr().out
+    assert "(thin)" in out            # not scored
+    assert "$  3.000" not in out      # and its 3x never enters the average
+
+
+def test_an_unstable_choice_is_reported_as_the_result(capsys):
+    """If the winning pair keeps changing there was no best pair to find, and
+    that instability is the finding — not a footnote."""
+    # Each new session swings the running average enough to flip the winner,
+    # which is the grid chasing whichever session came last.
+    flip = [_sess("2026-08-10", {(40, 30): 2.0, (60, 35): 0.1}),
+            _sess("2026-08-11", {(40, 30): 2.0, (60, 35): 0.1}),
+            _sess("2026-08-12", {(40, 30): 2.0, (60, 35): 0.1}),
+            _sess("2026-08-13", {(40, 30): 2.0, (60, 35): 0.1}),
+            _sess("2026-08-14", {(40, 30): 0.1, (60, 35): 20.0}),
+            _sess("2026-08-17", {(40, 30): 20.0, (60, 35): 0.1}),
+            _sess("2026-08-18", {(40, 30): 0.1, (60, 35): 40.0})]
+    z.walk_forward(flip, _Args(), min_train=4)
+    out = capsys.readouterr().out
+    assert "never settled" in out
+
+
+def test_too_few_sessions_says_so_instead_of_inventing_a_verdict(capsys):
+    z.walk_forward([_sess("2026-08-10", {(40, 30): 1.1})], _Args(), min_train=4)
+    assert "needs more than 4 sessions" in capsys.readouterr().out
+
+
+# ── The budget band is also a clock ────────────────────────────
+def _tape(prices, hour):
+    return [{"time": f"2026-09-08T{hour}:{m:02d}:00-04:00",
+             "close": p, "avg_price": p, "high": p, "low": p, "open": p,
+             "volume": 100, "ask_volume": 50, "bid_volume": 50,
+             "ask_px": p, "bid_px": p, "iv": 0.4}
+            for m, p in enumerate(prices)]
+
+
+class _CArgs:
+    min_price, max_price = 0.05, 2.0
+
+
+def test_the_band_is_reported_as_a_time_filter_when_it_acts_like_one(capsys):
+    """A same-day contract is dearer in the morning at the same strike --
+    the afternoon one has less life left. So a $2 ceiling quietly selects
+    afternoons, and every figure would describe afternoon 0DTE while calling
+    itself 0DTE."""
+    dear_am = _tape([3.5] * 30, "10")          # priced out all morning
+    cheap_pm = _tape([1.2] * 30, "14")         # inside the band all afternoon
+    clock_bias_input = [({}, dear_am + cheap_pm)]
+    z.clock_bias(clock_bias_input, _CArgs())
+    out = capsys.readouterr().out
+    assert "morning 0% usable vs afternoon 100%" in out
+    assert "is a TIME filter" in out
+
+
+def test_an_even_band_is_not_accused_of_bias(capsys):
+    even = _tape([1.0] * 30, "10") + _tape([1.0] * 30, "14")
+    z.clock_bias([({}, even)], _CArgs())
+    out = capsys.readouterr().out
+    assert "does not obviously favour either half" in out
+
+
+def test_each_hour_reports_why_its_minutes_were_unusable(capsys):
+    tape = _tape([3.0] * 25, "09") + _tape([0.01] * 25, "15")
+    z.clock_bias([({}, tape)], _CArgs())
+    out = capsys.readouterr().out
+    assert "09:00" in out and "15:00" in out
+    assert "0%" in out                       # neither hour usable

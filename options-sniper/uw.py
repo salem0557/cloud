@@ -679,10 +679,16 @@ def _live_bucket(as_of, minutes=5):
 def gex_levels(ticker, date=None):
     """GET /api/stock/{ticker}/gex-levels — where dealer hedging changes sign.
 
-    Below the gamma flip dealers are short gamma: they sell rallies and buy
-    dips, which suppresses movement. Above it they buy strength, which
-    amplifies it. That is a mechanical reason a breakout continues or dies,
-    and nothing in a contract's own tape contains it.
+    ABOVE the gamma flip dealers are long gamma: their delta grows as price
+    rises, so they sell into rallies and buy dips to stay hedged, which damps
+    movement. BELOW it they are short gamma: a rally makes them shorter, so
+    they must buy into it — which amplifies the move. That is a mechanical
+    reason a breakout continues or dies, and nothing in a contract's own tape
+    contains it.
+
+    (An earlier version of this docstring had the two sides reversed. The
+    backtest does not assume either: it buckets trades by which side of the
+    flip they were on and lets the return per $1 say which side helped.)
     """
     key = (ticker, date, _live_bucket(date))
     if key in _gex_cache:
