@@ -866,6 +866,99 @@ def pooled_sweep(results, args):
     return [(take, stop) for _, _, take, stop in sorted(ranked, reverse=True)]
 
 
+def walk_forward(results, args, min_train=4):
+    """Choose the pair on sessions already seen; score it on the next one.
+
+    This is the honest version of the pooled table, and it exists because that
+    table has a flaw worth naming plainly: it ranks all thirteen pairs on all
+    nine sessions, picks the winner, and then reports that winner's figure on
+    the same nine sessions. Whatever pair happens to suit this sample will
+    appear at the top, and its number is guaranteed to be too kind. Every grid
+    search does this; most backtests never say so.
+
+    Walk-forward removes the loop. Sessions are put in date order. At each
+    step the pair is chosen using ONLY the sessions before it — by equal
+    weight, so a busy session cannot buy the decision — and then scored on the
+    next session, which had no say in the choice. What comes out is a series
+    of returns from decisions that could actually have been made in advance.
+
+    If the walk-forward average is near the pooled one, the edge is about the
+    trade. If it collapses, the pooled figure was measuring hindsight. And if
+    the chosen pair keeps changing from step to step, there was never a best
+    pair to find -- that instability IS the result, so it is printed too.
+    """
+    dated = sorted((r for r in results if r.get("sweep")),
+                   key=lambda r: r["date"])
+    if len(dated) <= min_train:
+        print(f"\n  Walk-forward needs more than {min_train} sessions with "
+              f"trades; this run has {len(dated)}.")
+        return
+    slip = args.slips[0]
+
+    def per_session(r, take, stop):
+        got = r["sweep"].get((take, stop, slip))
+        # A session that produced almost nothing at this pair is noise in both
+        # directions, and letting it vote was how two-contract days ended up
+        # deciding which pair looked best.
+        return got[0] if got and got[2] >= 20 else None
+
+    print(f"\n{'='*64}")
+    print("  WALK-FORWARD — the pair chosen BEFORE the session it is judged on")
+    print("  (each row: trained on every earlier session, scored on this one)\n")
+    print(f"  {'session':>12} {'chosen':>12} {'trained on':>11} "
+          f"{'that session':>13}")
+    oos, chosen_seq = [], []
+    for k in range(min_train, len(dated)):
+        train, test = dated[:k], dated[k]
+        best, best_avg = None, None
+        for take, stop in GRID:
+            vals = [v for v in (per_session(r, take, stop) for r in train)
+                    if v is not None]
+            if len(vals) < min_train:
+                continue
+            avg = statistics.mean(vals)
+            if best_avg is None or avg > best_avg:
+                best, best_avg = (take, stop), avg
+        if best is None:
+            continue
+        got = per_session(test, *best)
+        chosen_seq.append(best)
+        mark = ""
+        if got is None:
+            shown = "    (thin)"
+        else:
+            oos.append(got)
+            shown = f"${got:>7.3f}"
+            mark = "  <-" if got > 1.0 else ""
+        print(f"  {test['date']:>12} {'+%d/-%d' % best:>12} "
+              f"{len(train):>8} sess {shown:>13}{mark}")
+
+    if not oos:
+        print("\n  No out-of-sample session carried enough trades to score.")
+        return
+    avg = statistics.mean(oos)
+    won = sum(1 for a in oos if a > 1.0)
+    print(f"\n  Out of sample: ${avg:.3f} per $1 across {len(oos)} sessions, "
+          f"{won} of {len(oos)} profitable.")
+    # The stability of the choice is a result in itself, not a footnote.
+    # Counted as transitions rather than distinct values: a pair that settles
+    # after one early change is a parameter, while one that keeps swapping is
+    # the grid chasing whichever session came last.
+    moves = sum(1 for a, b in zip(chosen_seq, chosen_seq[1:]) if a != b)
+    print(f"  The chosen pair changed {moves} time(s) over "
+          f"{len(chosen_seq)} decisions "
+          + ("— it settled, which is what a real parameter does."
+             if moves * 3 <= len(chosen_seq) else
+             "— it never settled, so there was no best pair to find."))
+    if avg <= 1.0:
+        print("  VERDICT: chosen in advance, this rule did NOT make money.\n"
+              "  The pooled table's figure was the benefit of hindsight.")
+    else:
+        print("  VERDICT: it survived being chosen in advance. That is the\n"
+              "  only figure in this file that was not helped by knowing\n"
+              "  the answer first.")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--dates", help="comma-separated sessions to test")
@@ -941,6 +1034,7 @@ def main(argv=None):
                   "coin flip with extra steps.")
         ranked = pooled_sweep(results, args)
         by_budget(results, args, ranked)
+        walk_forward(results, args)
 
     out = C.DATA_DIR / "zero_dte.json"
     try:

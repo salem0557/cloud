@@ -631,3 +631,66 @@ def test_no_levels_means_unknown_not_a_default_side():
 
 def test_gex_and_wall_are_reported_beside_the_other_features():
     assert "gex" in z.FEATURES and "wall" in z.FEATURES
+
+
+# ── Walk-forward: the only figure not helped by knowing the answer ──
+def _sess(date, table):
+    """table: {(take, stop): per-$1} at slip 0, 40 trades each."""
+    return {"date": date,
+            "sweep": {(t, s, 0.0): (v, 0.0, 40, 0.0, 0.0)
+                      for (t, s), v in table.items()}}
+
+
+class _Args:
+    slips = [0.0]
+
+
+def test_the_pair_is_chosen_only_from_earlier_sessions(capsys):
+    """The pooled table ranks every pair on every session, picks the winner,
+    then reports that winner on the same sessions. Walk-forward removes the
+    loop: here +40/-30 is best on the first four, so it is what gets scored on
+    the fifth -- even though +60/-35 wins that one."""
+    early = {(40, 30): 1.20, (60, 35): 0.80}
+    late = {(40, 30): 0.90, (60, 35): 1.50}
+    results = [_sess(f"2026-08-1{i}", early) for i in range(4)]
+    results.append(_sess("2026-08-20", late))
+    z.walk_forward(results, _Args(), min_train=4)
+    out = capsys.readouterr().out
+    assert "+40/-30" in out           # chosen on what came before
+    assert "$  0.900" in out          # scored on what it had not seen
+    assert "did NOT make money" in out
+
+
+def test_a_thin_session_gets_no_vote_in_the_choice(capsys):
+    """Two-contract days deciding which pair looks best is how the pooled
+    figure got flattered in the first place."""
+    thin = {"date": "2026-08-19",
+            "sweep": {(40, 30, 0.0): (3.0, 0.0, 8, 0.0, 0.0)}}   # 8 trades
+    solid = [_sess(f"2026-08-1{i}", {(40, 30): 1.10, (60, 35): 0.90})
+             for i in range(4)]
+    z.walk_forward(solid + [thin], _Args(), min_train=4)
+    out = capsys.readouterr().out
+    assert "(thin)" in out            # not scored
+    assert "$  3.000" not in out      # and its 3x never enters the average
+
+
+def test_an_unstable_choice_is_reported_as_the_result(capsys):
+    """If the winning pair keeps changing there was no best pair to find, and
+    that instability is the finding — not a footnote."""
+    # Each new session swings the running average enough to flip the winner,
+    # which is the grid chasing whichever session came last.
+    flip = [_sess("2026-08-10", {(40, 30): 2.0, (60, 35): 0.1}),
+            _sess("2026-08-11", {(40, 30): 2.0, (60, 35): 0.1}),
+            _sess("2026-08-12", {(40, 30): 2.0, (60, 35): 0.1}),
+            _sess("2026-08-13", {(40, 30): 2.0, (60, 35): 0.1}),
+            _sess("2026-08-14", {(40, 30): 0.1, (60, 35): 20.0}),
+            _sess("2026-08-17", {(40, 30): 20.0, (60, 35): 0.1}),
+            _sess("2026-08-18", {(40, 30): 0.1, (60, 35): 40.0})]
+    z.walk_forward(flip, _Args(), min_train=4)
+    out = capsys.readouterr().out
+    assert "never settled" in out
+
+
+def test_too_few_sessions_says_so_instead_of_inventing_a_verdict(capsys):
+    z.walk_forward([_sess("2026-08-10", {(40, 30): 1.1})], _Args(), min_train=4)
+    assert "needs more than 4 sessions" in capsys.readouterr().out
