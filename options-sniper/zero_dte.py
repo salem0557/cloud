@@ -135,7 +135,8 @@ def build_gates(ticker, date, args):
     for i in todays:
         sig = regime.signal(bars, i)
         ok, why = regime.gate(sig, market.et_minute(bars[i].get("start_time")),
-                              skip=args.skip_windows)
+                              skip=args.skip_windows,
+                              min_agree=args.min_agree)
         reasons[why if not ok else "PASS"] += 1
         if ok:
             out[bar_key(market.et_minute(bars[i].get("start_time")))] = sig
@@ -309,6 +310,10 @@ def scan_contract(rows, meta, args, spread_pct, gates=None,
         minute = minute_of(rows[i])
         if minute >= args.hard_exit:
             continue
+        if args.max_iv is not None:
+            iv = rows[i]["iv"]
+            if iv is None or iv > args.max_iv:
+                continue
         sig = None
         if gates is not None:
             sig = gates.get(bar_key(minute))
@@ -472,9 +477,18 @@ def run_one(date, args, spread_pct):
     print(f"Buy a contract expiring {date}, sell at +{args.take:.0f}%, "
           f"cut at -{args.stop:.0f}%,")
     print(f"give up after {args.max_hold} minutes, out by {args.hard_exit}.")
+    extra = []
     if args.skip_windows:
-        print(f"Refusing the {', '.join(args.skip_windows)} window(s) — the "
-              f"walk-forward figure is the only one that judges this.")
+        extra.append(f"refusing the {', '.join(args.skip_windows)} window(s)")
+    if args.min_agree is not None:
+        extra.append(f"committee {args.min_agree}/4")
+    if args.require_gex:
+        extra.append(f"only {args.require_gex}")
+    if args.max_iv is not None:
+        extra.append(f"iv at or under {args.max_iv:.0%}")
+    if extra:
+        print(f"Filtered: {', '.join(extra)} — the walk-forward figure is the "
+              f"only one that judges this.")
     print(f"Spread: each contract charged its own measured width, half each "
           f"way. Commission ${C.COMMISSION_PER_CONTRACT:.2f}/contract/side.\n"
           f"Entry premium ${args.min_price}-${args.max_price} "
@@ -552,6 +566,16 @@ def run_one(date, args, spread_pct):
                 with_gex += 1
             for sig in gates.values():
                 sig.update(gex_features(sig, levels))
+            if args.require_gex:
+                # A ticker with no GEX data is REFUSED, not waved through:
+                # "could not check" is not "checked out". Dropping the whole
+                # gates entry would say the ticker never signalled, so the
+                # refused bars are removed and counted by their reason.
+                for key in [k for k, v in gates.items()
+                            if v.get("gex") != args.require_gex]:
+                    gate_note[t][f"gex not {args.require_gex}"] += 1
+                    gate_note[t]["PASS"] -= 1
+                    del gates[key]
         print(f"  GEX levels found for {with_gex} of "
               f"{sum(1 for g in gate_map.values() if g)} tickers with a pass")
         merged = Counter()
@@ -1078,6 +1102,20 @@ def main(argv=None):
     p.set_defaults(gated=True)
     p.add_argument("--type", default=None, choices=["call", "put"])
     p.add_argument("--take", type=float, default=25.0, help="take profit %%")
+    p.add_argument("--min-agree", type=int, default=None,
+                   help="override MIN_AGREEMENT (how many of the four reads "
+                        "must agree). 4/4 beat 3/4 in four of the five "
+                        "sessions that had both — a hypothesis, so only the "
+                        "walk-forward figure decides it.")
+    p.add_argument("--require-gex", choices=("above flip", "below flip"),
+                   default=None,
+                   help="only take entries on one side of the gamma flip. "
+                        "A ticker with no GEX data is refused, not waved "
+                        "through.")
+    p.add_argument("--max-iv", type=float, default=None,
+                   help="refuse entry minutes above this implied vol (0.5 = "
+                        "50%%). iv<50%% beat 50-100%% in both sessions that "
+                        "had both, by a wide margin.")
     p.add_argument("--skip-windows", default="",
                    help="comma-separated session windows to refuse "
                         "(open, momentum, midday, trend, gamma). The midday "

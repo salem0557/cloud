@@ -145,8 +145,14 @@ def signal(bars, i, lookback=15):
     }
 
 
-def gate(sig, minute_et, skip=()):
+def gate(sig, minute_et, skip=(), min_agree=None):
     """Does this signal clear every gate? -> (ok, reason it did not).
+
+    `min_agree` overrides C.MIN_AGREEMENT so the committee size can be tested
+    rather than assumed. GEX and IV are deliberately NOT here: dealer
+    positioning is fetched after these gates are built, and IV belongs to the
+    contract minute rather than to the stock's signal, so both are applied
+    where they actually live.
 
     `skip` names session windows to refuse outright. It exists so that "the
     midday is where money dies" can be TESTED rather than asserted: the
@@ -158,7 +164,7 @@ def gate(sig, minute_et, skip=()):
     """
     if not sig:
         return False, "no breakout"
-    if sig["agree"] < C.MIN_AGREEMENT:
+    if sig["agree"] < (C.MIN_AGREEMENT if min_agree is None else min_agree):
         return False, f"committee split ({sig['agree']}/4)"
     if sig["chase_atr"] > C.MAX_CHASE_ATR:
         return False, f"chasing ({sig['chase_atr']:.2f} ATR past the level)"

@@ -827,3 +827,47 @@ def test_skipping_the_midday_stays_recorded_as_rejected():
     the pooled table six weeks from now."""
     import config as C
     assert "rejected" in C.SETTLED["skip midday"]
+
+
+# ── Three filters that raise the QUALITY, tested one at a time ──
+def test_the_committee_size_can_be_overridden_for_a_test():
+    """4/4 beat 3/4 in four of the five sessions that had both. That is a
+    hypothesis read off the sessions, so it becomes a flag and the
+    walk-forward figure decides it — the same treatment the midday got."""
+    import regime
+    sig = {"agree": 3, "chase_atr": 0.1, "direction": "call"}
+    assert regime.gate(sig, "10:30")[0]                       # default is 3
+    assert not regime.gate(sig, "10:30", min_agree=4)[0]
+    sig["agree"] = 4
+    assert regime.gate(sig, "10:30", min_agree=4)[0]
+
+
+def test_gex_and_iv_are_not_gates_because_they_do_not_live_there():
+    """Dealer positioning is fetched after these gates are built, and IV is a
+    property of the contract minute, not of the stock's signal. Putting either
+    here would read a field that is not populated yet."""
+    import inspect, regime
+    src = inspect.getsource(regime.gate)
+    assert "gex" not in src and "max_iv" not in src
+
+
+def test_an_iv_filter_refuses_a_minute_with_no_iv_at_all():
+    """"Could not check" is not "checked out". A minute with no IV is refused
+    when the filter is on, rather than silently passing."""
+    class A:
+        min_price, max_price, hard_exit = 0.05, 5.0, "15:30"
+        take, stop, max_hold, slip = 60, 35, 15, 0.0
+        max_iv = 0.5
+    rows = [bar("10:00", 1.0, 1.2, 0.9, 1.0) for _ in range(20)]
+    for r in rows:
+        r["iv"] = None
+    assert z.scan_contract(rows, {"option_symbol": "X", "type": "call"},
+                           A(), 4.0) == []
+    for r in rows:
+        r["iv"] = 0.9                       # present, but above the cap
+    assert z.scan_contract(rows, {"option_symbol": "X", "type": "call"},
+                           A(), 4.0) == []
+    for r in rows:
+        r["iv"] = 0.3                       # inside it
+    assert z.scan_contract(rows, {"option_symbol": "X", "type": "call"},
+                           A(), 4.0)
