@@ -65,3 +65,11 @@ def test_the_alert_states_the_clock_the_paper_book_scores_against():
     out = compose.render_entry(_payload([_tier(1.85, 185)]))
     assert f"{C.MAX_HOLD_MIN} دقيقة" in out
     assert C.ZERO_DTE_HARD_EXIT_ET in out
+
+
+def test_every_contract_shows_what_the_stock_must_do_to_break_even():
+    """Answered once per alert instead of once in a chat."""
+    t = _tier(1.85, 185)
+    t.update(bid=1.75, delta=0.44)
+    out = compose.render_entry(_payload([t]))
+    assert "يتعادل لو تحرك السهم" in out and "0.26$" in out

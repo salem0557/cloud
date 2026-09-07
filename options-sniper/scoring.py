@@ -158,6 +158,28 @@ def total_score(flow, tech, news, best_contract, direction=None) -> float:
         + liquidity_score(best_contract), 1)
 
 
+def breakeven_move(contract: dict, fee: float = None) -> float:
+    """How far the STOCK has to move before the trade is merely even.
+
+    Salem: "اي تحرك بالسهم يكسبني مال اذا شريت عقد منه". It does not. He buys
+    at the ask and sells at the bid, and pays a commission each way, so the
+    contract has to climb the whole spread plus both fees before he is level —
+    and the stock has to move delta-many times that for the contract to climb
+    it.
+
+    Returns dollars of stock movement, or 0.0 when delta or the quote is
+    missing rather than a guess. It IGNORES theta, so it is the optimistic
+    figure: a same-day contract also has to outrun its own decay, and this
+    number does not charge that.
+    """
+    bid, ask = contract.get("bid") or 0.0, contract.get("ask") or 0.0
+    delta = abs(contract.get("delta") or 0.0)
+    if ask <= 0 or bid <= 0 or ask < bid or delta <= 0:
+        return 0.0
+    fee_ps = (C.COMMISSION_PER_CONTRACT if fee is None else fee) / 100.0
+    return ((ask - bid) + 2 * fee_ps) / delta
+
+
 # ── Budget filter — THE rule Salem caught: cost = ask x 100 ─────
 def contract_cost(c: dict) -> float:
     return c.get("ask", 0) * 100

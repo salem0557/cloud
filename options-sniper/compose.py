@@ -12,6 +12,7 @@ import json
 import subprocess
 
 import config as C
+import scoring
 
 NO_TRADE = "NO_TRADE"
 
@@ -76,7 +77,13 @@ def render_entry(p):
         cap = t["ask"] * (1 + C.MAX_CHASE_PCT / 100.0)
         lines.append(f"{t['tier']}: {t['strike']:g} {kind}{tag} @ ${t['ask']:.2f} "
                      f"→ {t['cost']:.0f}$ للعقد")
-        lines.append(f"    لا تشتري فوق ${cap:.2f}")
+        # What the stock has to do before this is merely even. Salem believes
+        # any move in the stock pays; it does not, because he buys at the ask,
+        # sells at the bid and pays a fee each way. Putting the number on
+        # every alert answers that once per alert instead of once in a chat.
+        even = scoring.breakeven_move(t)
+        tail = f" · يتعادل لو تحرك السهم {even:.2f}$" if even else ""
+        lines.append(f"    لا تشتري فوق ${cap:.2f}{tail}")
 
     # One exit line, not a table. Tiers almost always share a rule; when they
     # do not, the differing one gets its own line rather than a legend.

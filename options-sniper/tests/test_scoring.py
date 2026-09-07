@@ -2,6 +2,8 @@
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+import pytest
+
 import config as C
 from scoring import (contract_cost, contract_quality, passes_liquidity,
                      pick_contracts_by_budget,
@@ -164,3 +166,30 @@ def test_the_best_in_a_band_wins_not_the_dearest():
     picks = dict(pick_contracts_by_budget(chain, "call", spot,
                                           expected_move=2.0, atr=atr))
     assert picks["🔴 <50$"]["option_symbol"] == "GOOD"
+
+
+# ── "Any move in the stock pays" — it does not ─────────────────
+def test_the_stock_has_to_move_before_the_trade_is_even():
+    """Salem: "اي تحرك بالسهم يكسبني مال". He buys at the ask, sells at the
+    bid and pays a fee each way, so the contract climbs the whole spread plus
+    both fees before he is level — and the stock moves delta-many times that."""
+    from scoring import breakeven_move
+    c = {"bid": 1.75, "ask": 1.85, "delta": 0.44}
+    # (0.10 spread + 0.013 fees) / 0.44
+    assert breakeven_move(c, fee=0.65) == pytest.approx(0.257, abs=0.005)
+
+
+def test_a_thinner_delta_needs_a_much_bigger_move():
+    """The cheap far strike is cheap because its delta is small, so the same
+    friction demands a far larger move from the stock."""
+    from scoring import breakeven_move
+    near = breakeven_move({"bid": 1.75, "ask": 1.85, "delta": 0.44}, fee=0.65)
+    far = breakeven_move({"bid": 0.38, "ask": 0.42, "delta": 0.10}, fee=0.65)
+    assert far > near * 2
+
+
+def test_a_missing_delta_or_quote_returns_zero_rather_than_a_guess():
+    from scoring import breakeven_move
+    assert breakeven_move({"bid": 1.0, "ask": 1.1, "delta": 0}) == 0.0
+    assert breakeven_move({"bid": 0, "ask": 1.1, "delta": 0.4}) == 0.0
+    assert breakeven_move({}) == 0.0
