@@ -871,3 +871,32 @@ def test_an_iv_filter_refuses_a_minute_with_no_iv_at_all():
         r["iv"] = 0.3                       # inside it
     assert z.scan_contract(rows, {"option_symbol": "X", "type": "call"},
                            A(), 4.0)
+
+
+# ── The clock, not the analysis, may be what fails ─────────────
+def test_the_hold_time_can_be_varied_without_touching_the_pair():
+    """Roughly a third of gated trades TIME OUT, and the median winner takes
+    8-10 minutes against a 15-minute limit. A trade needing 16 minutes is
+    recorded as a failure of the setup when it was a failure of the deadline."""
+    class A:
+        min_price, max_price, hard_exit = 0.05, 5.0, "15:30"
+        take, stop, slip, max_iv = 60, 35, 0.0, None
+        max_hold = 5
+    # climbs steadily: reaches +60% around minute 12, so a 5-minute clock
+    # times it out and a 20-minute one collects it
+    rows = [bar(f"10:{m:02d}", 1.0 + m * 0.06, 1.0 + m * 0.06,
+                1.0 + m * 0.06, 1.0 + m * 0.06) for m in range(25)]
+    meta = {"option_symbol": "X", "type": "call"}
+    short = z.scan_contract(rows, meta, A(), 2.0)
+    long_ = z.scan_contract(rows, meta, A(), 2.0, hold=20)
+    assert short and long_
+    assert sum(1 for t in short if t["why"] == "take") == 0
+    assert sum(1 for t in long_ if t["why"] == "take") > 0
+
+
+def test_the_clock_table_says_it_is_pooled_and_needs_confirming():
+    """It sees every session, which is the same flaw the pooled pair table
+    has. Saying so on the table is the difference between a lead and a claim."""
+    import inspect
+    src = inspect.getsource(z.hold_sweep)
+    assert "WALK-FORWARD" in src and "Pooled" in src
