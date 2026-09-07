@@ -145,8 +145,13 @@ def signal(bars, i, lookback=15):
     }
 
 
-def gate(sig, minute_et):
+def gate(sig, minute_et, skip=()):
     """Does this signal clear every gate? -> (ok, reason it did not).
+
+    `skip` names session windows to refuse outright. It exists so that "the
+    midday is where money dies" can be TESTED rather than asserted: the
+    windows it excludes are a parameter, and the only figure allowed to judge
+    them is the walk-forward one, which never sees the session it scores.
 
     Order matters only for the message: the first failure is the one reported,
     and the cheapest checks come first so the reason names the real obstacle.
@@ -160,6 +165,8 @@ def gate(sig, minute_et):
     window = time_window(minute_et)
     if window is None:
         return False, "outside the session"
+    if window in (skip or ()):
+        return False, f"skipped window ({window})"
     return True, window
 
 

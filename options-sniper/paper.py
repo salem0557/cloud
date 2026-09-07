@@ -283,7 +283,7 @@ def report():
     print(f"  ended at a loss: {s['lost']:.1f}%   "
           f"(backtest said {C.PAPER_BASELINE['lost']:.1f}%)")
     print(f"  per $1 staked  : ${s['avg']:.3f}   "
-          f"(backtest said ${C.PAPER_BASELINE['avg']:.3f} equal-weighted)")
+          f"(backtest said ${C.PAPER_BASELINE['avg']:.3f} pooled)")
     if s["n"] < C.PAPER_MIN_TRADES:
         print(f"\n  {s['n']} trades. Below {C.PAPER_MIN_TRADES} this says "
               "nothing either way —\n  the backtest's own 5-of-9 sessions came "

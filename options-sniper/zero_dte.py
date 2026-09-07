@@ -134,7 +134,8 @@ def build_gates(ticker, date, args):
     out, reasons = {}, Counter()
     for i in todays:
         sig = regime.signal(bars, i)
-        ok, why = regime.gate(sig, market.et_minute(bars[i].get("start_time")))
+        ok, why = regime.gate(sig, market.et_minute(bars[i].get("start_time")),
+                              skip=args.skip_windows)
         reasons[why if not ok else "PASS"] += 1
         if ok:
             out[bar_key(market.et_minute(bars[i].get("start_time")))] = sig
@@ -471,6 +472,9 @@ def run_one(date, args, spread_pct):
     print(f"Buy a contract expiring {date}, sell at +{args.take:.0f}%, "
           f"cut at -{args.stop:.0f}%,")
     print(f"give up after {args.max_hold} minutes, out by {args.hard_exit}.")
+    if args.skip_windows:
+        print(f"Refusing the {', '.join(args.skip_windows)} window(s) — the "
+              f"walk-forward figure is the only one that judges this.")
     print(f"Spread: each contract charged its own measured width, half each "
           f"way. Commission ${C.COMMISSION_PER_CONTRACT:.2f}/contract/side.\n"
           f"Entry premium ${args.min_price}-${args.max_price} "
@@ -1074,8 +1078,22 @@ def main(argv=None):
     p.set_defaults(gated=True)
     p.add_argument("--type", default=None, choices=["call", "put"])
     p.add_argument("--take", type=float, default=25.0, help="take profit %%")
+    p.add_argument("--skip-windows", default="",
+                   help="comma-separated session windows to refuse "
+                        "(open, momentum, midday, trend, gamma). The midday "
+                        "returned $0.79-$0.90 in five separate sessions while "
+                        "momentum returned $1.14-$1.38 — but that was read OFF "
+                        "the sessions, so only the walk-forward figure decides "
+                        "whether skipping it is real.")
     args = p.parse_args(argv)
     args.slips = [float(x) for x in args.slips.split(",") if x.strip()]
+    args.skip_windows = tuple(w.strip() for w in args.skip_windows.split(",")
+                              if w.strip())
+    known = {name for _s, _e, name in C.SESSION_WINDOWS}
+    unknown = [w for w in args.skip_windows if w not in known]
+    if unknown:
+        p.error(f"unknown window(s) {', '.join(unknown)}; "
+                f"choose from {', '.join(sorted(known))}")
 
     if args.sessions:
         end = args.date or datetime.date.today().isoformat()

@@ -191,7 +191,20 @@ BARS_PER_SESSION = int(TRADING_HOURS_PER_DAY * 60 / 15)      # 26
 PAPER_MAX_HOLD = 15          # minutes, as in the backtest
 PAPER_HARD_EXIT = "15:30"
 PAPER_MIN_TRADES = 30        # below this the record says nothing either way
-PAPER_BASELINE = {"hit": 43.2, "lost": 41.2, "avg": 1.033}   # pre-commission
+# Measured at +40/-30 -- the pair EXIT_RULES[0] actually uses -- over 1,612
+# gated trades across 15 sessions, commission charged. It REPLACES a baseline
+# of 43.2/41.2/$1.033 that was taken before the clock was fixed: that run read
+# UW's UTC timestamps as New York, so it stopped entering at 11:30 in the
+# morning and measured two hours of the session while claiming to measure the
+# day. Comparing a live paper month against it would have been comparing
+# against a different experiment.
+PAPER_BASELINE = {"hit": 31.3, "lost": 57.1, "avg": 0.994}
+# What the same run said about the pair the walk-forward settled on, +60/-35:
+# $1.010 out of sample across 8 sessions, 5 of them profitable -- the only
+# figure here not helped by knowing the answer first. EXIT_RULES is Salem's
+# call, so nothing is changed on his behalf; this is recorded so the choice is
+# made against a number rather than a memory.
+WALK_FORWARD = {"pair": "+60/-35", "avg": 1.010, "sessions": 8, "won": 5}
 
 # ── What no desk would go live without ──────────────────────────
 # Per contract, per side. $0.65 is the common retail rate; some brokers charge
