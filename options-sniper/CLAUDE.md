@@ -100,6 +100,30 @@ while losing 4. It is also the configuration most exposed to a stop gapping
 through its level, which is why `--slips` exists: if a ranking only survives at
 zero slippage it was measuring the assumption, not the trade.
 
+### The exit is Salem's, and that changes what to measure
+
+> "اما الخروج فهو علي لو اربح مثلا 40% خمس دقائق ربما اخرج ربما لا"
+
+He wants the system to WATCH — find the wave starting, name the three best
+contracts — and he decides when to get out. So every take/stop figure in this
+project answers a question he is not asking. His question is: *when you alert
+me, does the contract actually rise, and by how much?*
+
+`zero_dte.upside_report()` answers exactly that, with no exit rule at all: of
+the entries the gates would have alerted on, how many ever reached +20%, +40%,
++60%, +100% — net of the spread and both commissions, because that is what he
+could actually have taken.
+
+It also reports **how far down it went first**, and that number is not
+decoration. An alert that reaches +60% after first showing -40% is not the
+same alert as one that goes straight up; he has to still be holding to see the
+high. A single "it hit the target" flag cannot tell those apart.
+
+The take/stop tables stay, because the paper book needs a rule to score itself
+by and the alert still carries a suggested exit. But when the two disagree
+about which setup is better, the upside table is the one that describes his
+trading.
+
 ## Hard Rules (non-negotiable)
 - If data looks stale, incomplete, or contradictory → output exactly: `NO_TRADE: <سبب مختصر>`
 - Never change, round up, or "improve" the score, prices, or profit estimates you receive.

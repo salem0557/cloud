@@ -65,3 +65,28 @@ def test_the_alert_states_the_clock_the_paper_book_scores_against():
     out = compose.render_entry(_payload([_tier(1.85, 185)]))
     assert f"{C.MAX_HOLD_MIN} دقيقة" in out
     assert C.ZERO_DTE_HARD_EXIT_ET in out
+
+
+def test_every_contract_shows_what_the_stock_must_do_to_break_even():
+    """Answered once per alert instead of once in a chat."""
+    t = _tier(1.85, 185)
+    t.update(bid=1.75, delta=0.44)
+    out = compose.render_entry(_payload([t]))
+    assert "يتعادل لو تحرك السهم" in out and "0.26$" in out
+
+
+def test_the_alert_shows_whether_the_factors_actually_line_up():
+    """"اذا تجمعت كل العوامل و التحليلات تدعم توقعك" is how Salem judges a
+    setup, and one folded score cannot answer it: an 88 built on three strong
+    reads and one weak one looked identical to an 88 where everything agreed."""
+    p = _payload([_tier(1.85, 185)])
+    p["score_breakdown"] = {"flow": 28, "technical": 26,
+                            "catalyst": 20, "liquidity": 14}
+    out = compose.render_entry(p)
+    assert "تدفق 28/30" in out and "فني 26/30" in out
+    assert "خبر 20/20" in out and "سيولة 14/20" in out
+
+
+def test_no_breakdown_means_no_line_rather_than_zeros():
+    out = compose.render_entry(_payload([_tier(1.85, 185)]))
+    assert "تدفق" not in out

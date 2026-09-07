@@ -144,6 +144,50 @@ def build_gates(ticker, date, args):
             "context": len(bars)}
 
 
+def upside(rows, i, max_hold, spread_pct, hard_exit, fee=None):
+    """How far up did it go, and how far down first — with NO exit rule.
+
+    Salem does not want the exit managed: "اما الخروج فهو علي". That makes
+    every take/stop figure in this file the wrong question for him. His
+    question is simply "when you alert me, does the contract actually rise,
+    and by how much" — and the answer must not depend on a rule he is not
+    going to follow.
+
+    So this walks the same window and reports two numbers, both net of the
+    spread and both commissions, exactly as a real round trip would be:
+
+      best   the most he could have taken, if he sold at the high
+      worst  how far underwater it went first, which is what decides
+             whether he would still have been holding to see the high
+
+    An alert whose contract reaches +60% after first showing -40% is not the
+    same alert as one that goes straight up, and a single "it hit the target"
+    flag cannot tell them apart.
+    """
+    half = spread_pct / 200.0
+    mid_in = rows[i]["close"] or rows[i]["avg_price"]
+    if mid_in <= 0:
+        return None
+    fee_ps = (C.COMMISSION_PER_CONTRACT if fee is None else fee) / 100.0
+    cost = mid_in * (1 + half) + fee_ps
+    out_factor = 1 - half
+    hi = lo = None
+    seen = 0
+    for r in rows[i + 1:i + 1 + max_hold]:
+        if minute_of(r) >= hard_exit:
+            break
+        seen += 1
+        for px in (r["high"], r["low"]):
+            if px is None or px <= 0:
+                continue
+            net = (px * out_factor - fee_ps) / cost - 1.0
+            hi = net if hi is None else max(hi, net)
+            lo = net if lo is None else min(lo, net)
+    if not seen or hi is None:
+        return None
+    return {"best": hi * 100.0, "worst": lo * 100.0, "minutes": seen}
+
+
 def entry_exit(rows, i, take_pct, stop_pct, max_hold, spread_pct, hard_exit,
                slip_pct=0.0, fee=None):
     """One trade: buy at row i, then walk forward minute by minute.
@@ -335,6 +379,60 @@ def scan_contract(rows, meta, args, spread_pct, gates=None,
             trade["wall"] = sig.get("wall")
         out.append(trade)
     return out
+
+
+UPSIDE_STEPS = (20, 40, 60, 100)
+
+
+def upside_report(tapes, args, spread_of, gate_map, ticker_of):
+    """What an alert is actually worth to someone who exits by judgement.
+
+    Every other table here scores a rule. This one scores the ALERT: of the
+    entries the gates would have sent him, how many ever reached +20%, +40%,
+    +60%, +100% — and how deep they went first. No target, no stop, no
+    verdict about what he should have done.
+    """
+    obs = []
+    for c, tape_rows in tapes:
+        sp = spread_of.get(c["option_symbol"])
+        if sp is None:
+            continue
+        gates = (gate_map.get(ticker_of(c)) or {}) if args.gated else None
+        for i in range(len(tape_rows) - 1):
+            price = tape_rows[i]["close"] or tape_rows[i]["avg_price"]
+            if not (args.min_price <= price <= args.max_price):
+                continue
+            minute = minute_of(tape_rows[i])
+            if minute >= args.hard_exit:
+                continue
+            if gates is not None:
+                sig = gates.get(bar_key(minute))
+                if not sig or sig["direction"] != c.get("type"):
+                    continue
+            u = upside(tape_rows, i, args.max_hold, sp, args.hard_exit)
+            if u:
+                obs.append(u)
+    if len(obs) < 20:
+        return
+    print(f"\n{'='*64}")
+    print(f"  WHAT AN ALERT WAS WORTH — {args.max_hold} minutes, no exit rule")
+    print("  (Salem exits by judgement, so this scores the ALERT and not a "
+          "rule)\n")
+    print(f"    {'reached':>10} {'of alerts':>10}")
+    for step in UPSIDE_STEPS:
+        n = sum(1 for o in obs if o["best"] >= step)
+        print(f"    {'+' + str(step) + '%':>10} {n / len(obs) * 100:>9.1f}%")
+    best = sorted(o["best"] for o in obs)
+    worst = sorted(o["worst"] for o in obs)
+    mid = len(obs) // 2
+    print(f"\n    median best it ever showed : {best[mid]:+.1f}%")
+    print(f"    median worst it showed first: {worst[mid]:+.1f}%")
+    deep = sum(1 for o in obs if o["worst"] <= -30) / len(obs) * 100
+    print(f"    went under -30% at some point: {deep:.0f}% of alerts")
+    print(f"\n    n={len(obs)} alerts. 'best' is net of the spread and both\n"
+          "    commissions — what he could actually have taken.")
+    print("    An alert that reaches +60% after first showing -40% is not the\n"
+          "    same alert as one that goes straight up.")
 
 
 def clock_bias(tapes, args):
@@ -663,6 +761,7 @@ def run_one(date, args, spread_pct):
         print("\n  ONLY ENTRIES THAT CLEARED THE GATES:")
     stats = summarise(obs, args.take, args.stop)
 
+    upside_report(tapes, args, spread_of, gate_map, ticker_of)
     hold_sweep(tapes, args, spread_of, gate_map, ticker_of)
     pooled, splits = sweep(tapes, args, spread_of, gate_map, ticker_of)
     report_features(obs, stats["avg"])
