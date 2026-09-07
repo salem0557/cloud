@@ -7,6 +7,8 @@ what it does when a minute contains both the target and the stop.
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+import pytest
+
 import zero_dte as z
 
 
@@ -931,3 +933,43 @@ def test_the_report_names_the_highest_hit_pair_and_what_it_returns():
     src = inspect.getsource(z.pooled_sweep)
     assert "Highest hit rate in this grid" in src
     assert "A hit rate is not an edge" in src
+
+
+# ── Scoring the ALERT, for someone who exits by judgement ──────
+def test_upside_reports_the_high_and_the_low_without_any_exit_rule():
+    """"اما الخروج فهو علي" — so every take/stop figure is the wrong question.
+    His is: when you alert me, does it rise, and by how much."""
+    rows = [bar("10:00", 1.00, 1.00, 1.00, 1.00),
+            bar("10:01", 1.00, 1.10, 0.80, 0.90),
+            bar("10:02", 0.90, 1.80, 0.90, 1.70)]
+    u = z.upside(rows, 0, 30, 0.0, "15:30", fee=0.0)
+    assert u["best"] == pytest.approx(80.0, abs=0.5)
+    assert u["worst"] == pytest.approx(-20.0, abs=0.5)
+
+
+def test_the_drawdown_is_reported_because_he_has_to_hold_through_it():
+    """An alert that reaches +60% after first showing -40% is not the same
+    alert as one that goes straight up, and 'it hit the target' cannot tell
+    them apart."""
+    straight = [bar("10:00", 1.0, 1.0, 1.0, 1.0),
+                bar("10:01", 1.0, 1.6, 1.0, 1.6)]
+    ugly = [bar("10:00", 1.0, 1.0, 1.0, 1.0),
+            bar("10:01", 1.0, 1.0, 0.6, 0.6),
+            bar("10:02", 0.6, 1.6, 0.6, 1.6)]
+    a = z.upside(straight, 0, 30, 0.0, "15:30", fee=0.0)
+    b = z.upside(ugly, 0, 30, 0.0, "15:30", fee=0.0)
+    assert a["best"] == pytest.approx(b["best"], abs=0.5)     # same headline
+    assert b["worst"] < a["worst"] - 30                       # different trade
+
+
+def test_the_upside_is_net_of_the_spread_and_both_commissions():
+    """It is what he could actually have taken, not what the tape printed."""
+    rows = [bar("10:00", 1.0, 1.0, 1.0, 1.0), bar("10:01", 1.0, 2.0, 1.0, 2.0)]
+    gross = z.upside(rows, 0, 30, 0.0, "15:30", fee=0.0)["best"]
+    charged = z.upside(rows, 0, 30, 6.0, "15:30", fee=0.65)["best"]
+    assert gross == pytest.approx(100.0, abs=0.5)
+    assert charged < gross - 8
+
+
+def test_the_alert_report_names_the_steps_it_measures():
+    assert z.UPSIDE_STEPS == (20, 40, 60, 100)
