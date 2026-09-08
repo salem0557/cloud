@@ -302,3 +302,96 @@ def test_the_level_is_not_called_off_one_candle_at_the_open():
     bars = _gap_down_then_rally()[:-18]      # yesterday plus two bars today
     t = technical.analyse(bars + _gap_down_then_rally()[-2:], "call")
     assert t is None or t["level"] > 0       # never crashes, never invents one
+
+
+# ── The opening range: 09:30-10:00, where the day's moves start ──
+# 2026-09-08 measured what the ordinary rule costs there. NVDA opened 233.24
+# and fell to 225.81, its 225 put 0.25 -> 1.60. TSLA opened 357.25 and ran to
+# 370.00, its 370 call 1.09 -> 3.75. Both were most of the way done before
+# 10:15, which is the earliest LEVEL_MIN_BARS allows a level to exist.
+
+def _session(bars_today, first_high=100.0, first_low=99.0):
+    """Yesterday up at 380, then `bars_today` bars today starting from an
+    opening range of first_low..first_high."""
+    out = []
+    for i in range(45):          # analyse() needs CANDLES_LOOKBACK bars in all
+        out.append({"open": 380.0, "high": 384.0, "low": 378.0, "close": 380.0,
+                    "volume": 1000, "date": "2026-09-03",
+                    "start_time": f"2026-09-03T{13 + i // 4:02d}:{(i % 4) * 15:02d}:00Z",
+                    "end_time": "x", "closed": True})
+    for i in range(bars_today):
+        out.append({"open": first_low, "high": first_high, "low": first_low,
+                    "close": (first_high + first_low) / 2, "volume": 1000,
+                    "date": "2026-09-08",
+                    "start_time": f"2026-09-08T{13 + i // 4:02d}:{(i % 4) * 15:02d}:00Z",
+                    "end_time": "x", "closed": True})
+    return out
+
+
+def test_the_opening_range_becomes_the_level_before_structure_exists():
+    """Two bars in, there is a range. The break of it is the trade."""
+    bars = _session(2)
+    bars.append({"open": 100.0, "high": 102.0, "low": 99.8, "close": 101.8,
+                 "volume": 3000, "date": "2026-09-08",
+                 "start_time": "2026-09-08T14:00:00Z", "end_time": "x",
+                 "closed": True})
+    t = technical.analyse(bars, "call")
+    assert t["opening_range"] is True
+    assert t["level"] == 100.0, "the level is the opening range high"
+    assert t["broke_level"]
+
+
+def test_an_opening_break_needs_more_volume_than_the_rest_of_the_day():
+    """The open prints moves that do not survive. Volume that would confirm at
+    noon must not confirm at 09:45."""
+    bars = _session(2)
+    weak = dict(open=100.0, high=102.0, low=99.8, close=101.8,
+                volume=int(1000 * C.VOLUME_SPIKE_RATIO) + 50,
+                date="2026-09-08", start_time="2026-09-08T14:00:00Z",
+                end_time="x", closed=True)
+    bars.append(weak)
+    t = technical.analyse(bars, "call")
+    assert t["opening_range"] and t["broke_level"]
+    assert t["volume_ratio"] >= C.VOLUME_SPIKE_RATIO
+    assert t["volume_ratio"] < C.OPENING_VOLUME_RATIO
+    assert not technical.confirms(t), "an opening break passed on midday volume"
+
+
+def test_an_opening_break_on_real_volume_does_confirm():
+    bars = _session(2)
+    bars.append({"open": 100.0, "high": 102.0, "low": 99.8, "close": 101.8,
+                 "volume": 3000, "date": "2026-09-08",
+                 "start_time": "2026-09-08T14:00:00Z", "end_time": "x",
+                 "closed": True})
+    assert technical.confirms(technical.analyse(bars, "call"))
+
+
+def test_once_the_session_has_structure_the_opening_rule_steps_aside():
+    bars = _session(6)
+    bars.append({"open": 100.0, "high": 102.0, "low": 99.8, "close": 101.8,
+                 "volume": 3000, "date": "2026-09-08",
+                 "start_time": "2026-09-08T15:00:00Z", "end_time": "x",
+                 "closed": True})
+    t = technical.analyse(bars, "call")
+    assert t["opening_range"] is False
+
+
+def test_one_bar_is_not_a_range(monkeypatch):
+    """Below OPENING_RANGE_BARS there is nothing to break yet."""
+    bars = _session(1)
+    bars.append({"open": 100.0, "high": 102.0, "low": 99.8, "close": 101.8,
+                 "volume": 3000, "date": "2026-09-08",
+                 "start_time": "2026-09-08T13:45:00Z", "end_time": "x",
+                 "closed": True})
+    t = technical.analyse(bars, "call")
+    assert t["opening_range"] is False, "a level was called off one candle"
+
+
+def test_the_opening_mode_can_be_switched_off(monkeypatch):
+    monkeypatch.setattr(C, "USE_OPENING_RANGE", False)
+    bars = _session(2)
+    bars.append({"open": 100.0, "high": 102.0, "low": 99.8, "close": 101.8,
+                 "volume": 3000, "date": "2026-09-08",
+                 "start_time": "2026-09-08T14:00:00Z", "end_time": "x",
+                 "closed": True})
+    assert technical.analyse(bars, "call")["opening_range"] is False

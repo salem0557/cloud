@@ -32,8 +32,9 @@ def atr(candles, period=None):
 
 
 def _level_window(candles, prior):
-    """The bars a breakout level may be read from: the most recent
-    LEVEL_LOOKBACK closed bars, cut at this session's open.
+    """-> (bars the level may be read from, is_opening_range).
+
+    The most recent LEVEL_LOOKBACK closed bars, cut at this session's open.
 
     Cutting at the open is the point. Yesterday's high is not a level today's
     move has to clear — a stock that gapped down and is rallying has already
@@ -41,16 +42,22 @@ def _level_window(candles, prior):
     """
     recent = prior[-C.LEVEL_LOOKBACK:] if C.LEVEL_LOOKBACK else prior
     if not recent:
-        return []
+        return [], False
     today = (candles[-1].get("date")
              or (candles[-1].get("start_time") or "")[:10])
     if not today:
-        return recent
+        return recent, False
     same = [c for c in recent
             if (c.get("date") or (c.get("start_time") or "")[:10]) == today]
-    # Early in the session there may be only a bar or two. Fall back to the
-    # recent window rather than calling a level off one candle.
-    return same if len(same) >= C.LEVEL_MIN_BARS else recent
+    if len(same) >= C.LEVEL_MIN_BARS:
+        return same, False
+    # Too early for intraday structure. The opening range — the session's first
+    # OPENING_RANGE_BARS bars — is the level instead, which is what lets the
+    # 09:45 and 10:00 breaks be seen at all. Below that many bars there is not
+    # even a range yet, so fall back to the recent window.
+    if C.USE_OPENING_RANGE and len(same) >= C.OPENING_RANGE_BARS:
+        return same[:C.OPENING_RANGE_BARS], True
+    return recent, False
 
 
 def analyse(candles, direction, lookback=None):
@@ -91,7 +98,7 @@ def analyse(candles, direction, lookback=None):
     # So the level comes from the recent intraday structure only, and never
     # from before this session's open. ATR and the volume average still use the
     # long window: they need the history, and neither is a price to break.
-    lvl_window = _level_window(candles, prior)
+    lvl_window, opening = _level_window(candles, prior)
     lvl_prior = lvl_window or prior
 
     if direction == "call":
@@ -142,6 +149,10 @@ def analyse(candles, direction, lookback=None):
         "stop": round(stop, 2),
         "entry_rule": entry_rule,
         "expected_move": round(max(0.0, remaining) * a, 2),
+        # True when the level came from the opening range rather than from
+        # intraday structure. confirms() asks more of the volume here, and the
+        # message is tagged, because the open is a different trade.
+        "opening_range": bool(opening),
         "bar_time": last.get("end_time", ""),
         "bars_used": len(window),
     }
@@ -233,12 +244,17 @@ def confirms(tech):
     """A break worth alerting on.
 
     Level broken on a CLOSED candle, volume behind it, room left to the target,
+    and — on an opening-range break — more volume than the rest of the day
+    needs, because the first half hour prints moves that do not survive.
     and — the condition Salem asked for — the break did not reverse inside its
     own candle. A break that closes at the low of the bar that made it is a
     trap, and it used to pass every one of the other four checks.
     """
-    return (bool(tech)
-            and tech["broke_level"]
-            and tech["volume_ratio"] >= C.VOLUME_SPIKE_RATIO
+    if not tech:
+        return False
+    need = (C.OPENING_VOLUME_RATIO if tech.get("opening_range")
+            else C.VOLUME_SPIKE_RATIO)
+    return (tech["broke_level"]
+            and tech["volume_ratio"] >= need
             and holds(tech)
             and not is_late(tech))

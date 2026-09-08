@@ -49,7 +49,15 @@ def render_entry(p):
         head += f"  ({p['score']}/100 بعد خصم المخاطر)"
     else:
         head += f"  ({p['score']}/100)"
+    if tech.get("opening_range"):
+        # A different trade, and it must not read like the others. The level is
+        # the first half hour's range rather than intraday structure, the move
+        # is faster, and the reversal rate at the open is higher — so it is
+        # named on the alert instead of being folded in silently.
+        head += "  🌅"
     lines = [head]
+    if tech.get("opening_range"):
+        lines.append("🌅 كسر نطاق الافتتاح — أسرع وأخطر من المعتاد")
     # "اذا تجمعت كل العوامل و التحليلات تدعم توقعك" — the four scores ARE that
     # question, and until now the alert folded them into one number, so a 88
     # built on three strong reads and one weak one looked identical to a 88

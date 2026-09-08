@@ -159,8 +159,26 @@ CANDLES_LOOKBACK   = 40     # bars used for ATR and the volume average
 # -> 370.00 (+3.3%, its 370 call 1.09 -> 3.75) and the scanner called it "no
 # break" the whole way, because Sep 3's high of 384.04 was still the level.
 LEVEL_LOOKBACK     = 12     # bars the breakout level may be read from
-LEVEL_MIN_BARS     = 3      # below this, fall back rather than call a level
-                            # off one or two candles at the open
+LEVEL_MIN_BARS     = 3      # below this the session has no structure yet, so
+                            # the opening-range rule below takes over
+
+# ── Opening range (09:30-10:00 ET) ──────────────────────────────
+# The session's first bars are where the day's biggest moves start, and the
+# ordinary rule cannot see them: it needs LEVEL_MIN_BARS closed before there is
+# any intraday structure to break, which is 10:15 at the earliest.
+#
+# 2026-09-08 measured the cost. NVDA opened 233.24 and fell to 225.81; its 225
+# put went 0.25 -> 1.60. TSLA opened 357.25 and ran to 370.00; its 370 call went
+# 1.09 -> 3.75. Both moves were most of the way done before 10:15.
+#
+# So for that window only, the level is the first OPENING_RANGE_BARS bars —
+# the opening range every intraday desk watches — and a break of it counts.
+# The open is noisier than the rest of the session, so it is NOT the same trade:
+# the volume requirement is higher, and the alert is tagged so Salem can see at
+# a glance that it is the faster and riskier kind.
+USE_OPENING_RANGE     = os.environ.get("USE_OPENING_RANGE", "1").lower() in ("1", "true", "yes")
+OPENING_RANGE_BARS    = 2     # 09:30-10:00 on the 15m frame
+OPENING_VOLUME_RATIO  = 1.5   # vs VOLUME_SPIKE_RATIO for the rest of the day
 # How many OHLC pages uw.candles() may walk back to reach that many REGULAR
 # bars. One page is not enough: UW answers timeframe=5D with 100 rows and no
 # more, ~60 of them pre/post-market, which left 39 usable against the 40
