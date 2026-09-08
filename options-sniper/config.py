@@ -77,7 +77,14 @@ WEIGHTS = {"flow": 30, "technical": 30, "catalyst": 20, "liquidity": 20}
 # That could never happen: the journal only fills from alerts, and there were
 # none. 70 is the number that starts the loop. It is a starting point to be
 # re-derived from real results, not a settled figure.
-THRESHOLD          = 70     # re-calibrate from journal.csv after 2-4 weeks
+THRESHOLD          = 65     # re-calibrate from journal.csv after 2-4 weeks
+# The paper book's own gate, deliberately looser than the alert gate. Salem
+# asked for both to be loosened and the paper one loosened further: "سهل
+# الشروط على كل الاثنين لكن الورقي سهلها اكثر". Everything scoring between
+# PAPER_THRESHOLD and THRESHOLD is opened in 944 and never sent to 943, so a
+# month of results says what the alert gate would have earned at 55, at 60,
+# at 65 — measured, instead of argued.
+PAPER_THRESHOLD    = 55
 # Kept 20 below the threshold, as it was at 85/65. The gap is what lets a
 # ticker with strong flow but no break yet sit on the watchlist until the
 # break arrives and monitor.py adds the technical points.
@@ -121,7 +128,28 @@ ATR_PERIOD         = 14
 VOLUME_SPIKE_RATIO = 1.5    # candle volume vs prior-bar average
 TARGET_ATR_MULT    = 1.5    # target = broken level +/- 1.5 x ATR
 STOP_ATR_MULT      = 1.0    # stop   = broken level -/+ 1.0 x ATR
-MIN_REMAINING_ATR  = 0.75
+# How much of the measured move must still be ahead of price to alert. At
+# 0.75 this rejected the two strongest names in the market on 2026-09-08 —
+# BE at +0.56 ATR and AMD at +0.71 — and the day produced no alert at all.
+MIN_REMAINING_ATR  = 0.50
+# The paper book takes anything with room still ahead of it. Below this it is
+# not a setup, it is the top: price has effectively reached its target and an
+# entry has nothing left to collect.
+PAPER_MIN_REMAINING_ATR = 0.10
+# A break that still has room toward its target, but less than the line above
+# demands, is NOT alerted — Salem never sees it in 943. It is opened in the
+# paper book only, so a month of results answers the question the rule cannot
+# answer about itself: does 0.75 protect him, or does it cost him?
+#
+# Measured 2026-09-08, the two strongest names in the market, both rejected by
+# a hair and both of which would have lost money:
+#   BE  09:45  +0.56 ATR left  (close 278.44 -> 276 within the hour)
+#   AMD 10:15  +0.71 ATR left  (close 500.00 -> 499)
+# One session is not evidence. The paper book is how it becomes evidence.
+#
+# A break that has passed its target (remaining < 0) is never taken, on paper
+# or otherwise. That is not a near miss, it is buying the top.
+PAPER_NEAR_MISS = os.environ.get("PAPER_NEAR_MISS", "1").lower() in ("1", "true", "yes")
 
 # ── The early notice: "this one is coiling" ─────────────────────
 # Salem's actual goal, stated from the first message: ride the contract's rise
@@ -349,7 +377,12 @@ SESSION_WINDOWS = [
 #   per day   = that x ~39 scans, plus the monitor's ~3 per shortlist name
 FLOW_ALERT_LIMIT        = int(os.environ.get("FLOW_ALERT_LIMIT") or 500)
 MAX_CANDIDATES_PER_SCAN = int(os.environ.get("MAX_CANDIDATES_PER_SCAN") or 60)
-MIN_TICKER_PREMIUM      = 250_000   # skip tickers below this daily premium
+# Measured on 50 live UW flow alerts (2026-09-08): $250k dropped 25 of 34
+# tickers before a single data call, and the scan was nowhere near its
+# 60-candidate ceiling — so the filter was discarding names the budget could
+# comfortably afford. Cost at the new level: roughly 9,000 UW requests a day
+# against a 30,000 allowance. Read uw.spent() before moving it again.
+MIN_TICKER_PREMIUM      = 100_000   # skip tickers below this daily premium
 
 # ── Finviz Elite (candidate discovery only — never scored) ──────
 # Finviz costs nothing per ticker: one screener request returns every row, and
