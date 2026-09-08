@@ -360,7 +360,13 @@ def candles(ticker, candle_size=None, timeframe="5D", limit=500, end_date=None):
         if end_date:
             params["end_date"] = end_date       # walk backwards for backtests
         raw = _get(f"/api/stock/{ticker}/ohlc/{size}", params)
-    except UWError:
+    except UWError as e:
+        # NEVER silent. A swallowed failure here returns [], technical.analyse()
+        # sees nothing and returns None, and scanner.evaluate() drops the ticker
+        # without a word. On 2026-09-08 that produced a log reading "60 tickers
+        # worth a data call" followed by an empty shortlist and no explanation
+        # anywhere — a total failure that looked exactly like a quiet market.
+        print(f"  [uw] {ticker} {size} candles failed: {e}")
         return []
     rows = []
     for c in raw:
@@ -381,8 +387,17 @@ def candles(ticker, candle_size=None, timeframe="5D", limit=500, end_date=None):
         })
     # daily rows sort by date, intraday by start_time; UW's order differs per size
     rows.sort(key=lambda r: (r["start_time"] or r["date"]))
-    rows = [r for r in rows if r["close"] > 0]
-    return [r for r in rows if r["closed"]]
+    priced = [r for r in rows if r["close"] > 0]
+    kept = [r for r in priced if r["closed"]]
+    # Same rule: say which filter emptied it. "UW answered with 130 rows and we
+    # kept 0" and "UW answered with 0 rows" are different problems, and both
+    # used to reach the caller as the same empty list.
+    if raw and not kept:
+        print(f"  [uw] {ticker} {size}: UW returned {len(raw)} rows, kept 0 "
+              f"({len(rows) - len(priced)} unpriced, "
+              f"{len(priced)} priced but none closed). "
+              f"Fields on row 0: {sorted(raw[0].keys())}")
+    return kept
 
 
 def _session_done(date, size):
