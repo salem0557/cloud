@@ -102,14 +102,18 @@ WEIGHTS = {"flow": 30, "technical": 30, "catalyst": 20, "liquidity": 20}
 #
 # These are volume settings, not measurements. Nothing here was derived from
 # a result — the paper book in 944 is what will say where they belong.
-THRESHOLD          = 45     # half of the 85 it shipped with
+# Salem, after the candle fix let the scanner reach these gates for the first
+# time: keep the loose gate for the paper book, raise the one he acts on.
+# 943 is money he decides on; 944 is data collection, and the wider it is the
+# faster the two populations can say where 943 belongs.
+THRESHOLD          = 70     # alerts Salem actually receives
 # The paper book's own gate, deliberately looser than the alert gate. Salem
 # asked for both to be loosened and the paper one loosened further: "سهل
 # الشروط على كل الاثنين لكن الورقي سهلها اكثر". Everything scoring between
 # PAPER_THRESHOLD and THRESHOLD is opened in 944 and never sent to 943, so a
 # month of results says what the alert gate would have earned at 55, at 60,
 # at 65 — measured, instead of argued.
-PAPER_THRESHOLD    = 35     # ten below the alert gate, as before
+PAPER_THRESHOLD    = 45     # the paper book keeps the loose gate
 # Kept 20 below the threshold, as it was at 85/65. The gap is what lets a
 # ticker with strong flow but no break yet sit on the watchlist until the
 # break arrives and monitor.py adds the technical points.
