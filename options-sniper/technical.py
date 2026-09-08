@@ -207,6 +207,17 @@ def holds(tech):
     return bool(tech.get("closed_strong")) and not tech.get("wick_back")
 
 
+def alert_gate(tech):
+    """The score this setup must reach to be SENT.
+
+    A confirmed break is price agreeing, and price is the only input that
+    cannot be talked into it. A setup with no break is a forecast built from
+    flow and a headline, and it has to clear a much higher bar to be worth
+    Salem's attention.
+    """
+    return C.BREAK_THRESHOLD if confirms(tech) else C.THRESHOLD
+
+
 def remaining_atr(tech):
     """How much of the measured move is still ahead of price, in ATRs.
 

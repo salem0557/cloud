@@ -208,11 +208,14 @@ def check_shortlist(dry_run=False):
         if base is None:                       # shortlist from an older scanner run
             base = item["score"]
         score = round(min(100.0, base + technical_score(tech)), 1)
-        floor = min(C.THRESHOLD, C.PAPER_THRESHOLD) if C.PAPER_NEAR_MISS else C.THRESHOLD
+        # This path only gets here on a CONFIRMED break (or a near miss), so
+        # the gate is BREAK_THRESHOLD — price has already agreed.
+        gate = technical.alert_gate(tech)
+        floor = min(gate, C.PAPER_THRESHOLD) if C.PAPER_NEAR_MISS else gate
         if score < floor:
             print(f"  {t}: break confirmed but score {score} < {floor}")
             continue
-        if score < C.THRESHOLD:
+        if score < gate:
             # Real enough to measure, not good enough to send. Same band the
             # scanner uses, so both paths feed the paper book the same way.
             near_miss = True

@@ -275,3 +275,63 @@ def test_the_band_closes_when_the_paper_book_is_off(monkeypatch):
     mid = (C.PAPER_THRESHOLD + C.THRESHOLD) / 2
     sent, recorded, _ = _wire_main(monkeypatch, _cand(mid, 2.0), "/tmp/_b4.json")
     assert sent == [] and recorded == []
+
+
+# ── A confirmed break is judged by its own gate ─────────────────
+# Salem: "لا انا اريد رسائل تنبيه اكثر... انا ارى انك تضيع علي فرص كثيرة".
+# The measurement on the live 16:56Z scan (41 real scores) said where the
+# alerts were going: with a break adding a realistic 25 technical points,
+# gate 70 let 10 of 41 through and gate 50 let 34 through.
+#
+# So a setup where PRICE has already broken and held is judged by
+# BREAK_THRESHOLD, and one built only on flow and a headline still has to
+# clear THRESHOLD. Price is the one input that cannot be talked into agreeing.
+
+def _broke():
+    """A tech dict that confirms(): broken, on volume, held, with room."""
+    return {"broke_level": True, "remaining_atr": 2.0, "atr": 4.0,
+            "close": 100.0, "level": 99.0, "target": 105.0, "stop": 95.0,
+            "break_distance_atr": 0.3, "volume_ratio": 3.0,
+            "closed_beyond": True, "closed_strong": True, "wick_back": False,
+            "bar_high": 100.5, "bar_low": 98.0, "opening_range": False}
+
+
+def test_a_confirmed_break_uses_the_lower_gate():
+    assert technical.confirms(_broke())
+    assert technical.alert_gate(_broke()) == C.BREAK_THRESHOLD
+
+
+def test_a_setup_with_no_break_still_has_to_clear_the_high_gate():
+    quiet = _broke()
+    quiet["broke_level"] = False
+    assert technical.alert_gate(quiet) == C.THRESHOLD
+
+
+def test_a_break_that_reversed_inside_its_candle_gets_no_discount():
+    """holds() is what makes the break real. Without it the lower gate would
+    be handed to exactly the false breaks the filter exists to catch."""
+    trap = _broke()
+    trap["closed_strong"] = False
+    assert not technical.confirms(trap)
+    assert technical.alert_gate(trap) == C.THRESHOLD
+
+
+def test_a_score_between_the_two_gates_is_sent_on_a_break(monkeypatch):
+    """The whole point: this used to be silence."""
+    mid = (C.BREAK_THRESHOLD + C.THRESHOLD) / 2
+    cand = _cand(mid, 2.0)
+    cand["technical"] = _broke()
+    sent, recorded, _ = _wire_main(monkeypatch, cand, "/tmp/_g1.json")
+    assert len(sent) == 1, "a confirmed break inside the band was not sent"
+    assert not recorded[0].get("near_miss")
+
+
+def test_the_same_score_without_a_break_is_not_sent(monkeypatch):
+    mid = (C.BREAK_THRESHOLD + C.THRESHOLD) / 2
+    quiet = _broke()
+    quiet["broke_level"] = False
+    cand = _cand(mid, 2.0)
+    cand["technical"] = quiet
+    sent, recorded, _ = _wire_main(monkeypatch, cand, "/tmp/_g2.json")
+    assert sent == [], "a forecast with no break got the break gate"
+    assert len(recorded) == 1 and recorded[0]["near_miss"] is True

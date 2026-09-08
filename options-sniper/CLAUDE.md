@@ -192,8 +192,11 @@ because reading it as a sale would close a position he still holds.
   scores 0 on a call setup, 20 on a put setup
 - Liquidity (0–20): spread (percent OR cents) and open interest, measured on a
   contract Salem can actually afford
-- Two gates, never one. ALERT (943): score ≥ 70 (`THRESHOLD`) AND room ≥ 0.38
-  ATR (`MIN_REMAINING_ATR`). PAPER (944) only: score ≥ 45 (`PAPER_THRESHOLD`)
+- Gates by KIND of setup. A CONFIRMED BREAK is judged by `BREAK_THRESHOLD`
+  (50) — price agreeing is the one input that cannot be talked into it. A
+  setup with no break is a forecast and clears `THRESHOLD` (70). ALERT (943):
+  score ≥ its own gate AND room ≥ 0.38
+  ATR (`MIN_REMAINING_ATR`). PAPER (944) only: score ≥ 35 (`PAPER_THRESHOLD`), below both
   AND room ≥ 0.05 ATR (`PAPER_MIN_REMAINING_ATR`). The band between them never
   reaches Salem — no Telegram, no daily cap, no alert journal — and exists so
   the alert gate can be re-derived from outcomes.

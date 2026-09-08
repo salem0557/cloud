@@ -106,14 +106,35 @@ WEIGHTS = {"flow": 30, "technical": 30, "catalyst": 20, "liquidity": 20}
 # time: keep the loose gate for the paper book, raise the one he acts on.
 # 943 is money he decides on; 944 is data collection, and the wider it is the
 # faster the two populations can say where 943 belongs.
-THRESHOLD          = 70     # alerts Salem actually receives
+# TWO GATES, BY KIND OF SETUP — not one number for both.
+#
+# THRESHOLD is for a setup with NO confirmed break: flow, a headline and a
+# liquid contract, and nothing in the price agreeing yet. That is a claim about
+# what might happen, so it has to be exceptional.
+#
+# BREAK_THRESHOLD is for a setup where the stock HAS broken its level on volume
+# and held it. Price is the one thing that cannot be talked into agreeing, and
+# it is the whole reason Salem wants alerts: "أي تحرك بالسهم يكسبني مال".
+# Making a confirmed break clear the same bar as a rumour was backwards.
+#
+# Measured on the live 16:56Z scan (41 names, real scores). With a break adding
+# a realistic 25 technical points:
+#
+#     gate 70   10 of 41 could alert
+#     gate 60   20 of 41
+#     gate 55   27 of 41
+#     gate 50   34 of 41
+#
+THRESHOLD          = 70     # no break: has to be exceptional
+BREAK_THRESHOLD    = 50     # price already confirmed it
 # The paper book's own gate, deliberately looser than the alert gate. Salem
 # asked for both to be loosened and the paper one loosened further: "سهل
 # الشروط على كل الاثنين لكن الورقي سهلها اكثر". Everything scoring between
 # PAPER_THRESHOLD and THRESHOLD is opened in 944 and never sent to 943, so a
 # month of results says what the alert gate would have earned at 55, at 60,
 # at 65 — measured, instead of argued.
-PAPER_THRESHOLD    = 45     # the paper book keeps the loose gate
+PAPER_THRESHOLD    = 35     # below BOTH gates, so 944 always has a
+                            # population to compare 943 against
 # Kept 20 below the threshold, as it was at 85/65. The gap is what lets a
 # ticker with strong flow but no break yet sit on the watchlist until the
 # break arrives and monitor.py adds the technical points.
@@ -125,7 +146,11 @@ PAPER_THRESHOLD    = 45     # the paper book keeps the loose gate
 # could do nothing with, which is all he received on 2026-09-08.
 #
 # The floor is now derived, not chosen. Raise THRESHOLD and it follows.
-WATCHLIST_FLOOR    = THRESHOLD - WEIGHTS["technical"]   # 40
+# Derived from the LOWER gate: a watched name is watched precisely because it
+# has not broken yet, so the gate it will be judged by when it does is
+# BREAK_THRESHOLD. Deriving from THRESHOLD would have kept out every name that
+# a break could promote.
+WATCHLIST_FLOOR    = min(THRESHOLD, BREAK_THRESHOLD) - WEIGHTS["technical"]  # 20
 # The THRESHOLD is the quality gate; this is only a volume limit. The scanner
 # sorts candidates by score and stops below the threshold, so raising this does
 # not lower the quality of any single alert — it stops discarding setups that
