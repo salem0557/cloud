@@ -16,6 +16,7 @@ venv_boot.ensure(["requests"])
 
 import config as C
 import journal
+import mine
 import market
 import paper
 import reasoning
@@ -237,7 +238,11 @@ def check_shortlist(dry_run=False):
             continue
         if not state.record_alert(t):
             break
-        if send(msg):
+        mid = send(msg)
+        if mid:
+            # The message id is what a REPLY resolves against, so "دخلت" under
+            # an alert can open the right contract without him naming it.
+            mine.remember_alert(mid, payload)
             journal.log_alert(payload)
             # scanner.py recorded its alerts in the paper book and this path
             # did not, so the paper month was scoring a different and smaller
@@ -248,6 +253,25 @@ def check_shortlist(dry_run=False):
         else:
             state.release_alert(t)
     return sent
+
+
+def send_mine_daily():
+    """Salem's OWN trades, once a day, into the alerts section.
+
+    The automatic paper book reports into its own topic; this reports what HE
+    took, where he took it. Two owners, two records, two places.
+    """
+    st = state.read()
+    today = datetime.date.today().isoformat()
+    if st.get("mine_daily") == today or market.is_open():
+        return False
+    if not mine.summary().get("n") and not mine._load(
+            mine.MINE_FILE, {"open": []})["open"]:
+        return False                       # nothing to report is not a report
+    if send(mine.daily_message()):
+        state.write({**st, "mine_daily": today})
+        return True
+    return False
 
 
 def mark_paper():
@@ -289,6 +313,8 @@ def main(dry_run=False):
     # is still being marked at 15:44, and a summary that only sends while the
     # market is open would never send at all.
     mark_paper()
+    if not dry_run and send_mine_daily():
+        print("your own daily summary sent")
     if not dry_run and send_paper_daily():
         print("paper daily summary sent")
     if not dry_run and not market.is_open():

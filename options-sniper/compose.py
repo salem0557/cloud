@@ -126,6 +126,7 @@ def render_entry(p):
     # also the price's age. Without it he cannot tell a fresh quote from one
     # that sat in a retry queue.
     lines += ["",
+              "↩️ رد بـ «دخلت» لتسجيلها، و«خرجت» عند البيع",
               f"⏰ {p.get('time_riyadh', '')} — هذا سعر تلك اللحظة",
               "تحقق من السعر قبل الشراء. الأرقام تقديرية لا مضمونة."]
     a = p.get("analyst")

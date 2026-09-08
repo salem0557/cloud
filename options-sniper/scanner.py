@@ -19,6 +19,7 @@ venv_boot.ensure(["requests"])
 import config as C
 import finviz
 import journal
+import mine
 import paper
 import reasoning
 import market
@@ -316,7 +317,9 @@ def main(dry_run=False, limit_tickers=None):
         if not state.record_alert(cand["ticker"]):
             print("Daily cap reached — stopping.")
             break
-        if send(msg):
+        mid = send(msg)
+        if mid:
+            mine.remember_alert(mid, payload)
             journal.log_alert(payload)
             # Every alert becomes a paper position automatically. A month of
             # results only exists if nobody has to remember to write it down.

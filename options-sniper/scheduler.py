@@ -20,6 +20,7 @@ venv_boot.ensure(["requests"])
 
 import config as C
 import market
+import mine
 import monitor
 import scanner
 
@@ -116,6 +117,10 @@ def main():
             else:
                 left = state.capacity_left()
                 log(f"alive, market open — {left}/{C.MAX_ALERTS_PER_DAY} alerts left today")
+
+        # Replies are read whether or not the market is open: he may close a
+        # position, or tell us what he paid, after the bell.
+        run("inbox", mine.poll_and_apply)
 
         if is_open:
             s = slot(now, C.SCAN_EVERY_MIN)
