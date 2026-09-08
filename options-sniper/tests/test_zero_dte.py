@@ -340,13 +340,16 @@ def test_the_alert_cap_is_a_volume_limit_not_a_quality_gate(monkeypatch):
     sorts by score and stops below it. The cap only truncates, so raising it
     stops discarding setups that qualified but arrived late in the day."""
     import importlib, os
+    gate = C.THRESHOLD
     monkeypatch.setenv("MAX_ALERTS_PER_DAY", "30")
     importlib.reload(C)
     assert C.MAX_ALERTS_PER_DAY == 30
     monkeypatch.delenv("MAX_ALERTS_PER_DAY")
     importlib.reload(C)
     assert C.MAX_ALERTS_PER_DAY == 5
-    assert C.THRESHOLD == 85          # unchanged: the cap is not the gate
+    # The gate does not move with the cap. Its value is re-calibrated from
+    # journal.csv, so this asserts that it held — not what it currently is.
+    assert C.THRESHOLD == gate
 
 
 # ── What the twenty-session run actually showed ─────────────────
