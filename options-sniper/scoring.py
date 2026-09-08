@@ -142,11 +142,21 @@ def liquidity_score(contract: dict) -> float:
     mid = (bid + ask) / 2
     if mid <= 0:
         return 0.0
-    spread_pct = (ask - bid) / mid * 100
-    s = max(0.0, 12 - spread_pct * 1.5)                  # 0% = 12, 8% = 0
-    if s == 0 and (ask - bid) <= MAX_SPREAD_ABS:
-        s = 4.0                                          # cheap but tight in cents
-    s += min(8, contract.get("open_interest", 0) / 250)  # OI 2000+ = full 8
+    # Cheap contracts are judged in CENTS, expensive ones in percent — the same
+    # rule passes_liquidity() already uses to decide tradability. The score did
+    # not follow it, and the contracts Salem actually buys paid for that:
+    # measured on BE's live chain, 2026-09-08, a $27 contract quoted 4 cents
+    # wide scored 6.8 of 20 while a $1,445 contract quoted 20 cents wide scored
+    # 17.9. The cheap one is the tighter book. Whichever measure is kinder wins.
+    spread = ask - bid
+    spread_pct = spread / mid * 100
+    by_pct = max(0.0, 12 - spread_pct * 1.5)             # 0% = 12, 8% = 0
+    by_cents = max(0.0, 12 - spread / 0.01 * 0.5)        # 4c = 10, 6c = 9, 24c = 0
+    s = max(by_pct, by_cents)
+    # A same-day or weekly far strike carries open interest in the hundreds by
+    # nature. Scaling full marks to 2,000 made the tier Salem trades unable to
+    # score, whatever its book actually looked like.
+    s += min(8, contract.get("open_interest", 0) / 150)  # OI 1200+ = full 8
     return min(WEIGHTS["liquidity"], round(s, 1))
 
 
