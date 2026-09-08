@@ -112,13 +112,9 @@ def holidays(year):
     }
 
 
-def early_close(d):
-    """13:00 ET on the half-days, else None.
-
-    This matters more than it looks: a 0DTE contract on a half-day expires at
-    13:00, so a hard exit written for 15:30 would be an hour and a half after
-    the contract stopped existing.
-    """
+def early_close(when):
+    """Accepts a datetime OR a date, for the same reason is_holiday does."""
+    d = when.date() if hasattr(when, "date") else when
     half = {
         _nth_weekday(d.year, 11, 3, 4) + datetime.timedelta(days=1),  # Black Friday
         datetime.date(d.year, 12, 24),
@@ -135,9 +131,18 @@ def closes_at(now=None):
     return early_close(now.date()) or CLOSE
 
 
-def is_holiday(now=None):
-    now = now or now_et()
-    return now.date() in holidays(now.year)
+def is_holiday(when=None):
+    """Accepts a datetime OR a date. Both, because the two live side by side.
+
+    It took a datetime and called .date() on it, while early_close() next to
+    it takes a date. Every caller happened to pass the right one, which is
+    luck rather than design: the next one to pass a date gets an
+    AttributeError on a market-calendar check, and a calendar check that
+    raises inside the scheduler is a session with no scan.
+    """
+    when = when or now_et()
+    day = when.date() if hasattr(when, "date") else when
+    return day in holidays(day.year)
 
 
 def is_open(now=None):

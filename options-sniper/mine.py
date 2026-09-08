@@ -329,8 +329,20 @@ def poll_and_apply(send_fn=None):
     """Read new Telegram messages and act on the ones that are fills."""
     from telegram_send import poll, send
     send_fn = send_fn or send
-    off = _load(OFFSET_FILE, {}).get("offset")
+    saved = _load(OFFSET_FILE, {})
+    off = saved.get("offset")
     updates, nxt = poll(off)
+    if "offset" not in saved:
+        # FIRST run ever: getUpdates with no offset returns the whole backlog
+        # Telegram has been holding. Replaying that at the open would act on
+        # messages from days ago — an old "اشتريت" opening a position he never
+        # took today. The backlog is acknowledged and dropped; only what
+        # arrives from here on is a fill.
+        if updates:
+            print(f"[mine] skipped {len(updates)} old message(s) from before "
+                  f"this run")
+        _save(OFFSET_FILE, {"offset": nxt})
+        return 0
     acted = 0
     for u in updates:
         try:
