@@ -95,7 +95,7 @@ def main():
         return park(f"{', '.join(missing)} not set (or still holding the "
                     f".env.example placeholder)")
 
-    last_scan = last_monitor = last_beat = None
+    last_scan = last_monitor = last_beat = last_watch = None
     was_open = None
 
     while not _stop:
@@ -123,6 +123,14 @@ def main():
         run("inbox", mine.poll_and_apply)
 
         if is_open:
+            # Positions Salem is IN are watched every minute, not every five:
+            # "اريدك تراقب العقد اللي ارسلك اني اشتريته بشكل مكثف جدا". The
+            # deep read (strike-level flow) stays on the monitor's own beat.
+            w = slot(now, 1)
+            if w != last_watch:
+                last_watch = w
+                run("watch", monitor.watch_mine)
+
             s = slot(now, C.SCAN_EVERY_MIN)
             if s != last_scan:
                 last_scan = s

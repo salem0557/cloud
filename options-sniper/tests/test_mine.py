@@ -158,3 +158,44 @@ def test_the_lookup_does_not_grow_without_end():
     for i in range(450):
         mine.remember_alert(i + 1, ALERT)
     assert len(mine._load(mine.SENT_FILE, {})) <= 400
+
+
+# ── "ابيع سترايك 186؟" is a question, never a fill ─────────────
+def test_asking_about_selling_is_not_read_as_a_sale():
+    """Reading it as a sale would close a position he still holds. Checked
+    before the fill words because "بعت" is one and "ابيع" is not."""
+    assert mine.parse("ابيع سترايك 186")[0] == "ask"
+    assert mine.parse("امسك ولا ابيع")[0] == "ask"
+    assert mine.parse("وش رايك 186")[0] == "ask"
+    assert mine.parse("بعت 0.59")[0] == "out"       # still a sale
+
+
+def test_a_question_with_nothing_open_says_so_rather_than_advising():
+    assert "ما عندك صفقة مفتوحة" in mine.apply_reply(
+        {"message": {"text": "ابيع سترايك 186"}})
+
+
+def test_a_question_does_not_close_anything():
+    mine.remember_alert(7, ALERT)
+    mine.apply_reply(_reply("دخلت"))
+    mine.apply_reply({"message": {"text": "ابيع سترايك 183"}})
+    assert len(mine.open_positions()) == 1          # still his
+
+
+def test_two_open_positions_and_no_strike_asks_which():
+    mine.remember_alert(7, ALERT)
+    mine.apply_reply(_reply("دخلت"))
+    mine.apply_reply(_reply("دخلت 186"))
+    assert "أي وحدة" in mine.advise()
+
+
+def test_advice_given_is_remembered_so_it_is_not_repeated():
+    """An adviser repeating "اخرج" every five minutes is noise, and noise is
+    how a real exit signal gets ignored."""
+    mine.remember_alert(7, ALERT)
+    mine.apply_reply(_reply("دخلت"))
+    sym = mine.open_positions()[0]["option_symbol"]
+    assert mine.set_flag(sym, "last_advice", "اخرج")
+    assert mine.open_positions()[0]["last_advice"] == "اخرج"
+    assert mine.set_flag(sym, "last_advice", None)
+    assert "last_advice" not in mine.open_positions()[0]
