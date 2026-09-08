@@ -199,3 +199,25 @@ def test_advice_given_is_remembered_so_it_is_not_repeated():
     assert mine.open_positions()[0]["last_advice"] == "اخرج"
     assert mine.set_flag(sym, "last_advice", None)
     assert "last_advice" not in mine.open_positions()[0]
+
+
+def test_the_backlog_from_before_the_first_run_is_dropped():
+    """getUpdates with no offset returns everything Telegram has been holding.
+    Replaying that at the open would act on messages from days ago — an old
+    "اشتريت" opening a position he never took today."""
+    mine.remember_alert(7, ALERT)
+    old = [{"update_id": 1, "message": {"text": "اشتريت سترايك 186"}}]
+    sent = []
+    import telegram_send
+    real = telegram_send.poll
+    telegram_send.poll = lambda off=None, timeout=0: (old, 2)
+    try:
+        assert mine.poll_and_apply(send_fn=sent.append) == 0
+        assert sent == []
+        assert mine._load(mine.MINE_FILE, {"open": []})["open"] == []
+        # and from here on it acts normally
+        telegram_send.poll = lambda off=None, timeout=0: (old, 3)
+        assert mine.poll_and_apply(send_fn=sent.append) == 1
+        assert mine._load(mine.MINE_FILE, {})["open"][0]["strike"] == 186
+    finally:
+        telegram_send.poll = real
