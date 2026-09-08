@@ -196,7 +196,19 @@ because reading it as a sale would close a position he still holds.
   ATR (`MIN_REMAINING_ATR`). PAPER (944) only: score ≥ 45 (`PAPER_THRESHOLD`)
   AND room ≥ 0.05 ATR (`PAPER_MIN_REMAINING_ATR`). The band between them never
   reaches Salem — no Telegram, no daily cap, no alert journal — and exists so
-  the alert gate can be re-derived from outcomes. `THRESHOLD` was 85, which no
+  the alert gate can be re-derived from outcomes.
+- The breakout LEVEL comes from intraday structure only (`LEVEL_LOOKBACK`, cut
+  at the session open), never from the previous session — a gap down followed
+  by a rally was invisible before. Between the open and the third bar the
+  OPENING RANGE (`OPENING_RANGE_BARS`) is the level instead, at a higher volume
+  bar (`OPENING_VOLUME_RATIO`), and those alerts are tagged 🌅. ATR and the
+  volume average still use the full `CANDLES_LOOKBACK` window.
+- `CORE_TICKERS` is always evaluated, whatever its premium and whether or not
+  UW flagged it. Flow discovery lists what is UNUSUAL, and a mega-cap trading
+  its normal huge volume never is — on 2026-09-08 NVDA, TSLA, AAPL, MSFT, MU
+  and AMD were in none of the 60 tickers scanned. Core names take their slots
+  first so a busy day in small caps cannot push them out; the rest of the cap
+  still goes to the surprises the feed exists to find. `THRESHOLD` was 85, which no
   live setup could reach; see config.py and tests/test_threshold_is_reachable.py
   and tests/test_near_miss.py before moving either gate.
 

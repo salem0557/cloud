@@ -260,13 +260,40 @@ def main(dry_run=False, limit_tickers=None):
             if t_alerts:
                 agg.update(aggregate_flow(t_alerts))
 
+    # The big names, whether or not anything about them was "unusual" today.
+    # UW's feed lists the unusual and Finviz screens for movers; a mega-cap
+    # trading its normal huge volume is neither, so it is simply never seen.
+    missing = [t for t in C.CORE_TICKERS if t not in agg]
+    if missing:
+        for ticker in missing:
+            try:
+                t_alerts = uw.ticker_flow_alerts(ticker)
+            except uw.UWError as e:
+                print(f"  [core] {ticker}: {e}")
+                continue
+            if t_alerts:
+                agg.update(aggregate_flow(t_alerts))
+        print(f"Core names: {len(C.CORE_TICKERS)} "
+              f"({len(missing)} not in the UW feed)")
+
     already = set(state.read().get("alerted_tickers", []))
-    ranked = sorted(
-        ((t, f) for t, f in agg.items()
-         if f["premium_usd"] >= C.MIN_TICKER_PREMIUM and t not in already),
-        key=lambda kv: kv[1]["premium_usd"], reverse=True,
-    )[:limit_tickers or C.MAX_CANDIDATES_PER_SCAN]
-    print(f"Tickers worth a data call: {[t for t, _ in ranked]}")
+    cap = limit_tickers or C.MAX_CANDIDATES_PER_SCAN
+
+    def usable(t, f):
+        # A core name is looked at whatever its premium. The floor exists to
+        # stop paying for data calls on names nobody is trading, and that is
+        # not what a mega-cap's quiet hour is.
+        return t not in already and (t in C.CORE_TICKERS
+                                     or f["premium_usd"] >= C.MIN_TICKER_PREMIUM)
+
+    eligible = sorted(((t, f) for t, f in agg.items() if usable(t, f)),
+                      key=lambda kv: kv[1]["premium_usd"], reverse=True)
+    # Core names take their slots first, so a busy day in small caps cannot
+    # push every large cap past the cap and out of the scan.
+    core = [(t, f) for t, f in eligible if t in C.CORE_TICKERS]
+    rest = [(t, f) for t, f in eligible if t not in C.CORE_TICKERS]
+    ranked = (core + rest)[:cap]
+    print(f"Tickers worth a data call ({len(core)} core): {[t for t, _ in ranked]}")
 
     candidates = []
     dropped = {}
@@ -281,7 +308,11 @@ def main(dry_run=False, limit_tickers=None):
             candidates.append(cand)
             print(f"  {ticker}: {cand['score']} {cand['score_breakdown']}")
         else:
-            why = evaluate.last_skip or "skipped"
+            # getattr, not evaluate.last_skip: the attribute belongs to the
+            # function object, so anything that wraps or replaces evaluate —
+            # a decorator, a test double — makes the scan crash on a line that
+            # only exists to log a reason.
+            why = getattr(evaluate, "last_skip", None) or "skipped"
             dropped[why] = dropped.get(why, 0) + 1
 
     # A scan that scores nothing must say why. Without this the log read
