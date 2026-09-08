@@ -17,7 +17,8 @@ def _today():
 
 
 def _fresh():
-    return {"date": _today(), "alerts_sent": 0, "alerted_tickers": []}
+    return {"date": _today(), "alerts_sent": 0, "alerted_tickers": [],
+            "watched_tickers": []}
 
 
 def read():
@@ -27,6 +28,7 @@ def read():
             if s.get("date") == _today():
                 s.setdefault("alerts_sent", 0)
                 s.setdefault("alerted_tickers", [])
+                s.setdefault("watched_tickers", [])
                 return s
         except (ValueError, OSError):
             pass
@@ -49,6 +51,30 @@ def locked():
             write(s)
         finally:
             fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def record_watch(ticker):
+    """Reserve the one heads-up a ticker gets per day. -> True if it may be sent.
+
+    The flag used to live on the shortlist row, and the scanner rebuilds that
+    file from scratch every 10 minutes without carrying anything over — so the
+    flag was wiped and the next monitor pass sent the same notice again. HWM
+    went out twice on 2026-09-08, at 17:01:15 and 17:05:46, one monitor beat
+    either side of a scan. This lives in the day's state, which nothing
+    rewrites, and it resets with the date like every other daily counter.
+    """
+    with locked() as s:
+        if ticker in s["watched_tickers"]:
+            return False
+        s["watched_tickers"].append(ticker)
+        return True
+
+
+def release_watch(ticker):
+    """Give the reservation back when the send did not actually go out."""
+    with locked() as s:
+        if ticker in s["watched_tickers"]:
+            s["watched_tickers"].remove(ticker)
 
 
 def capacity_left():
