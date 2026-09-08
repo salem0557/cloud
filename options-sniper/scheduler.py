@@ -23,6 +23,7 @@ import market
 import mine
 import monitor
 import scanner
+import state
 
 _stop = False
 
@@ -85,6 +86,55 @@ def park(problem):
     return 0
 
 
+def tick(marks):
+    """One pass of the loop. `marks` carries the last-fired slot per job, so a
+    tick that runs twice inside the same window cannot fire a job twice."""
+    now = market.now_et()
+    is_open = market.is_open(now)
+
+    if is_open != marks["open"]:
+        log("market OPEN" if is_open else f"market closed — {market.reason()}")
+        marks["open"] = is_open
+
+    # Heartbeat. Without it the log is silent from Friday's close until
+    # Monday's open, and there is no way to tell a healthy idle service
+    # from a dead one. Hourly is quiet enough to stay readable.
+    beat = slot(now, C.HEARTBEAT_MIN)
+    if beat != marks["beat"]:
+        marks["beat"] = beat
+        if not is_open:
+            log(f"alive, waiting — {market.reason()}")
+        else:
+            left = state.capacity_left()
+            log(f"alive, market open — {left}/{C.MAX_ALERTS_PER_DAY} alerts left today")
+
+    # Replies are read whether or not the market is open: he may close a
+    # position, or tell us what he paid, after the bell.
+    run("inbox", mine.poll_and_apply)
+
+    if not is_open:
+        return
+
+    # Positions Salem is IN are watched every minute, not every five:
+    # "اريدك تراقب العقد اللي ارسلك اني اشتريته بشكل مكثف جدا". The
+    # deep read (strike-level flow) stays on the monitor's own beat.
+    w = slot(now, 1)
+    if w != marks["watch"]:
+        marks["watch"] = w
+        run("watch", monitor.watch_mine)
+
+    s = slot(now, C.SCAN_EVERY_MIN)
+    if s != marks["scan"]:
+        marks["scan"] = s
+        log("running scanner")
+        run("scanner", scanner.main)
+
+    m = slot(now, C.MONITOR_EVERY_MIN)
+    if m != marks["monitor"]:
+        marks["monitor"] = m
+        run("monitor", monitor.main)
+
+
 def main():
     log(f"scheduler up — scan every {C.SCAN_EVERY_MIN}m, "
         f"monitor every {C.MONITOR_EVERY_MIN}m, data in {C.DATA_DIR}")
@@ -95,52 +145,20 @@ def main():
         return park(f"{', '.join(missing)} not set (or still holding the "
                     f".env.example placeholder)")
 
-    last_scan = last_monitor = last_beat = last_watch = None
-    was_open = None
+    marks = {"scan": None, "monitor": None, "beat": None,
+             "watch": None, "open": None}
 
     while not _stop:
-        now = market.now_et()
-        is_open = market.is_open(now)
-
-        if is_open != was_open:
-            log("market OPEN" if is_open else f"market closed — {market.reason()}")
-            was_open = is_open
-
-        # Heartbeat. Without it the log is silent from Friday's close until
-        # Monday's open, and there is no way to tell a healthy idle service
-        # from a dead one. Hourly is quiet enough to stay readable.
-        beat = slot(now, C.HEARTBEAT_MIN)
-        if beat != last_beat:
-            last_beat = beat
-            if not is_open:
-                log(f"alive, waiting — {market.reason()}")
-            else:
-                left = state.capacity_left()
-                log(f"alive, market open — {left}/{C.MAX_ALERTS_PER_DAY} alerts left today")
-
-        # Replies are read whether or not the market is open: he may close a
-        # position, or tell us what he paid, after the bell.
-        run("inbox", mine.poll_and_apply)
-
-        if is_open:
-            # Positions Salem is IN are watched every minute, not every five:
-            # "اريدك تراقب العقد اللي ارسلك اني اشتريته بشكل مكثف جدا". The
-            # deep read (strike-level flow) stays on the monitor's own beat.
-            w = slot(now, 1)
-            if w != last_watch:
-                last_watch = w
-                run("watch", monitor.watch_mine)
-
-            s = slot(now, C.SCAN_EVERY_MIN)
-            if s != last_scan:
-                last_scan = s
-                log("running scanner")
-                run("scanner", scanner.main)
-
-            m = slot(now, C.MONITOR_EVERY_MIN)
-            if m != last_monitor:
-                last_monitor = m
-                run("monitor", monitor.main)
+        # A tick must never take the service down. Before this, any error
+        # raised outside run() — a bad name, an unreachable Telegram, a
+        # calendar edge — killed the loop, Railway restarted it, and it died
+        # again on the same line until the retries ran out. That is a silent
+        # total outage: no alerts, no paper trades, nothing in the chat to
+        # say so. The loop now survives whatever a tick throws.
+        try:
+            tick(marks)
+        except Exception:
+            log(f"tick FAILED (loop continues):\n{traceback.format_exc()}")
 
         # 20s keeps firing within a few seconds of the minute while staying
         # cheap; the slot key stops a job repeating inside its own window.
