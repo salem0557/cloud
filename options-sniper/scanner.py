@@ -100,11 +100,20 @@ def evaluate(ticker, flow, dry_run=False):
     tech = technical.analyse(candles, direction)
     if tech is None:
         return None                      # not enough candle history -> skip
+    near_miss = False
     if tech["broke_level"] and technical.is_late(tech):
-        # the move already reached its measured target: entering now buys the top
-        print(f"  {ticker}: break already extended "
-              f"({technical.remaining_atr(tech):.2f} ATR left) — skipped")
-        return None
+        if C.PAPER_NEAR_MISS and technical.is_near_miss(tech):
+            # Room left, but under the rule's minimum. Salem does not see this
+            # one; the paper book takes it so the rule can be judged on results
+            # instead of on the reasoning behind it.
+            near_miss = True
+            print(f"  {ticker}: {technical.remaining_atr(tech):.2f} ATR left, "
+                  f"rule wants {C.MIN_REMAINING_ATR} — paper book only")
+        else:
+            # the move already passed its measured target: entering buys the top
+            print(f"  {ticker}: break already extended "
+                  f"({technical.remaining_atr(tech):.2f} ATR left) — skipped")
+            return None
 
     spot = tech["close"] or flow["underlying_price"]
     if spot <= 0:
@@ -139,6 +148,7 @@ def evaluate(ticker, flow, dry_run=False):
 
     return {"ticker": ticker, "score": score, "raw_score": raw_score,
             "score_breakdown": breakdown, "risk": assessment,
+            "near_miss": near_miss,
             "direction": direction, "spot": round(spot, 2), "flow": flow,
             "flow_reason": flow_reason(flow, direction), "technical": tech,
             "news": [n["headline"] for n in news[:3]], "chain": chain}
@@ -273,7 +283,8 @@ def main(dry_run=False, limit_tickers=None):
                   "target": c["technical"]["target"],
                   "stop": c["technical"]["stop"],
                   "updated": datetime.datetime.now().isoformat(timespec="seconds")}
-                 for c in candidates if c["score"] >= C.WATCHLIST_FLOOR]
+                 for c in candidates
+                 if c["score"] >= C.WATCHLIST_FLOOR and not c.get("near_miss")]
     C.SHORTLIST_FILE.write_text(json.dumps(shortlist, indent=2, ensure_ascii=False))
     print(f"Shortlist ({len(shortlist)}): {[x['ticker'] for x in shortlist]}")
 
@@ -282,6 +293,16 @@ def main(dry_run=False, limit_tickers=None):
         if cand["score"] < C.THRESHOLD:
             break
         payload = to_payload(cand)
+
+        # Never reaches Salem: no Telegram, no daily cap, no journal entry as
+        # an alert. It goes into the paper book alone, and closes there on the
+        # same rules as any other paper trade.
+        if cand.get("near_miss"):
+            payload["near_miss"] = True
+            if not dry_run and paper.record(payload):
+                print(f"  {cand['ticker']}: opened in the paper book only "
+                      f"(near miss, not alerted)")
+            continue
 
         # Final read. An unreachable analyst returns None and the alert goes
         # out on the arithmetic — the layer may reject a setup, never silently

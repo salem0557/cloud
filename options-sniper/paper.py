@@ -91,6 +91,10 @@ def record(payload, tier=None):
         "cost": pick.get("cost"),
         "take": take, "stop": stop,
         "score": payload.get("score"),
+        # True when the setup was rejected for the alert (room left, but under
+        # MIN_REMAINING_ATR) and taken here only. Kept on the position so the
+        # month can answer whether that rule earns its place.
+        "near_miss": bool(payload.get("near_miss")),
         "reasoning": [l["text"] for l in
                       (payload.get("reasoning") or {}).get("links", [])],
         "open": True,
@@ -230,7 +234,8 @@ def close_message(pos):
     pct = (pos["multiple"] - 1) * 100
     kind = "كول" if (pos.get("direction") or pos.get("type")) == "call" else "بوت"
     pnl = (pos["multiple"] - 1) * (pos.get("cost") or 0)
-    return (f"📄 ورقي — {pos['ticker']} {pos.get('strike'):g} {kind}\n"
+    tag = "🧪 اختبار قاعدة — " if pos.get("near_miss") else ""
+    return (f"📄 ورقي — {tag}{pos['ticker']} {pos.get('strike'):g} {kind}\n"
             f"{WHY_AR.get(pos['why'], pos['why'])}  {pct:+.1f}%  "
             f"({pnl:+.0f}$) خلال {pos['minutes']} د\n"
             f"دخول ${pos['entry_price']:.2f} ← خروج ${pos['exit_price']:.2f}")
@@ -254,6 +259,20 @@ def daily_message(book=None):
                   f"  ❌ ضربت الوقف: {stopped}",
                   f"  ⏳ انتهت المهلة: {timed}",
                   f"  الناتج: {today_pnl_usd(book):+.0f}$"]
+    # The comparison the near-miss book exists to produce. Trades the alert
+    # rule ACCEPTED against trades it rejected by a hair: if the rejected ones
+    # do as well or better, the 0.75 ATR rule is costing money, not saving it.
+    tested = [p for p in book["closed"] if p.get("near_miss")]
+    normal = [p for p in book["closed"] if not p.get("near_miss")]
+    if tested:
+        def avg(rows):
+            return sum(p["multiple"] for p in rows) / len(rows) if rows else 0.0
+        lines += ["", "🧪 قاعدة 0.75 ATR — ما رفضته مقابل ما قبِله:",
+                  f"  قبِلها  {len(normal):>3} صفقة   لكل 1$ ${avg(normal):.3f}",
+                  f"  رفضها  {len(tested):>3} صفقة   لكل 1$ ${avg(tested):.3f}"]
+        if len(tested) < C.PAPER_MIN_TRADES:
+            lines.append(f"  ⚠️ تحت {C.PAPER_MIN_TRADES} صفقة — لا تحكم بعد")
+
     if s.get("n"):
         lines += ["", f"الإجمالي: {s['n']} صفقة مغلقة، {s['open']} مفتوحة", "",
                   f"  يصل الهدف  {s['hit']:.1f}%   "

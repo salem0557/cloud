@@ -154,7 +154,13 @@ def check_shortlist(dry_run=False):
         except uw.UWError as e:
             print(f"  {t}: {e}")
             continue
-        if not technical.confirms(tech):
+        # A break with room left, but under the rule's minimum. It is not an
+        # alert and Salem never sees it — it falls through the normal pipeline
+        # so the paper book takes exactly the trade he would have taken, and
+        # is stopped just before the send.
+        near_miss = (C.PAPER_NEAR_MISS and technical.is_near_miss(tech)
+                     and technical.holds(tech))
+        if not technical.confirms(tech) and not near_miss:
             # Not confirmed. If it is CLOSE to its level, say so once — this is
             # the early notice Salem asked for, and it is explicitly not an
             # alert.
@@ -228,6 +234,17 @@ def check_shortlist(dry_run=False):
         # came through the watchlist — the path Salem actually wants — arrived
         # without the reasoning.
         payload["reasoning"] = reasoning.chain(payload)
+
+        # Stopped here: no Telegram, no daily cap, no alert journal. The paper
+        # book alone, so the 0.75 ATR rule can be judged on a month of real
+        # outcomes rather than on the argument for it.
+        if near_miss:
+            payload["near_miss"] = True
+            if not dry_run and paper.record(payload):
+                print(f"  {t}: {technical.remaining_atr(tech):.2f} ATR left, "
+                      f"rule wants {C.MIN_REMAINING_ATR} — paper book only")
+            continue
+
         msg = compose("entry", payload)
         if msg.startswith(NO_TRADE):
             print(t, msg)

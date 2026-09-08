@@ -122,6 +122,20 @@ VOLUME_SPIKE_RATIO = 1.5    # candle volume vs prior-bar average
 TARGET_ATR_MULT    = 1.5    # target = broken level +/- 1.5 x ATR
 STOP_ATR_MULT      = 1.0    # stop   = broken level -/+ 1.0 x ATR
 MIN_REMAINING_ATR  = 0.75
+# A break that still has room toward its target, but less than the line above
+# demands, is NOT alerted — Salem never sees it in 943. It is opened in the
+# paper book only, so a month of results answers the question the rule cannot
+# answer about itself: does 0.75 protect him, or does it cost him?
+#
+# Measured 2026-09-08, the two strongest names in the market, both rejected by
+# a hair and both of which would have lost money:
+#   BE  09:45  +0.56 ATR left  (close 278.44 -> 276 within the hour)
+#   AMD 10:15  +0.71 ATR left  (close 500.00 -> 499)
+# One session is not evidence. The paper book is how it becomes evidence.
+#
+# A break that has passed its target (remaining < 0) is never taken, on paper
+# or otherwise. That is not a near miss, it is buying the top.
+PAPER_NEAR_MISS = os.environ.get("PAPER_NEAR_MISS", "1").lower() in ("1", "true", "yes")
 
 # ── The early notice: "this one is coiling" ─────────────────────
 # Salem's actual goal, stated from the first message: ride the contract's rise
