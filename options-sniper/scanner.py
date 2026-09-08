@@ -94,12 +94,19 @@ def flow_reason(flow, direction):
 
 # ── Build one candidate ─────────────────────────────────────────
 def evaluate(ticker, flow, dry_run=False):
+    """Returns a candidate, or None. When it returns None it also sets
+    evaluate.last_skip to the reason, so a scan that scores nothing can say
+    why instead of printing an empty shortlist and leaving it there."""
+    evaluate.last_skip = None
     direction = flow_direction(flow)
 
     candles = uw.candles(ticker, timeframe="5D")
     tech = technical.analyse(candles, direction)
     if tech is None:
-        return None                      # not enough candle history -> skip
+        evaluate.last_skip = (f"no candles" if not candles else
+                              f"only {len(candles)} bars, need "
+                              f"{max(C.CANDLES_LOOKBACK, C.ATR_PERIOD + 2)}")
+        return None
     near_miss = False
     if tech["broke_level"] and technical.is_late(tech):
         if C.PAPER_NEAR_MISS and technical.is_near_miss(tech):
@@ -113,14 +120,17 @@ def evaluate(ticker, flow, dry_run=False):
             # the move already passed its measured target: entering buys the top
             print(f"  {ticker}: break already extended "
                   f"({technical.remaining_atr(tech):.2f} ATR left) — skipped")
+            evaluate.last_skip = "break already past its target"
             return None
 
     spot = tech["close"] or flow["underlying_price"]
     if spot <= 0:
+        evaluate.last_skip = "no price"
         return None
 
     chain = uw.option_chain(ticker)
     if not chain:
+        evaluate.last_skip = "empty option chain"
         return None
 
     news = uw.news(ticker)
@@ -146,12 +156,16 @@ def evaluate(ticker, flow, dry_run=False):
         for f in assessment["flags"]:
             print(f"      ⚠ {f}")
 
+    evaluate.last_skip = None
     return {"ticker": ticker, "score": score, "raw_score": raw_score,
             "score_breakdown": breakdown, "risk": assessment,
             "near_miss": near_miss,
             "direction": direction, "spot": round(spot, 2), "flow": flow,
             "flow_reason": flow_reason(flow, direction), "technical": tech,
             "news": [n["headline"] for n in news[:3]], "chain": chain}
+
+
+evaluate.last_skip = None       # set even if evaluate() is never called
 
 
 def tradable_chain(chain):
@@ -255,15 +269,28 @@ def main(dry_run=False, limit_tickers=None):
     print(f"Tickers worth a data call: {[t for t, _ in ranked]}")
 
     candidates = []
+    dropped = {}
     for ticker, flow in ranked:
         try:
             cand = evaluate(ticker, flow, dry_run)
         except uw.UWError as e:
             print(f"  {ticker}: {e}")
+            dropped["request failed"] = dropped.get("request failed", 0) + 1
             continue
         if cand:
             candidates.append(cand)
             print(f"  {ticker}: {cand['score']} {cand['score_breakdown']}")
+        else:
+            why = evaluate.last_skip or "skipped"
+            dropped[why] = dropped.get(why, 0) + 1
+
+    # A scan that scores nothing must say why. Without this the log read
+    # "60 tickers worth a data call" and then, silently, an empty shortlist.
+    if dropped:
+        print("  dropped: " + ", ".join(f"{n}x {why}"
+                                        for why, n in sorted(dropped.items(),
+                                                             key=lambda kv: -kv[1])))
+    print(f"Scored {len(candidates)} of {len(ranked)} tickers")
 
     candidates.sort(key=lambda c: c["score"], reverse=True)
 

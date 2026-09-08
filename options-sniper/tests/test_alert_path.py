@@ -92,3 +92,59 @@ def test_both_paths_use_one_tier_builder():
     import inspect, monitor
     assert "build_tiers" in inspect.getsource(monitor.check_shortlist)
     assert "pick_contracts_by_budget" not in inspect.getsource(monitor.check_shortlist)
+
+
+# ── A scan that scores nothing must say why ─────────────────────
+# 2026-09-08: the log read "Tickers worth a data call: [60 names]" and then
+# "Shortlist (0): []" and "Alerts sent: 0", with nothing in between. Sixty
+# tickers were dropped and not one of them said a word. uw.candles() had
+# caught its own request failure and returned [], technical.analyse() saw
+# nothing and returned None, and evaluate() dropped the ticker silently.
+# A total failure and a quiet market printed exactly the same log.
+
+def test_evaluate_records_why_it_gave_up(monkeypatch):
+    import scanner
+    monkeypatch.setattr(scanner.uw, "candles", lambda *a, **k: [])
+    monkeypatch.setattr(scanner, "flow_direction", lambda f: "call")
+    assert scanner.evaluate("META", {"premium_usd": 1e6}) is None
+    assert scanner.evaluate.last_skip == "no candles"
+
+
+def test_a_short_history_is_named_as_such(monkeypatch):
+    import scanner
+    import config as C
+    monkeypatch.setattr(scanner.uw, "candles", lambda *a, **k: ["bar"] * 12)
+    monkeypatch.setattr(scanner.technical, "analyse", lambda *a, **k: None)
+    monkeypatch.setattr(scanner, "flow_direction", lambda f: "call")
+    assert scanner.evaluate("META", {"premium_usd": 1e6}) is None
+    assert "12 bars" in scanner.evaluate.last_skip
+
+
+def test_an_empty_chain_is_named_as_such(monkeypatch):
+    import scanner
+    tech = {"broke_level": False, "close": 100.0, "atr": 2.0, "level": 99.0,
+            "target": 103.0, "stop": 97.0, "remaining_atr": 1.5,
+            "break_distance_atr": 0.0, "volume_ratio": 1.0,
+            "closed_beyond": False, "expected_move": 3.0}
+    monkeypatch.setattr(scanner.uw, "candles", lambda *a, **k: ["bar"] * 60)
+    monkeypatch.setattr(scanner.technical, "analyse", lambda *a, **k: tech)
+    monkeypatch.setattr(scanner.uw, "option_chain", lambda t: [])
+    monkeypatch.setattr(scanner, "flow_direction", lambda f: "call")
+    assert scanner.evaluate("META", {"premium_usd": 1e6,
+                                     "underlying_price": 100.0}) is None
+    assert scanner.evaluate.last_skip == "empty option chain"
+
+
+def test_uw_candles_reports_a_failed_request_instead_of_returning_empty(capsys):
+    """The swallow itself. It may still return [] so a live scan degrades
+    rather than crashing — but it may never do it silently again."""
+    import uw
+    import config as C
+    real = C.UW_API_KEY
+    C.UW_API_KEY = ""                       # forces UWError inside _get
+    try:
+        assert uw.candles("META", timeframe="5D") == []
+    finally:
+        C.UW_API_KEY = real
+    out = capsys.readouterr().out
+    assert "META" in out and "failed" in out
