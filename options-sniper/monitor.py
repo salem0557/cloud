@@ -274,6 +274,30 @@ def send_mine_daily():
     return False
 
 
+_tech_cache = {}
+
+
+def _watch_tech(ticker, direction):
+    """The stock read for the watch pass, at most once every five minutes.
+
+    These are 15-MINUTE bars. Re-fetching them sixty times an hour returns the
+    same four candles and spends the request budget to learn nothing. The
+    entry path is deliberately NOT cached: there a five-minute-old read could
+    miss the bar that just closed, which is the whole signal.
+    """
+    key = (ticker, direction, datetime.datetime.now().strftime("%H:") +
+           str(datetime.datetime.now().minute // 5))
+    if key in _tech_cache:
+        return _tech_cache[key]
+    try:
+        tech = technical.analyse(uw.candles(ticker, timeframe="5D"), direction)
+    except uw.UWError:
+        tech = None
+    _tech_cache.clear()                 # one entry is all this ever needs
+    _tech_cache[key] = tech
+    return tech
+
+
 def watch_mine(dry_run=False, deep=False):
     """Salem's OWN open positions — EVENTS only, on a fast beat.
 
@@ -295,13 +319,7 @@ def watch_mine(dry_run=False, deep=False):
     for pos in mine.open_positions():
         sym = pos.get("option_symbol")
         try:
-            tech = None
-            try:
-                candles = uw.candles(pos["ticker"], timeframe="5D")
-                tech = technical.analyse(candles,
-                                         pos.get("direction") or "call")
-            except uw.UWError:
-                tech = None
+            tech = _watch_tech(pos["ticker"], pos.get("direction") or "call")
             msg, action, f = advisor.answer(pos, tech=tech, asked=False,
                                             deep=deep)
         except Exception as e:

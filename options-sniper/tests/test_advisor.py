@@ -152,3 +152,37 @@ def test_the_module_says_what_it_cannot_do():
     doc = inspect.getdoc(advisor)
     assert "بالثانية" in doc and "ONE MINUTE" in doc
     assert "سيولة قادمة" in doc and "does not make forecasts" in doc
+
+
+# ── what the watching costs ────────────────────────────────────
+def test_price_and_pressure_come_from_ONE_tape_read():
+    """read() used to call both contract_intraday and contract_quote, which
+    are the same endpoint — two requests a minute for data that arrived in
+    the first call. The price is the last row of the tape."""
+    import inspect
+    src = inspect.getsource(advisor.read)
+    assert "contract_tape(" in src
+    assert "contract_quote" not in src
+    assert inspect.signature(advisor.contract_pressure).parameters.get("rows")
+
+
+def test_the_price_is_the_last_row_that_has_one():
+    rows = [{"close": 1.0}, {"close": 1.2}, {"close": 0, "avg_price": 0}]
+    assert advisor.last_price(rows) == 1.2
+    assert advisor.last_price([]) is None
+
+
+def test_strike_flow_is_skipped_on_the_every_minute_pass():
+    """Where the day's money sits at a strike does not change sixty times an
+    hour, and fetching it that often spends the budget to learn nothing."""
+    import inspect
+    src = inspect.getsource(advisor.read)
+    assert "if deep else" in src
+
+
+def test_the_stock_bars_are_cached_for_the_watch_but_not_for_the_entry():
+    """These are 15-minute bars. But a five-minute-old read on the ENTRY path
+    could miss the bar that just closed, which is the whole signal."""
+    import inspect, monitor
+    assert "_watch_tech" in inspect.getsource(monitor.watch_mine)
+    assert "_watch_tech" not in inspect.getsource(monitor.check_shortlist)

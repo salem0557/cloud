@@ -35,6 +35,18 @@ import uw
 # not a verdict.
 PRESSURE_MINUTES = int(getattr(C, "ADVISOR_PRESSURE_MIN", 10) or 10)
 
+# What watching one position costs, per minute, so the number is written down
+# rather than estimated later:
+#
+#   1  the contract's own minute tape — price AND pressure come from it
+#   0  the stock's 15m bars, cached for five minutes in monitor._watch_tech
+#   0  strike-level flow, read only on the monitor's five-minute pass
+#
+# One request per position per minute. A 6.5-hour session is 390, so three
+# positions held all day is under 1,200 against a 30,000 allowance. It used to
+# be three requests a minute: the tape was fetched twice (contract_intraday
+# and contract_quote are the same endpoint) and the stock bars every minute.
+
 # Ask-side share below this and buyers have stopped lifting; it is the same
 # threshold the entry uses, so entry and exit do not disagree about what
 # pressure means.
@@ -49,17 +61,35 @@ def _pct(now, entry):
     return ((now / entry) - 1.0) * 100 if (now and entry) else None
 
 
-def contract_pressure(option_symbol, minutes=PRESSURE_MINUTES, date=None):
+def contract_tape(option_symbol, date=None):
+    """This contract's minute tape, or []. One request.
+
+    read() used to call BOTH contract_intraday and contract_quote, which are
+    the same endpoint — so watching one position cost two requests a minute
+    for data that arrived in the first call. The price is the last row of the
+    tape; there was never a second call to make.
+    """
+    try:
+        return uw.contract_intraday(option_symbol, date=date) or []
+    except uw.UWError:
+        return []
+
+
+def last_price(rows):
+    for r in reversed(rows or []):
+        px = r.get("close") or r.get("avg_price")
+        if px:
+            return px
+    return None
+
+
+def contract_pressure(rows, minutes=PRESSURE_MINUTES):
     """Ask-side share of the last `minutes` of this contract's tape.
 
     -> {"ask_share", "volume", "minutes"} or None when the tape is too thin
     to say anything. None means unknown, and unknown is never reported as
     calm.
     """
-    try:
-        rows = uw.contract_intraday(option_symbol, date=date)
-    except uw.UWError:
-        return None
     tail = [r for r in (rows or [])[-minutes:]]
     ask = sum((r.get("ask_volume") or 0) for r in tail)
     bid = sum((r.get("bid_volume") or 0) for r in tail)
@@ -97,13 +127,13 @@ def read(pos, tech=None, deep=True):
     """
     sym = pos["option_symbol"]
     is_call = (pos.get("type") or pos.get("direction") or "call") == "call"
-    q = uw.contract_quote(sym)
-    now_px = (q or {}).get("price") or None
+    rows = contract_tape(sym, date=pos.get("entry_date"))
+    now_px = last_price(rows)
     return {
         "ticker": pos.get("ticker", ""), "strike": pos.get("strike"),
         "is_call": is_call, "entry": pos.get("entry_price"),
         "price": now_px, "pct": _pct(now_px, pos.get("entry_price")),
-        "pressure": contract_pressure(sym, date=pos.get("entry_date")),
+        "pressure": contract_pressure(rows),
         "strike_net": (strike_net(pos.get("ticker", ""), pos.get("strike"),
                                   is_call) if deep else pos.get("last_net")),
         "minutes_to_close": market.minutes_to_close(),
