@@ -133,6 +133,32 @@ by and the alert still carries a suggested exit. But when the two disagree
 about which setup is better, the upside table is the one that describes his
 trading.
 
+### The adviser — what it can and cannot do
+
+Salem asked to be moved from a sender of alerts to an adviser: after
+"اشتريت سترايك 186" the system follows THAT contract and says when to get
+out, and he can ask "ابيع سترايك 186؟" at any time. `advisor.py` does it, and
+two words in the request are refused rather than faked:
+
+- **"بالثانية"** — UW serves ONE MINUTE bars. There is no per-second tape on
+  this plan, so the cadence is the monitor's beat. Promising seconds would be
+  a promise the data cannot keep.
+- **"سيولة قادمة"** — nothing here sees the future. What it reads is who is
+  trading it NOW: the ask-side share of the last ten minutes of the
+  contract's own tape, and the net premium at that strike today. "Buyers are
+  still lifting" is a fact; "liquidity is coming" is a forecast.
+
+The verdict is ordered by how little argument each reason takes, and the idea
+being dead outranks the profit target — a target reached on a setup that has
+already broken is a number about to be given back.
+
+A tape too thin to read is reported as unreadable, never as calm. Repeats are
+suppressed per position per verdict: an adviser that says "اخرج" every five
+minutes is noise, and noise is how a real exit signal gets ignored.
+
+**"ابيع" is a question, never a fill.** It is matched before the sale words,
+because reading it as a sale would close a position he still holds.
+
 ## Hard Rules (non-negotiable)
 - If data looks stale, incomplete, or contradictory → output exactly: `NO_TRADE: <سبب مختصر>`
 - Never change, round up, or "improve" the score, prices, or profit estimates you receive.

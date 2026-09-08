@@ -274,6 +274,46 @@ def send_mine_daily():
     return False
 
 
+def watch_mine(dry_run=False):
+    """Salem's OWN open positions, on the monitor's beat.
+
+    This is the difference between a sender of alerts and an adviser: he does
+    not have to ask. Each position is read, and a message goes out only when
+    the verdict is 'اخرج' — or the first time it turns 'راقب'.
+
+    Repeats are suppressed per position per verdict. An adviser that repeats
+    "اخرج" every five minutes is noise, and noise is how a real exit signal
+    gets ignored.
+    """
+    import advisor
+    sent = 0
+    for pos in mine.open_positions():
+        try:
+            tech = None
+            try:
+                candles = uw.candles(pos["ticker"], timeframe="5D")
+                tech = technical.analyse(candles,
+                                         pos.get("direction") or "call")
+            except uw.UWError:
+                tech = None
+            msg, action, _f = advisor.answer(pos, tech=tech, asked=False)
+        except Exception as e:
+            print(f"  advisor {pos.get('option_symbol')}: {e}")
+            continue
+        if action == "امسك":
+            if pos.get("last_advice"):
+                mine.set_flag(pos["option_symbol"], "last_advice", None)
+            continue
+        if pos.get("last_advice") == action:
+            continue                    # already said this about this position
+        if dry_run:
+            print("\n" + msg)
+        elif send(msg):
+            mine.set_flag(pos["option_symbol"], "last_advice", action)
+            sent += 1
+    return sent
+
+
 def mark_paper():
     """Advance the paper book on the same 5-minute beat as the monitor.
 
@@ -321,7 +361,10 @@ def main(dry_run=False):
         print("Market closed —", market.reason())
         return
     exits = check_positions(dry_run)
+    advised = watch_mine(dry_run)
     entries = check_shortlist(dry_run)
+    if advised:
+        print(f"advice sent on {advised} of your positions")
     print(f"exits: {exits}  entries: {entries}")
     print(uw.spent())
 

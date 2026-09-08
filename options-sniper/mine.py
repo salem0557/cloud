@@ -50,6 +50,10 @@ OFFSET_FILE = C.DATA_DIR / "tg_offset.json"
 # misread as a trade. "دخلت" and "خرجت" are what he would type anyway.
 IN_WORDS = ("دخلت", "اشتريت", "شريت", "دخلنا")
 OUT_WORDS = ("خرجت", "بعت", "خرجنا", "طلعت")
+# "ابيع سترايك 186؟" is a QUESTION, not a fill, and the two must never be
+# confused: reading it as a sale would close a position he still holds.
+# Checked before the others because "ابيع" contains no OUT word but "بعت" does.
+ASK_WORDS = ("ابيع", "أبيع", "امسك", "أمسك", "وش رايك", "ايش رايك", "نبيع")
 
 
 def _load(path, default):
@@ -110,6 +114,8 @@ def parse(text):
         if w.upper() == w and len(w) >= 1:
             tick = w.upper()
             break
+    if any(w in t for w in ASK_WORDS):
+        return "ask", num, tick
     if any(w in t for w in IN_WORDS):
         return "in", num, tick
     if any(w in t for w in OUT_WORDS):
@@ -239,6 +245,8 @@ def apply_reply(update):
     action, num, tick = parse(msg.get("text"))
     if not action:
         return ""
+    if action == "ask":
+        return advise(strike=num, ticker=tick)
     if action == "out":
         pos, note = close_position(at=num if num and num < 100 else None)
         if not pos:
@@ -257,6 +265,64 @@ def apply_reply(update):
     if not pos:
         return note
     return f"✅ {pos['ticker']} {pos['strike']:g} دخول ${pos['entry_price']:.2f}"
+
+
+def open_positions():
+    return [p for p in _load(MINE_FILE, {"open": []})["open"] if p.get("open")]
+
+
+def find_open(strike=None, ticker=None):
+    """One of HIS open positions. -> (pos, note)."""
+    live = open_positions()
+    if not live:
+        return None, "ما عندك صفقة مفتوحة"
+    if ticker:
+        live = [p for p in live if (p.get("ticker") or "").upper() == ticker]
+    if strike is not None:
+        live = [p for p in live
+                if p.get("strike") is not None
+                and abs(p["strike"] - strike) < 0.001]
+    if not live:
+        return None, "ما لقيت هذي في المفتوح عندك"
+    if len(live) > 1:
+        names = "، ".join(f"{p['ticker']} {p['strike']:g}" for p in live)
+        return None, f"أي وحدة؟ المفتوح: {names}"
+    return live[0], ""
+
+
+def set_flag(option_symbol, key, value):
+    """Remember something about an open position — what advice was last given,
+    so the same verdict is not repeated every five minutes."""
+    book = _load(MINE_FILE, {"open": [], "closed": []})
+    for p in book["open"]:
+        if p.get("option_symbol") == option_symbol:
+            if value is None:
+                p.pop(key, None)
+            else:
+                p[key] = value
+            _save(MINE_FILE, book)
+            return True
+    return False
+
+
+def advise(strike=None, ticker=None):
+    """Answer "ابيع سترايك 186؟" about a position he holds."""
+    import advisor
+    pos, note = find_open(strike=strike, ticker=ticker)
+    if not pos:
+        return note
+    tech = None
+    try:
+        candles = uw.candles(pos["ticker"], timeframe="5D")
+        import technical
+        tech = technical.analyse(candles, pos.get("direction") or "call")
+    except Exception:
+        tech = None                     # named as missing by advisor.verdict
+    try:
+        msg, _action, _f = advisor.answer(pos, tech=tech, asked=True)
+        return msg
+    except Exception as e:
+        return f"ما قدرت أقرأ العقد الآن ({e})"
 
 
 def poll_and_apply(send_fn=None):
