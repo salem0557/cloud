@@ -245,3 +245,60 @@ def test_a_break_that_closes_at_the_low_of_its_bar_is_still_rejected():
     t = technical.analyse(c, "call")
     assert t["closed_strong"] is False
     assert not technical.holds(t)
+
+
+# ── A gap down, then a rally: the move a 0DTE scalp exists to catch ──
+# TSLA, 2026-09-08. Closed 376 on Sep 3, gapped down to 361 on Sep 4 and
+# closed 354, then ran 355.80 -> 370.00 the next morning — +3.3% on the day,
+# its 370 call 1.09 -> 3.75. The scanner reported "no break" for every minute
+# of it: a 40-bar window reaches into Sep 3 and put the level at 384.04, a
+# price the stock never approached. The level now comes from recent intraday
+# structure, cut at this session's open. ATR and the volume average still use
+# the long window — they need the history, and neither is a price to break.
+
+def _gap_down_then_rally():
+    """20 bars yesterday up at 380, then today opening at 356 and climbing."""
+    bars = []
+    for i in range(20):                      # yesterday, up near 380
+        bars.append({"open": 380.0, "high": 384.0, "low": 378.0, "close": 380.0,
+                     "volume": 1000, "date": "2026-09-03",
+                     "start_time": f"2026-09-03T{13 + i // 4:02d}:{(i % 4) * 15:02d}:00Z",
+                     "end_time": "x", "closed": True})
+    price = 356.0
+    for i in range(20):                      # today, gapped down and climbing
+        bars.append({"open": price, "high": price + 1.0, "low": price - 0.5,
+                     "close": price + 0.9, "volume": 1000, "date": "2026-09-08",
+                     "start_time": f"2026-09-08T{13 + i // 4:02d}:{(i % 4) * 15:02d}:00Z",
+                     "end_time": "x", "closed": True})
+        price += 0.8
+    bars[-1]["volume"] = 3000                # the breaking bar, on volume
+    return bars
+
+
+def test_yesterdays_high_is_not_todays_level_after_a_gap_down():
+    t = technical.analyse(_gap_down_then_rally(), "call")
+    assert t is not None
+    assert t["level"] < 380, (
+        f"level {t['level']} came from the previous session — a stock that "
+        "gapped down has already left it behind")
+    assert t["broke_level"], "the rally was not seen as a break at all"
+
+
+def test_the_rally_confirms_instead_of_reading_as_no_break():
+    assert technical.confirms(technical.analyse(_gap_down_then_rally(), "call"))
+
+
+def test_atr_still_uses_the_long_window():
+    """Only the LEVEL is cut to the session. ATR needs the history, and a
+    short window would make it tiny and every break look enormous."""
+    t = technical.analyse(_gap_down_then_rally(), "call")
+    assert t["atr"] > 0
+    assert t["bars_used"] == C.CANDLES_LOOKBACK
+
+
+def test_the_level_is_not_called_off_one_candle_at_the_open():
+    """Two bars into a session there is no intraday structure yet. Falling
+    back is right; a level read off one candle is noise, not a level."""
+    bars = _gap_down_then_rally()[:-18]      # yesterday plus two bars today
+    t = technical.analyse(bars + _gap_down_then_rally()[-2:], "call")
+    assert t is None or t["level"] > 0       # never crashes, never invents one

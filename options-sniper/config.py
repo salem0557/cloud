@@ -152,7 +152,15 @@ MAX_PROFIT_CREDIT = 300.0    # cap on the profit term: a 900% estimate on a
 
 # ── 15m technical frame ─────────────────────────────────────────
 CANDLE_SIZE        = "15m"
-CANDLES_LOOKBACK   = 40     # bars used for level detection
+CANDLES_LOOKBACK   = 40     # bars used for ATR and the volume average
+# The breakout LEVEL is read from a shorter window, cut at this session's open.
+# 12 bars of 15m is three hours of intraday structure. At 40 the level reached
+# back into the previous session: on 2026-09-08 TSLA gapped down, rallied 355.80
+# -> 370.00 (+3.3%, its 370 call 1.09 -> 3.75) and the scanner called it "no
+# break" the whole way, because Sep 3's high of 384.04 was still the level.
+LEVEL_LOOKBACK     = 12     # bars the breakout level may be read from
+LEVEL_MIN_BARS     = 3      # below this, fall back rather than call a level
+                            # off one or two candles at the open
 # How many OHLC pages uw.candles() may walk back to reach that many REGULAR
 # bars. One page is not enough: UW answers timeframe=5D with 100 rows and no
 # more, ~60 of them pre/post-market, which left 39 usable against the 40

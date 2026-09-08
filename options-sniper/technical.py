@@ -31,6 +31,28 @@ def atr(candles, period=None):
     return sum(window) / len(window) if window else 0.0
 
 
+def _level_window(candles, prior):
+    """The bars a breakout level may be read from: the most recent
+    LEVEL_LOOKBACK closed bars, cut at this session's open.
+
+    Cutting at the open is the point. Yesterday's high is not a level today's
+    move has to clear — a stock that gapped down and is rallying has already
+    left it behind, and measuring against it reports "no break" all day.
+    """
+    recent = prior[-C.LEVEL_LOOKBACK:] if C.LEVEL_LOOKBACK else prior
+    if not recent:
+        return []
+    today = (candles[-1].get("date")
+             or (candles[-1].get("start_time") or "")[:10])
+    if not today:
+        return recent
+    same = [c for c in recent
+            if (c.get("date") or (c.get("start_time") or "")[:10]) == today]
+    # Early in the session there may be only a bar or two. Fall back to the
+    # recent window rather than calling a level off one candle.
+    return same if len(same) >= C.LEVEL_MIN_BARS else recent
+
+
 def analyse(candles, direction, lookback=None):
     """Measure the 15m frame for one ticker.
 
@@ -56,8 +78,24 @@ def analyse(candles, direction, lookback=None):
     avg_vol = sum(c["volume"] for c in prior) / len(prior)
     vol_ratio = (last["volume"] / avg_vol) if avg_vol > 0 else 0.0
 
+    # The LEVEL is measured on a different, shorter window than the ATR.
+    #
+    # TSLA, 2026-09-08. It closed 376 on Sep 3, gapped down to 361 on Sep 4 and
+    # closed 354, then ran 355.80 -> 370.00 the next morning: +3.3% on the day,
+    # and the 370 call went 1.09 -> 3.75. The scanner reported "no break" for
+    # every minute of it, because a 40-bar window reaches back into Sep 3 and
+    # put the level at 384.04 — a price the stock never approached. A gap down
+    # followed by a rally is invisible to a level that spans sessions, and that
+    # is precisely the move a 0DTE scalp exists to catch.
+    #
+    # So the level comes from the recent intraday structure only, and never
+    # from before this session's open. ATR and the volume average still use the
+    # long window: they need the history, and neither is a price to break.
+    lvl_window = _level_window(candles, prior)
+    lvl_prior = lvl_window or prior
+
     if direction == "call":
-        level = max(c["high"] for c in prior)
+        level = max(c["high"] for c in lvl_prior)
         broke = last["high"] > level
         closed_beyond = last["close"] > level
         distance_atr = (last["close"] - level) / a
@@ -65,7 +103,7 @@ def analyse(candles, direction, lookback=None):
         stop = level - C.STOP_ATR_MULT * a
         entry_rule = f"إغلاق شمعة 15د فوق ${level:.2f}"
     else:
-        level = min(c["low"] for c in prior)
+        level = min(c["low"] for c in lvl_prior)
         broke = last["low"] < level
         closed_beyond = last["close"] < level
         distance_atr = (level - last["close"]) / a
