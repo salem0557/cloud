@@ -32,7 +32,14 @@ def send_paper(text: str) -> bool:
                 topic=C.TELEGRAM_PAPER_TOPIC_ID)
 
 
-def send(text: str, chat_id: str = None, topic: str = None) -> bool:
+def send(text: str, chat_id: str = None, topic: str = None):
+    """-> Telegram's message_id (an int, always truthy) or False.
+
+    It used to return a bare bool. The id is what lets a REPLY be matched back
+    to the alert it answers, which is the whole mechanism behind Salem saying
+    "دخلت" under a message and the system knowing which contract he means.
+    Every existing caller tests truthiness, and a message id is never 0.
+    """
     # A topic belongs to its chat. Passing the paper topic with the alert chat
     # would either fail or post into whatever thread happens to carry that id
     # there, so the topic only travels with an explicitly given chat_id.
@@ -54,10 +61,39 @@ def send(text: str, chat_id: str = None, topic: str = None) -> bool:
     except requests.RequestException as e:
         print("[telegram] network error:", e)
         return False
-    ok = r.ok and r.json().get("ok", False)
-    if not ok:
+    body = r.json() if r.ok else {}
+    if not (r.ok and body.get("ok")):
         print("[telegram] send failed:", r.text[:200])
-    return ok
+        return False
+    return (body.get("result") or {}).get("message_id") or True
+
+
+def poll(offset=None, timeout=0):
+    """New updates since `offset`. -> (updates, next_offset).
+
+    Long-polling is deliberately off by default: the scheduler already wakes
+    every twenty seconds and a blocking call inside that loop would delay the
+    scan it exists to run.
+    """
+    if not TELEGRAM_TOKEN:
+        return [], offset
+    params = {"timeout": timeout, "allowed_updates": '["message"]'}
+    if offset is not None:
+        params["offset"] = offset
+    try:
+        r = requests.get(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates",
+            params=params, timeout=max(15, timeout + 5))
+    except requests.RequestException as e:
+        print("[telegram] poll error:", e)
+        return [], offset
+    body = r.json() if r.ok else {}
+    if not (r.ok and body.get("ok")):
+        print("[telegram] poll failed:", r.text[:200])
+        return [], offset
+    updates = body.get("result") or []
+    nxt = (updates[-1]["update_id"] + 1) if updates else offset
+    return updates, nxt
 
 
 if __name__ == "__main__":

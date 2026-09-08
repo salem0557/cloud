@@ -266,3 +266,38 @@ def test_the_summary_is_sent_once_a_day(monkeypatch, tmp_path):
     assert paper.send_daily() is True
     assert paper.send_daily() is False          # the monitor runs every 5 min
     assert len(sent) == 1
+
+
+# ── The book must not close a trade that is still running ──────
+def test_a_position_is_not_timed_out_by_a_tape_that_has_not_caught_up():
+    """mark() runs every five minutes on a tape that only reaches "now", so
+    five minutes after entry entry_exit returned "timeout after 5 minutes" on
+    a trade entitled to thirty — and the book closed it. Left alone that
+    would have timed out almost every paper position in five minutes and
+    produced a month describing a trade nobody makes."""
+    rows = [bar(f"14:{m:02d}", 1.0, 1.02, 0.99, 1.0) for m in range(6)]
+    assert not paper._window_done(rows, 0, {})
+
+
+def test_the_window_is_done_once_the_full_hold_has_elapsed():
+    n = C.PAPER_MAX_HOLD + 2
+    rows = [bar(f"14:{m:02d}", 1.0, 1.02, 0.99, 1.0) for m in range(n)]
+    assert paper._window_done(rows, 0, {})
+
+
+def test_the_window_is_done_at_the_hard_exit_even_if_the_hold_has_not_run():
+    """A same-day contract is not held past the hard exit whatever the clock
+    says, so the tape reaching it ends the window."""
+    rows = [bar("15:2%d" % m, 1.0, 1.02, 0.99, 1.0) for m in range(8, 10)]
+    rows.append(bar("15:31", 1.0, 1.02, 0.99, 1.0))
+    assert paper._window_done(rows, 0, {})
+
+
+def test_a_target_or_stop_still_closes_immediately():
+    """The guard is only about timeouts. A trade that actually hit its level
+    five minutes in is finished, and holding it open would invent a result."""
+    import zero_dte as z
+    rows = [bar("14:00", 1.0, 1.0, 1.0, 1.0),
+            bar("14:01", 1.0, 2.0, 1.0, 2.0)]
+    t = z.entry_exit(rows, 0, 40, 30, 30, 0.0, "15:30", fee=0.0)
+    assert t["why"] == "take"

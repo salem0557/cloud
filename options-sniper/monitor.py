@@ -16,6 +16,7 @@ venv_boot.ensure(["requests"])
 
 import config as C
 import journal
+import mine
 import market
 import paper
 import reasoning
@@ -23,10 +24,9 @@ import state
 import technical
 import uw
 from compose import compose, NO_TRADE
-from scanner import aggregate_flow, flow_reason
-from scoring import (ask_side_ratio, contract_cost, exit_rule,
-                     expected_profit_pct, flow_direction,
-                     technical_score, pick_contracts_by_budget)
+from scanner import aggregate_flow, build_tiers, flow_reason
+from scoring import (ask_side_ratio, exit_rule, flow_direction,
+                     technical_score)
 from telegram_send import send
 
 
@@ -208,25 +208,19 @@ def check_shortlist(dry_run=False):
         except uw.UWError as e:
             print(f"  {t}: {e}")
             continue
-        move = tech["expected_move"]
-        picks = pick_contracts_by_budget(chain, item["direction"], tech["close"],
-                                         expected_move=move,
-                                         atr=tech.get("atr", 0.0))
-        tiers = []
-        for label, c in picks:
-            if c is None:
-                tiers.append({"tier": label, "option_symbol": None})
-            else:
-                tiers.append({
-                    "tier": label, "option_symbol": c["option_symbol"],
-                    "strike": c["strike"], "type": c["type"], "expiry": c["expiry"],
-                    "ask": c["ask"], "bid": c["bid"], "cost": contract_cost(c),
-                    "delta": c["delta"], "open_interest": c["open_interest"],
-                    "expected_profit_pct": expected_profit_pct(c, move),
-                })
+        # The SAME builder the scanner uses. Hand-rolling it here dropped
+        # `dte` and `exit`, and an alert without those has no expiry tag, no
+        # exit plan, no hold clock and no hard-exit line — a same-day contract
+        # presented as if it had all week.
+        tiers = build_tiers({"chain": chain, "direction": item["direction"],
+                             "spot": tech["close"], "technical": tech})
 
+        breakdown = dict(item.get("base_breakdown") or {})
+        if breakdown:
+            breakdown["technical"] = round(technical_score(tech), 1)
         payload = {"ticker": t, "score": score, "direction": item["direction"],
                    "spot": tech["close"], "technical": tech, "tiers": tiers,
+                   "score_breakdown": breakdown,
                    "flow_reason": (flow_reason(fresh, item["direction"]) if fresh
                                    else "كسر مؤكد على فريم 15د بعد تدفق خيارات"),
                    "news": [], "time_riyadh": now_riyadh()}
@@ -244,12 +238,40 @@ def check_shortlist(dry_run=False):
             continue
         if not state.record_alert(t):
             break
-        if send(msg):
+        mid = send(msg)
+        if mid:
+            # The message id is what a REPLY resolves against, so "دخلت" under
+            # an alert can open the right contract without him naming it.
+            mine.remember_alert(mid, payload)
             journal.log_alert(payload)
+            # scanner.py recorded its alerts in the paper book and this path
+            # did not, so the paper month was scoring a different and smaller
+            # population than the one Salem actually receives — and the
+            # watchlist path is the one he designed and uses.
+            paper.record(payload)
             sent += 1
         else:
             state.release_alert(t)
     return sent
+
+
+def send_mine_daily():
+    """Salem's OWN trades, once a day, into the alerts section.
+
+    The automatic paper book reports into its own topic; this reports what HE
+    took, where he took it. Two owners, two records, two places.
+    """
+    st = state.read()
+    today = datetime.date.today().isoformat()
+    if st.get("mine_daily") == today or market.is_open():
+        return False
+    if not mine.summary().get("n") and not mine._load(
+            mine.MINE_FILE, {"open": []})["open"]:
+        return False                       # nothing to report is not a report
+    if send(mine.daily_message()):
+        state.write({**st, "mine_daily": today})
+        return True
+    return False
 
 
 def mark_paper():
@@ -291,6 +313,8 @@ def main(dry_run=False):
     # is still being marked at 15:44, and a summary that only sends while the
     # market is open would never send at all.
     mark_paper()
+    if not dry_run and send_mine_daily():
+        print("your own daily summary sent")
     if not dry_run and send_paper_daily():
         print("paper daily summary sent")
     if not dry_run and not market.is_open():

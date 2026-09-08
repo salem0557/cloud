@@ -12,13 +12,11 @@ The existing journal.csv records what was alerted and leaves `outcome` blank
 for Salem to fill in. Nobody fills in a spreadsheet for a month. This closes
 its own positions from the contract's own tape.
 
-The baseline it is measured against, from 796 gated trades over 9 sessions:
+The baseline is C.PAPER_BASELINE, measured at the pair EXIT_RULES uses. It is
+read from config rather than written here, because this docstring once carried
+figures from a run taken before the clock was fixed and nobody noticed.
 
-    reaches +40%   43.2%
-    does not lose  58.8%
-    per $1         $1.033 with every session weighted equally
-
-If the live numbers land near those, the backtest was measuring something real.
+If the live numbers land near it, the backtest was measuring something real.
 If they land far below, the backtest was measuring its own assumptions — and
 that is worth knowing before any capital is involved.
 """
@@ -102,6 +100,19 @@ def record(payload, tier=None):
     return pos
 
 
+def _window_done(rows, i, pos):
+    """Has this position's clock actually run out on the tape we have?
+
+    Either the full hold is behind it, or the tape has reached the hard exit.
+    Anything else is a tape that has not caught up yet, and closing on it
+    scores a trade that was still running.
+    """
+    if len(rows) - 1 - i >= C.PAPER_MAX_HOLD:
+        return True
+    last = minute_of(rows[-1]) if rows else ""
+    return bool(last) and last >= C.PAPER_HARD_EXIT
+
+
 def mark(verbose=True, notify=True):
     """Advance every open position on its own tape and close what triggered.
 
@@ -133,6 +144,18 @@ def mark(verbose=True, notify=True):
         trade = entry_exit(rows, i, pos["take"], pos["stop"], C.PAPER_MAX_HOLD,
                            spread, C.PAPER_HARD_EXIT)
         if trade is None:
+            still_open.append(pos)
+            continue
+        # entry_exit judges whatever tape it is given, and this runs every
+        # five minutes on a tape that only reaches "now". Five minutes after
+        # entry it therefore returned "timeout after 5 minutes" on a trade
+        # entitled to thirty — and the book closed it. Left alone that would
+        # have timed out almost every paper position in five minutes and
+        # produced a month of results describing a trade nobody makes.
+        #
+        # A timeout is only real once the window has actually run out: either
+        # the full hold has elapsed on the tape, or the hard exit is reached.
+        if trade["why"] == "timeout" and not _window_done(rows, i, pos):
             still_open.append(pos)
             continue
         pos.update({
