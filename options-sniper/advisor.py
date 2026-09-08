@@ -50,7 +50,7 @@ PRESSURE_MINUTES = int(getattr(C, "ADVISOR_PRESSURE_MIN", 10) or 10)
 # Ask-side share below this and buyers have stopped lifting; it is the same
 # threshold the entry uses, so entry and exit do not disagree about what
 # pressure means.
-PRESSURE_FLOOR = C.MIN_ASK_SIDE_RATIO
+PRESSURE_FLOOR = C.ADVISOR_PRESSURE_FLOOR
 
 # Minutes before the hard exit at which a same-day contract is called in
 # regardless of anything else.

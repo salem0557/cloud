@@ -186,3 +186,15 @@ def test_the_stock_bars_are_cached_for_the_watch_but_not_for_the_entry():
     import inspect, monitor
     assert "_watch_tech" in inspect.getsource(monitor.watch_mine)
     assert "_watch_tech" not in inspect.getsource(monitor.check_shortlist)
+
+
+def test_loosening_the_entry_gate_does_not_silence_the_exit_warning():
+    """MIN_ASK_SIDE_RATIO was halved to let more setups through. That is a
+    door being opened. The advisor's pressure warning fires on a position
+    Salem is already IN, and halving it would have muted it — the opposite
+    of loosening. The two must not share a number."""
+    assert advisor.PRESSURE_FLOOR == C.ADVISOR_PRESSURE_FLOOR
+    assert advisor.PRESSURE_FLOOR > C.MIN_ASK_SIDE_RATIO
+    action, why = advisor.verdict(_f(pressure={"ask_share": 0.30,
+                                               "volume": 300, "minutes": 10}))
+    assert action == "راقب" and any("الشراء خف" in w for w in why)
