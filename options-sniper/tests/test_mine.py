@@ -36,17 +36,19 @@ def _reply(text, to=7):
 
 # ── reading what he typed ──────────────────────────────────────
 def test_the_words_he_would_actually_type_are_understood():
-    assert mine.parse("دخلت") == ("in", None)
-    assert mine.parse("شريت 186") == ("in", 186.0)
-    assert mine.parse("خرجت 1.40") == ("out", 1.40)
-    assert mine.parse("بعت") == ("out", None)
+    """Written for how he types — "اشتريت سترايك 186", not a command."""
+    assert mine.parse("دخلت") == ("in", None, None)
+    assert mine.parse("اشتريت سترايك 186") == ("in", 186.0, None)
+    assert mine.parse("اشتريت NVDA 186") == ("in", 186.0, "NVDA")
+    assert mine.parse("خرجت 1.40") == ("out", 1.40, None)
+    assert mine.parse("بعت") == ("out", None, None)
 
 
 def test_anything_else_is_ignored_in_silence():
     """A chat is not a command line. An error under every stray word would
     make the section unusable."""
     for t in ("شكرا", "ممتاز", "", None, "👍"):
-        assert mine.parse(t) == (None, None)
+        assert mine.parse(t) == (None, None, None)
     assert mine.apply_reply({"message": {"text": "ممتاز"}}) == ""
 
 
@@ -56,7 +58,7 @@ def test_a_reply_opens_the_contract_that_alert_offered():
     which contract it was."""
     mine.remember_alert(7, ALERT)
     out = mine.apply_reply(_reply("دخلت"))
-    assert "NVDA" in out and "1.85" in out
+    assert out == "✅ NVDA 183 دخول $1.85"        # short, as he asked
     book = mine._load(mine.MINE_FILE, {})
     assert book["open"][0]["option_symbol"] == "NVDA...C183"
     assert book["open"][0]["price_source"] == "alert ask"
@@ -73,13 +75,34 @@ def test_a_strike_that_was_not_offered_is_refused_with_what_was():
     made."""
     mine.remember_alert(7, ALERT)
     out = mine.apply_reply(_reply("دخلت 999"))
-    assert "183" in out and "186" in out
+    assert "183" in out and "186" in out          # what WAS offered
     assert mine._load(mine.MINE_FILE, {"open": []})["open"] == []
 
 
-def test_a_reply_to_something_that_is_not_an_alert_says_so():
-    out = mine.apply_reply(_reply("دخلت", to=999))
-    assert "رد على رسالة التنبيه" in out
+def test_no_reply_needed_when_he_names_the_strike():
+    """"اشتريت سترايك 186" arrives on its own, and the strike he names is
+    matched against today's alerts."""
+    mine.remember_alert(7, ALERT)
+    out = mine.apply_reply({"message": {"text": "اشتريت سترايك 186"}})
+    assert "NVDA 186" in out
+    assert mine._load(mine.MINE_FILE, {})["open"][0]["strike"] == 186
+
+
+def test_a_strike_in_two_tickers_asks_which_rather_than_picking():
+    """Ambiguity is reported, never resolved by choosing one."""
+    mine.remember_alert(7, ALERT)
+    other = dict(ALERT, ticker="AMD")
+    mine.remember_alert(8, other)
+    out = mine.apply_reply({"message": {"text": "اشتريت سترايك 186"}})
+    assert "أي سهم" in out and "AMD" in out and "NVDA" in out
+    assert mine._load(mine.MINE_FILE, {"open": []})["open"] == []
+
+
+def test_a_strike_nobody_alerted_on_is_refused():
+    mine.remember_alert(7, ALERT)
+    out = mine.apply_reply({"message": {"text": "اشتريت سترايك 999"}})
+    assert "999" in out
+    assert mine._load(mine.MINE_FILE, {"open": []})["open"] == []
 
 
 def test_the_same_contract_is_not_opened_twice():
@@ -95,7 +118,7 @@ def test_he_can_close_at_a_price_he_names():
     mine.remember_alert(7, ALERT)
     mine.apply_reply(_reply("دخلت"))
     out = mine.apply_reply({"message": {"text": "خرجت 2.59"}})
-    assert "+40" in out
+    assert out == "✅ NVDA 183 خروج $2.59 (+40.0%)"
     p = mine._load(mine.MINE_FILE, {})["closed"][0]
     assert p["exit_source"] == "his" and p["multiple"] == pytest.approx(1.4, abs=0.01)
 

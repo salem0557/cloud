@@ -18,10 +18,18 @@ journal.csv has had an empty `outcome` column for weeks waiting to be filled
 in by hand, and paper.py's own docstring says nobody fills in a spreadsheet
 for a month. A reply is the shortest thing that could work.
 
-    دخلت            entered the first contract in that alert
-    دخلت 186        entered the 186 strike from that alert
-    خرجت            out now, at whatever it is worth
-    خرجت 1.40       out at a price he names
+    اشتريت سترايك 186     that strike, matched against today's alerts
+    دخلت                  the first contract in the alert he replied to
+    خرجت 2.59             out at a price he names
+    خرجت                  out now, priced off the tape
+
+He asked for it to read like speech, not like a command: "اعطيك مثلا اشتريت
+سترايك كذا وانت سجله". So no reply is required, no ticker, no keyword order —
+the strike he names is looked up in what was alerted today. Replying to the
+message still works and is exact, which matters when the same strike was
+alerted on two names.
+
+Confirmations are one line, also as asked: "✅ NVDA 186 دخول $0.42".
 
 Anything else is ignored in silence. A chat is not a command line and an
 error message under every stray word would make the section unusable.
@@ -81,9 +89,14 @@ def remember_alert(message_id, payload):
 
 
 def parse(text):
-    """-> ('in'|'out'|None, strike_or_price_or_None). Never raises."""
+    """-> ('in'|'out'|None, number, ticker). Never raises.
+
+    Written for how Salem actually types — "اشتريت سترايك 186", not a command.
+    The number is the first one in the message; a bare Latin word in capitals
+    is taken as a ticker so "اشتريت NVDA 186" also works.
+    """
     if not text:
-        return None, None
+        return None, None, None
     t = text.strip()
     num = None
     m = re.search(r"\d+(?:\.\d+)?", t)
@@ -92,11 +105,43 @@ def parse(text):
             num = float(m.group())
         except ValueError:
             num = None
+    tick = None
+    for w in re.findall(r"[A-Za-z]{1,6}", t):
+        if w.upper() == w and len(w) >= 1:
+            tick = w.upper()
+            break
     if any(w in t for w in IN_WORDS):
-        return "in", num
+        return "in", num, tick
     if any(w in t for w in OUT_WORDS):
-        return "out", num
-    return None, None
+        return "out", num, tick
+    return None, None, None
+
+
+def find_alert(strike=None, ticker=None):
+    """The most recent alert that offered this strike. -> (alert, note).
+
+    He does not always reply to the message: "اشتريت سترايك 186" arrives on
+    its own. Newest first, because a strike he names is the one he just saw.
+    Ambiguity is reported, never resolved by picking one.
+    """
+    sent = _load(SENT_FILE, {})
+    rows = [sent[k] for k in sorted(sent, key=int, reverse=True)]
+    if ticker:
+        rows = [a for a in rows if (a.get("ticker") or "").upper() == ticker]
+    if strike is None:
+        if not rows:
+            return None, "ما عندي تنبيه أربطه فيه"
+        return rows[0], ""
+    hits = [a for a in rows
+            if any(t.get("strike") is not None
+                   and abs(t["strike"] - strike) < 0.001
+                   for t in a.get("tiers") or [])]
+    if not hits:
+        return None, f"ما لقيت سترايك {strike:g} في تنبيهات اليوم"
+    names = {a.get("ticker") for a in hits}
+    if len(names) > 1:
+        return None, f"سترايك {strike:g} في: {'، '.join(sorted(names))} — أي سهم؟"
+    return hits[0], ""
 
 
 def _pick_tier(tiers, strike):
@@ -191,26 +236,27 @@ def apply_reply(update):
     """
     msg = (update or {}).get("message") or {}
     reply_to = msg.get("reply_to_message") or {}
-    action, num = parse(msg.get("text"))
+    action, num, tick = parse(msg.get("text"))
     if not action:
         return ""
     if action == "out":
-        # Closing needs no alert to reply to: he may be flat-out telling us.
         pos, note = close_position(at=num if num and num < 100 else None)
         if not pos:
             return note
         pct = (pos["multiple"] - 1) * 100 if pos.get("multiple") else 0.0
-        return (f"✅ سجّلت الخروج — {pos['ticker']} {pos['strike']:g} "
-                f"@ ${pos['exit_price']:.2f} ({pct:+.1f}%)")
-    sent = _load(SENT_FILE, {})
-    alert = sent.get(str(reply_to.get("message_id")))
-    if not alert:
-        return "رد على رسالة التنبيه نفسها عشان أعرف أي عقد."
+        return f"✅ {pos['ticker']} {pos['strike']:g} خروج ${pos['exit_price']:.2f} ({pct:+.1f}%)"
+    # A reply names the alert exactly. Without one, the strike he typed is
+    # matched against today's alerts — which is how he actually writes:
+    # "اشتريت سترايك 186", not a reply and not a command.
+    alert = _load(SENT_FILE, {}).get(str(reply_to.get("message_id")))
+    if alert is None:
+        alert, note = find_alert(strike=num, ticker=tick)
+        if alert is None:
+            return note
     pos, note = open_position(alert, strike=num)
     if not pos:
         return note
-    return (f"✅ سجّلت الدخول — {pos['ticker']} {pos['strike']:g} "
-            f"@ ${pos['entry_price']:.2f}")
+    return f"✅ {pos['ticker']} {pos['strike']:g} دخول ${pos['entry_price']:.2f}"
 
 
 def poll_and_apply(send_fn=None):
