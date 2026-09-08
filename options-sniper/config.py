@@ -117,7 +117,15 @@ PAPER_THRESHOLD    = 45     # the paper book keeps the loose gate
 # Kept 20 below the threshold, as it was at 85/65. The gap is what lets a
 # ticker with strong flow but no break yet sit on the watchlist until the
 # break arrives and monitor.py adds the technical points.
-WATCHLIST_FLOOR    = 30     # half of 65; candidates >= this go to shortlist.json
+# A watched ticker's score when it finally breaks is base + technical, and
+# technical is worth at most WEIGHTS["technical"]. So a name whose base sits
+# below THRESHOLD - 30 can never reach the gate however cleanly it breaks —
+# it is watched all day, it sends its heads-up, and it is incapable of
+# becoming an alert. At 30 that was everything scoring 30-39: messages Salem
+# could do nothing with, which is all he received on 2026-09-08.
+#
+# The floor is now derived, not chosen. Raise THRESHOLD and it follows.
+WATCHLIST_FLOOR    = THRESHOLD - WEIGHTS["technical"]   # 40
 # The THRESHOLD is the quality gate; this is only a volume limit. The scanner
 # sorts candidates by score and stops below the threshold, so raising this does
 # not lower the quality of any single alert — it stops discarding setups that
