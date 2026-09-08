@@ -192,7 +192,9 @@ because reading it as a sale would close a position he still holds.
   scores 0 on a call setup, 20 on a put setup
 - Liquidity (0–20): spread (percent OR cents) and open interest, measured on a
   contract Salem can actually afford
-- Alert threshold: score ≥ 85 (`config.THRESHOLD`)
+- Alert threshold: score ≥ 70 (`config.THRESHOLD`). Was 85, which no
+  live setup could reach — see the comment in config.py and
+  tests/test_threshold_is_reachable.py before raising it again.
 
 ## The JSON you receive (entry)
 ```

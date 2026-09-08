@@ -54,10 +54,34 @@ TELEGRAM_PAPER_CHAT_ID = _clean("TELEGRAM_PAPER_CHAT_ID")
 TELEGRAM_TOPIC_ID       = _clean("TELEGRAM_TOPIC_ID")
 TELEGRAM_PAPER_TOPIC_ID = _clean("TELEGRAM_PAPER_TOPIC_ID")
 
-# ── Scoring (agreed design: 30/30/20/20, threshold 85) ──────────
+# ── Scoring (agreed design: 30/30/20/20) ────────────────────────
 WEIGHTS = {"flow": 30, "technical": 30, "catalyst": 20, "liquidity": 20}
-THRESHOLD          = 85     # calibrate from journal.csv after 2-4 weeks paper
-WATCHLIST_FLOOR    = 65     # candidates >= this go to shortlist.json
+
+# THRESHOLD was 85 out of 100, and the first live session produced no alert at
+# all — and therefore no paper trade either, because the paper book only opens
+# on an alert. That was not bad luck. Two measurements, not opinions:
+#
+#   1. Without an aligned news catalyst the maximum reachable score is 80.
+#      flow 30 + technical 30 + catalyst 0 + liquidity 20 = 80 < 85. So 85
+#      made a news catalyst mandatory on every single alert — a rule nobody
+#      chose, sitting in the arithmetic.
+#   2. On 50 live UW flow alerts (2026-09-08, 10:17 ET) exactly ONE ticker of
+#      34 could reach 85 even in theory, and only with technical, catalyst and
+#      liquidity all perfect at the same moment. Measured flow scores: BE 21.2,
+#      DRAM 11.5, SMCI 11.2, AMD 10.2, MU 9.5, SPX 8.8 — out of 30.
+#
+# And the setup Salem describes — good news, a buy wave, a clean break of
+# resistance — scores 64.5 on realistic inputs. Twenty points short.
+#
+# The old comment said "calibrate from journal.csv after 2-4 weeks paper".
+# That could never happen: the journal only fills from alerts, and there were
+# none. 70 is the number that starts the loop. It is a starting point to be
+# re-derived from real results, not a settled figure.
+THRESHOLD          = 70     # re-calibrate from journal.csv after 2-4 weeks
+# Kept 20 below the threshold, as it was at 85/65. The gap is what lets a
+# ticker with strong flow but no break yet sit on the watchlist until the
+# break arrives and monitor.py adds the technical points.
+WATCHLIST_FLOOR    = 50     # candidates >= this go to shortlist.json
 # The THRESHOLD is the quality gate; this is only a volume limit. The scanner
 # sorts candidates by score and stops below the threshold, so raising this does
 # not lower the quality of any single alert — it stops discarding setups that
