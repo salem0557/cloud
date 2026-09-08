@@ -352,9 +352,39 @@ def candles(ticker, candle_size=None, timeframe="5D", limit=500, end_date=None):
     1w rows carry no start_time and no end_time at all, only `date`. Judging
     them with the intraday `end_time` rule dropped every one of them, which is
     what silently made daily_atr() return 0 for months.
+
+    ONE REQUEST IS NOT ENOUGH, and this is what stopped the whole system.
+    Measured on META, 2026-09-08 13:00 ET: UW answered `timeframe=5D` with 100
+    rows and no more, whatever `limit` asked for. Sixty of those are pre- and
+    post-market, so REGULAR_HOURS_ONLY leaves 40, and dropping the bar still
+    forming leaves 39 — against the 40 technical.analyse() requires. Off by
+    one, on every liquid ticker in the market, every scan, all day. So when a
+    page leaves too few regular bars, walk back a day and fetch another.
     """
     size = candle_size or C.CANDLE_SIZE
     daily = size in ("1d", "1w")
+    need = 0 if daily else max(C.CANDLES_LOOKBACK, C.ATR_PERIOD + 2)
+    kept, cursor, seen = [], end_date, set()
+    for page in range(C.CANDLE_PAGES):
+        got, oldest = _candle_page(ticker, size, daily, timeframe, limit, cursor)
+        fresh = [r for r in got if (r["start_time"] or r["date"]) not in seen]
+        seen.update((r["start_time"] or r["date"]) for r in fresh)
+        kept = fresh + kept
+        if len(kept) >= need or not oldest:
+            break
+        # UW's end_date searches BACKWARDS from the date given, so step one day
+        # before the oldest row we hold or the next page repeats this one.
+        try:
+            d = datetime.date.fromisoformat(oldest[:10]) - datetime.timedelta(days=1)
+        except ValueError:
+            break
+        cursor = d.isoformat()
+    kept.sort(key=lambda r: (r["start_time"] or r["date"]))
+    return kept
+
+
+def _candle_page(ticker, size, daily, timeframe, limit, end_date):
+    """One OHLC request, parsed and filtered. -> (rows, oldest raw timestamp)."""
     try:
         params = {"timeframe": timeframe, "limit": limit}
         if end_date:
@@ -367,7 +397,7 @@ def candles(ticker, candle_size=None, timeframe="5D", limit=500, end_date=None):
         # worth a data call" followed by an empty shortlist and no explanation
         # anywhere — a total failure that looked exactly like a quiet market.
         print(f"  [uw] {ticker} {size} candles failed: {e}")
-        return []
+        return [], None
     rows = []
     for c in raw:
         if not daily and C.REGULAR_HOURS_ONLY and c.get("market_time") not in (None, "r"):
@@ -397,7 +427,9 @@ def candles(ticker, candle_size=None, timeframe="5D", limit=500, end_date=None):
               f"({len(rows) - len(priced)} unpriced, "
               f"{len(priced)} priced but none closed). "
               f"Fields on row 0: {sorted(raw[0].keys())}")
-    return kept
+    oldest = min((c.get("start_time") or c.get("date") or "" for c in raw),
+                 default="") if raw else ""
+    return kept, (oldest or None)
 
 
 def _session_done(date, size):

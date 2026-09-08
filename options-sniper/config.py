@@ -149,6 +149,11 @@ MAX_PROFIT_CREDIT = 300.0    # cap on the profit term: a 900% estimate on a
 # ── 15m technical frame ─────────────────────────────────────────
 CANDLE_SIZE        = "15m"
 CANDLES_LOOKBACK   = 40     # bars used for level detection
+# How many OHLC pages uw.candles() may walk back to reach that many REGULAR
+# bars. One page is not enough: UW answers timeframe=5D with 100 rows and no
+# more, ~60 of them pre/post-market, which left 39 usable against the 40
+# needed — every liquid ticker, every scan. Two pages give roughly 80.
+CANDLE_PAGES       = 3
 ATR_PERIOD         = 14
 # Half of 1.5. Below 1.0 this stops being a volume filter at all: a bar with
 # LESS volume than the prior average now confirms a break. That is what halving
