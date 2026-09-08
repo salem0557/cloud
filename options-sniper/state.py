@@ -66,6 +66,9 @@ def record_watch(ticker):
     with locked() as s:
         if ticker in s["watched_tickers"]:
             return False
+        if (C.MAX_WATCH_PER_DAY
+                and len(s["watched_tickers"]) >= C.MAX_WATCH_PER_DAY):
+            return False        # the good one has to stay findable
         s["watched_tickers"].append(ticker)
         return True
 

@@ -79,3 +79,19 @@ def test_the_watch_reservation_does_not_consume_an_alert_slot(clean):
     before = state.capacity_left()
     state.record_watch("HWM")
     assert state.capacity_left() == before
+
+
+def test_the_day_has_a_ceiling_on_watch_notices(clean):
+    """Five arrived at once on 2026-09-08, all on obscure names, and the useful
+    one would have been indistinguishable from them. A cap is what keeps a
+    notice worth opening."""
+    sent = [state.record_watch(f"T{i}") for i in range(C.MAX_WATCH_PER_DAY + 3)]
+    assert sum(sent) == C.MAX_WATCH_PER_DAY
+    assert sent[C.MAX_WATCH_PER_DAY] is False
+
+
+def test_the_ceiling_does_not_touch_the_alert_cap(clean):
+    before = state.capacity_left()
+    for i in range(C.MAX_WATCH_PER_DAY + 3):
+        state.record_watch(f"T{i}")
+    assert state.capacity_left() == before
