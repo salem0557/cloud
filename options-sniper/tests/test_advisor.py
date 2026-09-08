@@ -83,10 +83,51 @@ def test_reaching_the_configured_target_says_get_out():
     assert action == "اخرج" and any(f"الهدف {take}%" in w for w in why)
 
 
-def test_a_healthy_position_is_held_and_says_the_number():
-    action, why = advisor.verdict(_f())
+def test_a_position_that_is_merely_fine_says_nothing():
+    """"لا انا لا اريدك ترسل تلقائي عن حالة العقد" — a status report is not
+    what he asked for. 'امسك' is the silent verdict and the caller sends
+    nothing on it."""
+    action, _why = advisor.verdict(_f())
     assert action == "امسك"
-    assert any("+2.7%" in w for w in why)
+
+
+# ── something GOOD, and only when it is new ────────────────────
+def test_crossing_a_step_for_the_first_time_is_worth_saying():
+    action, why = advisor.verdict(_f(pct=22.0, peak_pct=8.0))
+    assert action == "فرصة"
+    assert any("تجاوز +20%" in w for w in why)
+
+
+def test_the_same_step_is_not_reported_twice():
+    """A contract that crossed +40% ten minutes ago and is still there is not
+    news."""
+    action, _ = advisor.verdict(_f(pct=22.0, peak_pct=21.0))
+    assert action == "امسك"
+
+
+def test_strong_buying_is_added_to_the_good_news_not_invented_as_it():
+    """Below the take target, so this is news rather than an exit."""
+    action, why = advisor.verdict(_f(pct=25.0, peak_pct=5.0,
+                                     pressure={"ask_share": 0.82,
+                                               "volume": 900, "minutes": 10}))
+    assert action == "فرصة"
+    assert any("تجاوز +20%" in w for w in why)
+    assert any("الشراء قوي" in w for w in why)
+
+
+def test_reaching_the_target_outranks_the_good_news():
+    """+45% crosses the +40% step AND the exit target. The exit wins: a step
+    is information, a target is a decision."""
+    action, why = advisor.verdict(_f(pct=45.0, peak_pct=5.0))
+    assert action == "اخرج"
+    assert any("الهدف" in w for w in why)
+
+
+def test_a_step_crossed_while_the_idea_is_dead_still_says_get_out():
+    """Good news does not outrank a broken setup."""
+    action, _ = advisor.verdict(_f(pct=45.0, peak_pct=5.0,
+                                   tech={"level": 182.4, "close": 180.0}))
+    assert action == "اخرج"
 
 
 # ── the message ────────────────────────────────────────────────

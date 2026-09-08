@@ -274,20 +274,26 @@ def send_mine_daily():
     return False
 
 
-def watch_mine(dry_run=False):
-    """Salem's OWN open positions, on the monitor's beat.
+def watch_mine(dry_run=False, deep=False):
+    """Salem's OWN open positions — EVENTS only, on a fast beat.
 
-    This is the difference between a sender of alerts and an adviser: he does
-    not have to ask. Each position is read, and a message goes out only when
-    the verdict is 'اخرج' — or the first time it turns 'راقب'.
+    "لا انا لا اريدك ترسل تلقائي عن حالة العقد فقط ارسل ان هنالك شيء ايجابي
+     او سلبي او تنصح بالخروج ... اريدك تراقب العقد ... بشكل مكثف جدا"
 
-    Repeats are suppressed per position per verdict. An adviser that repeats
-    "اخرج" every five minutes is noise, and noise is how a real exit signal
-    gets ignored.
+    So this runs every minute rather than every five, and says nothing at all
+    about a position that is merely fine. A message goes out only when the
+    verdict CHANGES to something worth interrupting for: an exit, a warning,
+    or a gain crossing a step it had not crossed before.
+
+    `deep` re-reads where the day's money sits at that strike. The contract's
+    own price and pressure move minute by minute; strike-level flow does not,
+    and fetching it every minute would spend the request budget on a number
+    that has not changed.
     """
     import advisor
     sent = 0
     for pos in mine.open_positions():
+        sym = pos.get("option_symbol")
         try:
             tech = None
             try:
@@ -296,20 +302,34 @@ def watch_mine(dry_run=False):
                                          pos.get("direction") or "call")
             except uw.UWError:
                 tech = None
-            msg, action, _f = advisor.answer(pos, tech=tech, asked=False)
+            msg, action, f = advisor.answer(pos, tech=tech, asked=False,
+                                            deep=deep)
         except Exception as e:
-            print(f"  advisor {pos.get('option_symbol')}: {e}")
+            print(f"  advisor {sym}: {e}")
             continue
+
+        # The high-water mark is what makes a good step NEW. Recorded whether
+        # or not anything is sent, so a gain reported once is not reported
+        # again on the next tick.
+        if f.get("pct") is not None:
+            peak = pos.get("peak_pct")
+            if peak is None or f["pct"] > peak:
+                mine.set_flag(sym, "peak_pct", round(f["pct"], 2))
+        if deep and f.get("strike_net") is not None:
+            mine.set_flag(sym, "last_net", f["strike_net"])
+
         if action == "امسك":
+            # Nothing to say. Clearing the flag lets a warning that has since
+            # passed be raised again if it returns.
             if pos.get("last_advice"):
-                mine.set_flag(pos["option_symbol"], "last_advice", None)
+                mine.set_flag(sym, "last_advice", None)
             continue
-        if pos.get("last_advice") == action:
+        if pos.get("last_advice") == action and action != "فرصة":
             continue                    # already said this about this position
         if dry_run:
             print("\n" + msg)
         elif send(msg):
-            mine.set_flag(pos["option_symbol"], "last_advice", action)
+            mine.set_flag(sym, "last_advice", action)
             sent += 1
     return sent
 
@@ -361,7 +381,9 @@ def main(dry_run=False):
         print("Market closed —", market.reason())
         return
     exits = check_positions(dry_run)
-    advised = watch_mine(dry_run)
+    # The five-minute pass is the DEEP one: it re-reads strike-level flow,
+    # which the every-minute pass in the scheduler deliberately skips.
+    advised = watch_mine(dry_run, deep=True)
     entries = check_shortlist(dry_run)
     if advised:
         print(f"advice sent on {advised} of your positions")

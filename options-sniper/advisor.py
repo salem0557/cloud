@@ -87,24 +87,30 @@ def strike_net(ticker, strike, is_call, date=None):
     return None
 
 
-def read(pos, tech=None):
-    """Everything measurable about one open position, right now."""
+def read(pos, tech=None, deep=True):
+    """Everything measurable about one open position, right now.
+
+    `deep=False` skips the strike-level flow. The contract's own price and
+    pressure move minute by minute and are worth re-reading that often; where
+    the day's money sits at a strike does not, and fetching it every minute
+    would spend the request budget on a number that has not changed.
+    """
     sym = pos["option_symbol"]
     is_call = (pos.get("type") or pos.get("direction") or "call") == "call"
     q = uw.contract_quote(sym)
     now_px = (q or {}).get("price") or None
-    facts = {
+    return {
         "ticker": pos.get("ticker", ""), "strike": pos.get("strike"),
         "is_call": is_call, "entry": pos.get("entry_price"),
         "price": now_px, "pct": _pct(now_px, pos.get("entry_price")),
         "pressure": contract_pressure(sym, date=pos.get("entry_date")),
-        "strike_net": strike_net(pos.get("ticker", ""), pos.get("strike"),
-                                 is_call),
+        "strike_net": (strike_net(pos.get("ticker", ""), pos.get("strike"),
+                                  is_call) if deep else pos.get("last_net")),
         "minutes_to_close": market.minutes_to_close(),
         "held_min": _held_minutes(pos),
+        "peak_pct": pos.get("peak_pct"),
         "tech": tech,
     }
-    return facts
 
 
 def _held_minutes(pos):
@@ -115,8 +121,27 @@ def _held_minutes(pos):
     return int((datetime.datetime.now() - started).total_seconds() // 60)
 
 
+# A gain has to CROSS one of these to be worth interrupting him for. Salem
+# does not want a status report -- "فقط ارسل ان هنالك شيء ايجابي او سلبي" --
+# so a position quietly working is silent, and only a step up speaks.
+GOOD_STEPS = (20, 40, 60, 100)
+
+
+def crossed_step(pct, peak):
+    """The highest step this move has just crossed for the first time."""
+    if pct is None:
+        return None
+    was = peak if peak is not None else -999
+    hit = [s for s in GOOD_STEPS if pct >= s > was]
+    return max(hit) if hit else None
+
+
 def verdict(f):
-    """-> (action, reasons). action is 'اخرج' | 'راقب' | 'امسك'.
+    """-> (action, reasons). 'اخرج' | 'راقب' | 'فرصة' | 'امسك'.
+
+    'امسك' is SILENT. He asked not to be told that nothing happened, so a
+    position that is merely fine produces no message at all; the caller sends
+    only on the other three.
 
     Ordered by how little argument each one takes. The idea being dead beats
     a profit target, because a target reached on a setup that has already
@@ -164,26 +189,36 @@ def verdict(f):
     elif net is not None and net > 0 and out == "امسك":
         why.append(f"لسه يشترون هذا السترايك — صافي {net/1e6:+.1f}M$")
 
-    if f.get("pct") is not None and out == "امسك":
-        why.append(f"الآن {f['pct']:+.1f}%")
+    # Something GOOD, and only when it is new. A contract that crossed +40%
+    # ten minutes ago and is still there is not news.
+    if out == "امسك":
+        step = crossed_step(f.get("pct"), f.get("peak_pct"))
+        if step:
+            why.append(f"تجاوز +{step}% — الآن {f['pct']:+.1f}%")
+            if p and p["ask_share"] >= 0.70:
+                why.append(f"والشراء قوي — {p['ask_share']*100:.0f}% عند الطلب")
+            out = "فرصة"
     return out, why
 
 
 def message(f, action, why, asked=False):
     """One short message. `asked` when he asked, rather than being told."""
-    head = {"اخرج": "🔴 اخرج", "راقب": "🟡 راقب", "امسك": "🟢 امسك"}[action]
+    head = {"اخرج": "🔴 اخرج", "راقب": "🟡 راقب",
+            "فرصة": "🟢 ماشية معك", "امسك": "🟢 امسك"}[action]
     kind = "كول" if f["is_call"] else "بوت"
     lines = [f"{head} — {f['ticker']} {f['strike']:g} {kind}"]
     if f.get("price") and f.get("entry"):
         lines.append(f"${f['entry']:.2f} ← ${f['price']:.2f} "
                      f"({f['pct']:+.1f}%)")
     lines += [f"• {w}" for w in why]
+    if not why:
+        lines.append("• ما فيه شيء جديد")
     if not asked and action == "اخرج":
         lines.append("القرار قرارك — هذا ما أراه الآن")
     return "\n".join(lines)
 
 
-def answer(pos, tech=None, asked=True):
-    f = read(pos, tech=tech)
+def answer(pos, tech=None, asked=True, deep=True):
+    f = read(pos, tech=tech, deep=deep)
     action, why = verdict(f)
     return message(f, action, why, asked=asked), action, f

@@ -148,9 +148,23 @@ two words in the request are refused rather than faked:
   contract's own tape, and the net premium at that strike today. "Buyers are
   still lifting" is a fact; "liquidity is coming" is a forecast.
 
+**Events, not status.** "لا انا لا اريدك ترسل تلقائي عن حالة العقد فقط ارسل
+ان هنالك شيء ايجابي او سلبي او تنصح بالخروج". `امسك` is the SILENT verdict: a
+position that is merely fine produces no message at all. Something GOOD is
+reported too, but only when it is new — a gain crossing +20/+40/+60/+100 for
+the first time, tracked by a high-water mark on the position, so a contract
+that crossed +40% ten minutes ago and is still there says nothing.
+
+**Watched every minute, not every five** — "بشكل مكثف جدا". The scheduler
+runs a one-minute pass over open positions; the strike-level flow read stays
+on the monitor's five-minute beat, because the contract's own price and
+pressure move minute by minute and where the day's money sits at a strike
+does not.
+
 The verdict is ordered by how little argument each reason takes, and the idea
 being dead outranks the profit target — a target reached on a setup that has
-already broken is a number about to be given back.
+already broken is a number about to be given back. A target reached outranks
+good news for the same reason: a step is information, a target is a decision.
 
 A tape too thin to read is reported as unreadable, never as calm. Repeats are
 suppressed per position per verdict: an adviser that says "اخرج" every five
