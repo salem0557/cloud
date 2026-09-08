@@ -164,13 +164,16 @@ def check_shortlist(dry_run=False):
             # Not confirmed. If it is CLOSE to its level, say so once — this is
             # the early notice Salem asked for, and it is explicitly not an
             # alert.
-            if (C.WATCH_NOTICE and tech and not tech["broke_level"]
-                    and not item.get("watch_sent")):
+            if C.WATCH_NOTICE and tech and not tech["broke_level"]:
                 gap = abs(tech["level"] - tech["close"])
-                if tech["atr"] > 0 and gap <= C.APPROACH_ATR * tech["atr"]:
-                    if send_watch(t, item["direction"], tech, dry_run):
-                        item["watch_sent"] = True
-                        save_json(C.SHORTLIST_FILE, shortlist)
+                # The claim is one heads-up per name per day, so the reservation
+                # is taken BEFORE sending and from the day's state — not from a
+                # flag on the shortlist row, which the scanner overwrites every
+                # 10 minutes.
+                if (tech["atr"] > 0 and gap <= C.APPROACH_ATR * tech["atr"]
+                        and not dry_run and state.record_watch(t)):
+                    if not send_watch(t, item["direction"], tech, dry_run):
+                        state.release_watch(t)   # nothing was delivered
             if tech and tech["broke_level"]:
                 if technical.is_late(tech):
                     print(f"  {t}: break already extended — skipped")
