@@ -192,8 +192,11 @@ because reading it as a sale would close a position he still holds.
   scores 0 on a call setup, 20 on a put setup
 - Liquidity (0–20): spread (percent OR cents) and open interest, measured on a
   contract Salem can actually afford
-- Two gates, never one. ALERT (943): score ≥ 70 (`THRESHOLD`) AND room ≥ 0.38
-  ATR (`MIN_REMAINING_ATR`). PAPER (944) only: score ≥ 45 (`PAPER_THRESHOLD`)
+- Gates by KIND of setup. A CONFIRMED BREAK is judged by `BREAK_THRESHOLD`
+  (50) — price agreeing is the one input that cannot be talked into it. A
+  setup with no break is a forecast and clears `THRESHOLD` (70). ALERT (943):
+  score ≥ its own gate AND room ≥ 0.38
+  ATR (`MIN_REMAINING_ATR`). PAPER (944) only: score ≥ 35 (`PAPER_THRESHOLD`), below both
   AND room ≥ 0.05 ATR (`PAPER_MIN_REMAINING_ATR`). The band between them never
   reaches Salem — no Telegram, no daily cap, no alert journal — and exists so
   the alert gate can be re-derived from outcomes.
@@ -208,7 +211,11 @@ because reading it as a sale would close a position he still holds.
   its normal huge volume never is — on 2026-09-08 NVDA, TSLA, AAPL, MSFT, MU
   and AMD were in none of the 60 tickers scanned. Core names take their slots
   first so a busy day in small caps cannot push them out; the rest of the cap
-  still goes to the surprises the feed exists to find. `THRESHOLD` was 85, which no
+  still goes to the surprises the feed exists to find.
+- `WATCHLIST_FLOOR` is DERIVED: `THRESHOLD - WEIGHTS["technical"]`. A watched
+  name's score on a break is base + technical, so a base below that can never
+  reach the gate and would be watched forever without ever alerting. Never set
+  it by hand. `THRESHOLD` was 85, which no
   live setup could reach; see config.py and tests/test_threshold_is_reachable.py
   and tests/test_near_miss.py before moving either gate.
 

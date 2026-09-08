@@ -350,21 +350,31 @@ def main(dry_run=False, limit_tickers=None):
     # candidates are sorted by score, so the loop stops at the LOWER of the two
     # gates. Between PAPER_THRESHOLD and THRESHOLD a setup is real enough to be
     # worth measuring and not good enough to send.
-    floor = min(C.THRESHOLD, C.PAPER_THRESHOLD) if C.PAPER_NEAR_MISS else C.THRESHOLD
+    # The loop stops at the lowest gate any setup could be judged by; each
+    # candidate is then measured against its own.
+    gates = [C.THRESHOLD, C.BREAK_THRESHOLD]
+    if C.PAPER_NEAR_MISS:
+        gates.append(C.PAPER_THRESHOLD)
+    floor = min(gates)
     for cand in candidates:
         if cand["score"] < floor:
             break
+        gate = technical.alert_gate(cand["technical"])
         payload = to_payload(cand)
 
         # Two ways to end up in the paper book and not in 943: the score sits
         # in the band below the alert gate, or the break has room left but
         # under MIN_REMAINING_ATR. Either way: no Telegram, no daily cap, no
         # journal entry as an alert.
-        if cand.get("near_miss") or cand["score"] < C.THRESHOLD:
+        if cand.get("near_miss") or cand["score"] < gate:
+            # Below its own gate. It goes to the paper book only if the book is
+            # on AND it clears the paper gate — otherwise it is taken nowhere.
+            if not C.PAPER_NEAR_MISS or cand["score"] < C.PAPER_THRESHOLD:
+                continue
             payload["near_miss"] = True
             why = ("score {:.1f} < {} but >= {}".format(
-                       cand["score"], C.THRESHOLD, C.PAPER_THRESHOLD)
-                   if cand["score"] < C.THRESHOLD
+                       cand["score"], gate, C.PAPER_THRESHOLD)
+                   if cand["score"] < gate
                    else "{:.2f} ATR left, alert wants {}".format(
                        technical.remaining_atr(cand["technical"]),
                        C.MIN_REMAINING_ATR))
