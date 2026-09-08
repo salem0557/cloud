@@ -77,18 +77,43 @@ WEIGHTS = {"flow": 30, "technical": 30, "catalyst": 20, "liquidity": 20}
 # That could never happen: the journal only fills from alerts, and there were
 # none. 70 is the number that starts the loop. It is a starting point to be
 # re-derived from real results, not a settled figure.
-THRESHOLD          = 65     # re-calibrate from journal.csv after 2-4 weeks
+# 65 was still above what a real setup produces. Measured on BE at 09:45 ET
+# on 2026-09-08 — the strongest tape of the day, a textbook break on 4.86x
+# volume — with every number read from UW: flow 21.2 + technical 29.5 +
+# catalyst 0 + liquidity 8.0 = 58.7. It cleared 65 only if a news catalyst
+# happened to land too. Salem asked for it loosened until an alert arrives.
+
+# ══ HALVED FROM THE ORIGINAL DESIGN, ON SALEM'S INSTRUCTION ══════
+# "خفضها الى نص ماكانت عليه قبل اي تعديل مثلا العتبة كانت 85 اجعلها 45".
+# Every MINIMUM gate below is half of the value it shipped with, before any
+# tuning in this session. Maximum limits are untouched: halving a ceiling
+# tightens it, which is the opposite of what was asked.
+#
+#   gate                     shipped    now
+#   THRESHOLD                     85     45
+#   WATCHLIST_FLOOR               65     30
+#   MIN_REMAINING_ATR           0.75   0.38
+#   VOLUME_SPIKE_RATIO           1.5   0.75
+#   MIN_OPEN_INTEREST            300    150
+#   MIN_ASK_SIDE_RATIO          0.55   0.28
+#   MIN_DIRECTIONAL_SHARE       0.60   0.30
+#   MIN_MINUTES_TO_CLOSE          45     23
+#   MIN_TICKER_PREMIUM       250,000  100,000  (already below half)
+#
+# These are volume settings, not measurements. Nothing here was derived from
+# a result — the paper book in 944 is what will say where they belong.
+THRESHOLD          = 45     # half of the 85 it shipped with
 # The paper book's own gate, deliberately looser than the alert gate. Salem
 # asked for both to be loosened and the paper one loosened further: "سهل
 # الشروط على كل الاثنين لكن الورقي سهلها اكثر". Everything scoring between
 # PAPER_THRESHOLD and THRESHOLD is opened in 944 and never sent to 943, so a
 # month of results says what the alert gate would have earned at 55, at 60,
 # at 65 — measured, instead of argued.
-PAPER_THRESHOLD    = 55
+PAPER_THRESHOLD    = 35     # ten below the alert gate, as before
 # Kept 20 below the threshold, as it was at 85/65. The gap is what lets a
 # ticker with strong flow but no break yet sit on the watchlist until the
 # break arrives and monitor.py adds the technical points.
-WATCHLIST_FLOOR    = 50     # candidates >= this go to shortlist.json
+WATCHLIST_FLOOR    = 30     # half of 65; candidates >= this go to shortlist.json
 # The THRESHOLD is the quality gate; this is only a volume limit. The scanner
 # sorts candidates by score and stops below the threshold, so raising this does
 # not lower the quality of any single alert — it stops discarding setups that
@@ -125,17 +150,20 @@ MAX_PROFIT_CREDIT = 300.0    # cap on the profit term: a 900% estimate on a
 CANDLE_SIZE        = "15m"
 CANDLES_LOOKBACK   = 40     # bars used for level detection
 ATR_PERIOD         = 14
-VOLUME_SPIKE_RATIO = 1.5    # candle volume vs prior-bar average
+# Half of 1.5. Below 1.0 this stops being a volume filter at all: a bar with
+# LESS volume than the prior average now confirms a break. That is what halving
+# it means, and it is the first thing to put back if the alerts read thin.
+VOLUME_SPIKE_RATIO = 0.75   # candle volume vs prior-bar average
 TARGET_ATR_MULT    = 1.5    # target = broken level +/- 1.5 x ATR
 STOP_ATR_MULT      = 1.0    # stop   = broken level -/+ 1.0 x ATR
 # How much of the measured move must still be ahead of price to alert. At
 # 0.75 this rejected the two strongest names in the market on 2026-09-08 —
 # BE at +0.56 ATR and AMD at +0.71 — and the day produced no alert at all.
-MIN_REMAINING_ATR  = 0.50
+MIN_REMAINING_ATR  = 0.38   # half of 0.75
 # The paper book takes anything with room still ahead of it. Below this it is
 # not a setup, it is the top: price has effectively reached its target and an
 # entry has nothing left to collect.
-PAPER_MIN_REMAINING_ATR = 0.10
+PAPER_MIN_REMAINING_ATR = 0.05
 # A break that still has room toward its target, but less than the line above
 # demands, is NOT alerted — Salem never sees it in 943. It is opened in the
 # paper book only, so a month of results answers the question the rule cannot
@@ -216,7 +244,9 @@ MAX_SPREAD_ABS    = 0.06    # ...OR this many dollars wide, whichever is kinder.
                             # would fail a pure percentage cap — which emptied the
                             # 🔴 OTM tier on almost every scan. Cheap contracts are
                             # judged in cents, expensive ones in percent.
-MIN_OPEN_INTEREST = 300
+# 300 dropped 5 of 19 live BE strikes on 2026-09-08, among them the cheap far
+# strikes Salem trades. A same-day contract's open interest is thin by nature.
+MIN_OPEN_INTEREST = 150
 
 # ── Contract selection window ───────────────────────────────────
 MIN_DTE = 0                 # 0 = same-day expiry (0DTE) allowed — Salem's call
@@ -225,7 +255,7 @@ MAX_DTE = 45
 # 0DTE-specific. A same-day contract loses its remaining value into the close,
 # so an entry taken late in the session needs the move to happen almost at once.
 # Set to 0 to disable the cutoff entirely.
-MIN_MINUTES_TO_CLOSE = 45   # no new 0DTE alert inside this window before 16:00 ET
+MIN_MINUTES_TO_CLOSE = 23   # half of 45 — no new 0DTE alert inside this window
 
 # Assumed holding time, in trading hours, used only to price theta into the
 # profit estimate. The 15m breakout is expected to resolve within a couple of
@@ -399,8 +429,17 @@ EARNINGS_PENALTY     = 15.0
 REGIME_TICKER        = "SPY"
 REGIME_MOVE_PCT      = 1.0   # broad-market move that counts as a real tide
 REGIME_PENALTY       = 8.0
-MIN_ASK_SIDE_RATIO   = 0.55  # below this the premium was mostly sold, not bought
-MIN_DIRECTIONAL_SHARE = 0.60 # below this the volume is mostly spread legs, which
+# Half of 0.55. At 0.28 a tape that is 72% SOLD still passes as buying, so a
+# bearish flow can carry a call setup through. Of everything halved here this
+# is the one that can turn a real signal upside down — put it back first.
+MIN_ASK_SIDE_RATIO   = 0.28  # below this the premium was mostly sold, not bought
+# The advisor keeps the ORIGINAL 0.55, deliberately. MIN_ASK_SIDE_RATIO is an
+# ENTRY gate — halving it lets more setups through, which is what was asked.
+# This one is an EXIT warning on a position Salem is already holding, and
+# halving that would silence the warning instead of opening a door. Loosening
+# the way in must never quiet the way out.
+ADVISOR_PRESSURE_FLOOR = 0.55
+MIN_DIRECTIONAL_SHARE = 0.30 # half of 0.60; below this the volume is mostly spread legs, which
                              # say nothing about direction — a live screen found
                              # a contract at 98% multi-leg that would have scored
                              # as a huge one-way bet

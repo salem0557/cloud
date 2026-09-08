@@ -193,3 +193,44 @@ def test_a_missing_delta_or_quote_returns_zero_rather_than_a_guess():
     assert breakeven_move({"bid": 1.0, "ask": 1.1, "delta": 0}) == 0.0
     assert breakeven_move({"bid": 0, "ask": 1.1, "delta": 0.4}) == 0.0
     assert breakeven_move({}) == 0.0
+
+
+# ── The tier Salem actually trades ──────────────────────────────
+# Measured on BE's live chain, 2026-09-08. The score judged every spread as a
+# percentage, so the cheap far strikes his budget bands target could not score
+# however tight their book was — while a contract he cannot afford scored top
+# marks for being ten times wider in cash terms.
+
+def test_a_cheap_contract_quoted_tight_in_cents_scores_like_a_liquid_one():
+    """$0.30/$0.34 is 12.5% and 4 cents. Four cents is a tight book."""
+    cheap = {"bid": 0.30, "ask": 0.34, "open_interest": 995}
+    assert liquidity_score(cheap) >= 14, (
+        "the tier Salem buys still cannot score")
+
+
+def test_an_expensive_contract_is_still_judged_in_percent():
+    """The kinder-of-the-two rule must not hand out marks to a wide book just
+    because the ticker is expensive: 20 cents on a $14 contract is 1.4%, and
+    it scores on that, exactly as before."""
+    dear = {"bid": 14.25, "ask": 14.45, "open_interest": 4413}
+    assert 17.0 <= liquidity_score(dear) <= 18.5
+
+
+def test_a_genuinely_wide_book_still_scores_badly():
+    """Neither measure rescues this: 30 cents wide on a $0.45 contract."""
+    bad = {"bid": 0.30, "ask": 0.60, "open_interest": 995}
+    assert liquidity_score(bad) <= 8
+
+
+def test_the_cheap_and_the_dear_are_ranked_by_their_book_not_their_price():
+    """A 4-cent book beats a 20-cent book once open interest is comparable."""
+    tight_cheap = {"bid": 0.30, "ask": 0.34, "open_interest": 4000}
+    wide_dear = {"bid": 14.25, "ask": 14.45, "open_interest": 4000}
+    assert liquidity_score(tight_cheap) > liquidity_score(wide_dear)
+
+
+def test_open_interest_full_marks_are_reachable_for_a_short_dated_strike():
+    """A same-day far strike carries hundreds of contracts, not thousands.
+    Full marks scaled to 2,000 were unreachable for the whole tier."""
+    short_dated = {"bid": 1.05, "ask": 1.09, "open_interest": 1200}
+    assert liquidity_score(short_dated) >= 18
