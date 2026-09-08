@@ -170,12 +170,13 @@ def is_near_miss(tech):
     """Broke its level, still has room toward the target — but less than the
     rule demands. Not an alert. A paper test of the rule itself.
 
-    Strictly inside [0, MIN_REMAINING_ATR): a break that has already passed
-    its target has negative room and is never a near miss, it is the top.
+    Inside [PAPER_MIN_REMAINING_ATR, MIN_REMAINING_ATR): a break that has
+    reached or passed its target has no room worth buying and is never a near
+    miss, it is the top.
     """
     if not tech or not tech.get("broke_level"):
         return False
-    return 0.0 <= remaining_atr(tech) < C.MIN_REMAINING_ATR
+    return C.PAPER_MIN_REMAINING_ATR <= remaining_atr(tech) < C.MIN_REMAINING_ATR
 
 
 def confirms(tech):

@@ -1,17 +1,19 @@
-"""A break the alert rule rejects by a hair, taken on paper only.
+"""Two gates: one for what Salem sees, a looser one for what gets measured.
 
-Measured 2026-09-08 on the two strongest names in the market, both rejected
-and both of which would have lost money:
+    ALERT (943)   score >= THRESHOLD          and room >= MIN_REMAINING_ATR
+    PAPER (944)   score >= PAPER_THRESHOLD    and room >= PAPER_MIN_REMAINING_ATR
+    DROPPED       below either paper floor
 
-    BE  09:45   +0.56 ATR left   close 278.44 -> 276 within the hour
-    AMD 10:15   +0.71 ATR left   close 500.00 -> 499
+The band between them is the point. A setup that is real enough to be worth
+measuring but not good enough to send goes into the paper book alone, so the
+alert gate can be re-derived from a month of outcomes instead of argued over.
 
-MIN_REMAINING_ATR is 0.75. One session cannot say whether that number earns
-its place, so the rejected setups go into the paper book and a month of real
-outcomes answers it.
+Measured 2026-09-08, the two strongest names in the market, at the old 0.75:
+BE was rejected at +0.56 ATR and AMD at +0.71, and the day produced no alert
+at all. Both now clear the loosened alert gate.
 
-The rule that must never bend: none of this reaches Salem. No Telegram, no
-daily cap, no alert journal. He sees 943; this lives in 944.
+The line that must never bend: nothing in the paper band reaches Salem. No
+Telegram, no daily cap, no alert journal. He sees 943; this lives in 944.
 """
 import sys
 import pathlib
@@ -30,10 +32,17 @@ def _tech(remaining, broke=True):
 
 
 # ── What counts as a near miss ──────────────────────────────────
-def test_room_left_but_under_the_rule_is_a_near_miss():
-    """AMD's 10:15 bar: 0.71 ATR left where the rule wants 0.75."""
-    assert technical.is_near_miss(_tech(0.71))
-    assert technical.is_late(_tech(0.71))       # still not an alert
+def test_room_left_but_under_the_alert_gate_is_a_near_miss():
+    assert technical.is_near_miss(_tech(0.30))
+    assert technical.is_late(_tech(0.30))       # still not an alert
+
+
+def test_the_two_names_that_produced_no_alert_now_clear_the_alert_gate():
+    """BE +0.56 and AMD +0.71 on 2026-09-08. Neither is a paper-only trade
+    any more; both are alerts. This is what loosening the gate bought."""
+    for room in (0.56, 0.71):
+        assert not technical.is_late(_tech(room))
+        assert not technical.is_near_miss(_tech(room))
 
 
 def test_a_break_past_its_target_is_never_a_near_miss():
@@ -44,6 +53,9 @@ def test_a_break_past_its_target_is_never_a_near_miss():
     """
     assert not technical.is_near_miss(_tech(-3.38))
     assert not technical.is_near_miss(_tech(-0.01))
+    # Nor one that has all but reached it: below the paper floor there is
+    # nothing left for an entry to collect.
+    assert not technical.is_near_miss(_tech(C.PAPER_MIN_REMAINING_ATR - 0.01))
 
 
 def test_a_setup_with_enough_room_is_a_normal_alert_not_a_test():
@@ -160,7 +172,7 @@ FLOW = {"premium_usd": 1_000_000, "underlying_price": 500.0,
 
 
 def test_evaluate_flags_a_near_miss_instead_of_dropping_it(monkeypatch):
-    scanner = _wire_evaluate(monkeypatch, 0.71)
+    scanner = _wire_evaluate(monkeypatch, 0.30)
     monkeypatch.setattr(C, "PAPER_NEAR_MISS", True)
     cand = scanner.evaluate("AMD", FLOW)
     assert cand is not None, "the near miss was dropped before the paper book"
@@ -176,7 +188,7 @@ def test_evaluate_drops_a_break_past_its_target_even_with_the_flag_on(monkeypatc
 def test_turning_the_flag_off_restores_the_old_behaviour(monkeypatch):
     """PAPER_NEAR_MISS=0 in the environment and the near miss is dropped
     exactly as it was before, with nothing reaching the paper book."""
-    scanner = _wire_evaluate(monkeypatch, 0.71)
+    scanner = _wire_evaluate(monkeypatch, 0.30)
     monkeypatch.setattr(C, "PAPER_NEAR_MISS", False)
     assert scanner.evaluate("AMD", FLOW) is None
 
@@ -186,3 +198,80 @@ def test_a_normal_setup_is_not_flagged(monkeypatch):
     monkeypatch.setattr(C, "PAPER_NEAR_MISS", True)
     cand = scanner.evaluate("AMD", FLOW)
     assert cand is not None and cand["near_miss"] is False
+
+
+# ── The score band between the two gates ────────────────────────
+def test_the_two_gates_are_ordered():
+    """A paper gate above the alert gate would silence 943 completely."""
+    assert C.PAPER_THRESHOLD < C.THRESHOLD
+    assert C.PAPER_MIN_REMAINING_ATR < C.MIN_REMAINING_ATR
+    assert C.PAPER_MIN_REMAINING_ATR > 0, "a break at its target has nothing left"
+    assert C.WATCHLIST_FLOOR <= C.PAPER_THRESHOLD, (
+        "a name below the paper gate would be watched forever and never taken")
+
+
+def _wire_main(monkeypatch, cand, shortlist_name):
+    import scanner
+    sent, recorded, reserved = [], [], []
+    monkeypatch.setattr(scanner, "send", lambda m: sent.append(m) or 1)
+    monkeypatch.setattr(scanner.paper, "record",
+                        lambda p, tier=None: recorded.append(p) or {})
+    monkeypatch.setattr(scanner.state, "record_alert",
+                        lambda t: reserved.append(t) or True)
+    monkeypatch.setattr(scanner.market, "is_open", lambda *a: True)
+    monkeypatch.setattr(scanner.state, "capacity_left", lambda: 30)
+    monkeypatch.setattr(scanner.state, "read", lambda: {"alerted_tickers": []})
+    monkeypatch.setattr(scanner.uw, "flow_alerts", lambda *a, **k: [])
+    monkeypatch.setattr(scanner.uw, "spent", lambda: "")
+    monkeypatch.setattr(scanner.finviz, "movers", lambda **k: [])
+    monkeypatch.setattr(scanner, "to_payload",
+                        lambda c: {"ticker": c["ticker"], "tiers": [],
+                                   "score": c["score"]})
+    monkeypatch.setattr(scanner, "aggregate_flow",
+                        lambda a: {cand["ticker"]: {"premium_usd": 1e6}})
+    monkeypatch.setattr(scanner, "evaluate", lambda t, f, d=False: cand)
+    monkeypatch.setattr(scanner, "compose", lambda kind, p: "alert text")
+    monkeypatch.setattr(scanner.mine, "remember_alert", lambda mid, p: None)
+    monkeypatch.setattr(scanner.journal, "log_alert", lambda p, kind=None: None)
+    monkeypatch.setattr(C, "MIN_TICKER_PREMIUM", 0)
+    monkeypatch.setattr(C, "SHORTLIST_FILE", pathlib.Path(shortlist_name))
+    scanner.main()
+    return sent, recorded, reserved
+
+
+def _cand(score, room):
+    return {"ticker": "AMD", "score": score, "direction": "call", "spot": 500.0,
+            "near_miss": False,
+            "score_breakdown": {"flow": 10.2, "technical": 27.9,
+                                "catalyst": 12.0, "liquidity": 10.0},
+            "technical": _tech(room)}
+
+
+def test_a_score_inside_the_band_goes_to_paper_and_not_to_telegram(monkeypatch):
+    """Real enough to measure, not good enough to send."""
+    mid = (C.PAPER_THRESHOLD + C.THRESHOLD) / 2
+    sent, recorded, reserved = _wire_main(monkeypatch, _cand(mid, 2.0), "/tmp/_b1.json")
+    assert sent == [], "a setup below the alert gate reached Telegram"
+    assert reserved == [], "it consumed one of the day's alert slots"
+    assert len(recorded) == 1 and recorded[0]["near_miss"] is True
+
+
+def test_a_score_above_the_alert_gate_is_sent(monkeypatch):
+    sent, recorded, _ = _wire_main(monkeypatch, _cand(C.THRESHOLD + 5, 2.0),
+                                   "/tmp/_b2.json")
+    assert len(sent) == 1, "a qualifying setup was not sent"
+    assert len(recorded) == 1 and not recorded[0].get("near_miss")
+
+
+def test_a_score_below_the_paper_gate_is_taken_nowhere(monkeypatch):
+    sent, recorded, _ = _wire_main(monkeypatch, _cand(C.PAPER_THRESHOLD - 1, 2.0),
+                                   "/tmp/_b3.json")
+    assert sent == [] and recorded == []
+
+
+def test_the_band_closes_when_the_paper_book_is_off(monkeypatch):
+    """PAPER_NEAR_MISS=0 and the scanner stops at the alert gate, as before."""
+    monkeypatch.setattr(C, "PAPER_NEAR_MISS", False)
+    mid = (C.PAPER_THRESHOLD + C.THRESHOLD) / 2
+    sent, recorded, _ = _wire_main(monkeypatch, _cand(mid, 2.0), "/tmp/_b4.json")
+    assert sent == [] and recorded == []

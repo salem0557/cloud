@@ -205,9 +205,14 @@ def check_shortlist(dry_run=False):
         if base is None:                       # shortlist from an older scanner run
             base = item["score"]
         score = round(min(100.0, base + technical_score(tech)), 1)
-        if score < C.THRESHOLD:
-            print(f"  {t}: break confirmed but score {score} < {C.THRESHOLD}")
+        floor = min(C.THRESHOLD, C.PAPER_THRESHOLD) if C.PAPER_NEAR_MISS else C.THRESHOLD
+        if score < floor:
+            print(f"  {t}: break confirmed but score {score} < {floor}")
             continue
+        if score < C.THRESHOLD:
+            # Real enough to measure, not good enough to send. Same band the
+            # scanner uses, so both paths feed the paper book the same way.
+            near_miss = True
 
         try:
             chain = uw.option_chain(t)

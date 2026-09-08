@@ -289,19 +289,29 @@ def main(dry_run=False, limit_tickers=None):
     print(f"Shortlist ({len(shortlist)}): {[x['ticker'] for x in shortlist]}")
 
     sent = 0
+    # candidates are sorted by score, so the loop stops at the LOWER of the two
+    # gates. Between PAPER_THRESHOLD and THRESHOLD a setup is real enough to be
+    # worth measuring and not good enough to send.
+    floor = min(C.THRESHOLD, C.PAPER_THRESHOLD) if C.PAPER_NEAR_MISS else C.THRESHOLD
     for cand in candidates:
-        if cand["score"] < C.THRESHOLD:
+        if cand["score"] < floor:
             break
         payload = to_payload(cand)
 
-        # Never reaches Salem: no Telegram, no daily cap, no journal entry as
-        # an alert. It goes into the paper book alone, and closes there on the
-        # same rules as any other paper trade.
-        if cand.get("near_miss"):
+        # Two ways to end up in the paper book and not in 943: the score sits
+        # in the band below the alert gate, or the break has room left but
+        # under MIN_REMAINING_ATR. Either way: no Telegram, no daily cap, no
+        # journal entry as an alert.
+        if cand.get("near_miss") or cand["score"] < C.THRESHOLD:
             payload["near_miss"] = True
+            why = ("score {:.1f} < {} but >= {}".format(
+                       cand["score"], C.THRESHOLD, C.PAPER_THRESHOLD)
+                   if cand["score"] < C.THRESHOLD
+                   else "{:.2f} ATR left, alert wants {}".format(
+                       technical.remaining_atr(cand["technical"]),
+                       C.MIN_REMAINING_ATR))
             if not dry_run and paper.record(payload):
-                print(f"  {cand['ticker']}: opened in the paper book only "
-                      f"(near miss, not alerted)")
+                print(f"  {cand['ticker']}: paper book only — {why}")
             continue
 
         # Final read. An unreachable analyst returns None and the alert goes

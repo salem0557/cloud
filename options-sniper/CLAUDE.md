@@ -192,9 +192,13 @@ because reading it as a sale would close a position he still holds.
   scores 0 on a call setup, 20 on a put setup
 - Liquidity (0–20): spread (percent OR cents) and open interest, measured on a
   contract Salem can actually afford
-- Alert threshold: score ≥ 70 (`config.THRESHOLD`). Was 85, which no
-  live setup could reach — see the comment in config.py and
-  tests/test_threshold_is_reachable.py before raising it again.
+- Two gates, never one. ALERT (943): score ≥ 65 (`THRESHOLD`) AND room ≥ 0.50
+  ATR (`MIN_REMAINING_ATR`). PAPER (944) only: score ≥ 55 (`PAPER_THRESHOLD`)
+  AND room ≥ 0.10 ATR (`PAPER_MIN_REMAINING_ATR`). The band between them never
+  reaches Salem — no Telegram, no daily cap, no alert journal — and exists so
+  the alert gate can be re-derived from outcomes. `THRESHOLD` was 85, which no
+  live setup could reach; see config.py and tests/test_threshold_is_reachable.py
+  and tests/test_near_miss.py before moving either gate.
 
 ## The JSON you receive (entry)
 ```
