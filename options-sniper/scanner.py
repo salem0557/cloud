@@ -164,6 +164,16 @@ def tradable_chain(chain):
 
 
 def build_tiers(cand):
+    """The three contracts, with everything the message needs on each.
+
+    monitor.py used to build this dict by hand and left out `dte` and `exit`,
+    so an alert from the watchlist path — the one Salem actually receives —
+    arrived with no expiry tag, no exit plan, no hold clock and no hard-exit
+    line. It read like a swing trade on a contract that expires tonight.
+
+    One builder, called from both paths, is the only version of this that
+    cannot drift again.
+    """
     move = cand["technical"]["expected_move"]
     picks = pick_contracts_by_budget(tradable_chain(cand["chain"]),
                                      cand["direction"], cand["spot"],
@@ -251,6 +261,12 @@ def main(dry_run=False, limit_tickers=None):
                   # technical component. monitor.py re-adds technicals from a fresh
                   # break so the two layers never double-count the same 30 points.
                   "base_score": round(c["score"] - c["score_breakdown"]["technical"], 1),
+                  # The three components the monitor cannot recompute. Without
+                  # them a watchlist alert had no breakdown line at all, and
+                  # "did the factors line up" is exactly how Salem judges a
+                  # setup.
+                  "base_breakdown": {k: c["score_breakdown"][k] for k in
+                                     ("flow", "catalyst", "liquidity")},
                   "direction": c["direction"], "spot": c["spot"],
                   "level": c["technical"]["level"],
                   "target": c["technical"]["target"],

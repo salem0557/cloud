@@ -23,10 +23,9 @@ import state
 import technical
 import uw
 from compose import compose, NO_TRADE
-from scanner import aggregate_flow, flow_reason
-from scoring import (ask_side_ratio, contract_cost, exit_rule,
-                     expected_profit_pct, flow_direction,
-                     technical_score, pick_contracts_by_budget)
+from scanner import aggregate_flow, build_tiers, flow_reason
+from scoring import (ask_side_ratio, exit_rule, flow_direction,
+                     technical_score)
 from telegram_send import send
 
 
@@ -208,25 +207,19 @@ def check_shortlist(dry_run=False):
         except uw.UWError as e:
             print(f"  {t}: {e}")
             continue
-        move = tech["expected_move"]
-        picks = pick_contracts_by_budget(chain, item["direction"], tech["close"],
-                                         expected_move=move,
-                                         atr=tech.get("atr", 0.0))
-        tiers = []
-        for label, c in picks:
-            if c is None:
-                tiers.append({"tier": label, "option_symbol": None})
-            else:
-                tiers.append({
-                    "tier": label, "option_symbol": c["option_symbol"],
-                    "strike": c["strike"], "type": c["type"], "expiry": c["expiry"],
-                    "ask": c["ask"], "bid": c["bid"], "cost": contract_cost(c),
-                    "delta": c["delta"], "open_interest": c["open_interest"],
-                    "expected_profit_pct": expected_profit_pct(c, move),
-                })
+        # The SAME builder the scanner uses. Hand-rolling it here dropped
+        # `dte` and `exit`, and an alert without those has no expiry tag, no
+        # exit plan, no hold clock and no hard-exit line — a same-day contract
+        # presented as if it had all week.
+        tiers = build_tiers({"chain": chain, "direction": item["direction"],
+                             "spot": tech["close"], "technical": tech})
 
+        breakdown = dict(item.get("base_breakdown") or {})
+        if breakdown:
+            breakdown["technical"] = round(technical_score(tech), 1)
         payload = {"ticker": t, "score": score, "direction": item["direction"],
                    "spot": tech["close"], "technical": tech, "tiers": tiers,
+                   "score_breakdown": breakdown,
                    "flow_reason": (flow_reason(fresh, item["direction"]) if fresh
                                    else "كسر مؤكد على فريم 15د بعد تدفق خيارات"),
                    "news": [], "time_riyadh": now_riyadh()}
@@ -246,6 +239,11 @@ def check_shortlist(dry_run=False):
             break
         if send(msg):
             journal.log_alert(payload)
+            # scanner.py recorded its alerts in the paper book and this path
+            # did not, so the paper month was scoring a different and smaller
+            # population than the one Salem actually receives — and the
+            # watchlist path is the one he designed and uses.
+            paper.record(payload)
             sent += 1
         else:
             state.release_alert(t)
