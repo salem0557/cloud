@@ -39,6 +39,15 @@ nobody had on a list, and a fixed universe would have excluded it by
 definition. Liquidity is a measured filter (`--max-spread`), never a list of
 names.
 
+> ⚠️ **The two sections below were measured BEFORE the clock fix**, when UW's
+> UTC timestamps were read as New York. That run stopped entering at 11:30 in
+> the morning and measured two hours while claiming to measure the day, so
+> every figure in them describes a window, not a session. They are kept
+> because the REASONING still holds — a tight stop manufactures losses, the
+> lever is the stop — but do not quote their numbers. The current figures are
+> `config.PAPER_BASELINE` and `config.WALK_FORWARD`, and the only one not
+> flattered by hindsight is the walk-forward one.
+
 ### The pair the live system uses, and why (measured 2026-08-10 to 09-04)
 
 `EXIT_RULES` for 0DTE is **+40% / -30%**, from 796 gated trades over 9 usable
@@ -191,16 +200,41 @@ That renderer is the reference; match it rather than this sketch if they differ.
 {أي سطر من gaps مسبوقاً بـ ⚠️}
 
 اشترِ الآن:
-🟢 <200$: {strike} {كول|بوت} @ ${ask} → {cost}$ للعقد
+🟢 <200$: {strike} {كول|بوت} ⚡اليوم @ ${ask} → {cost}$ للعقد
+    لا تشتري فوق ${cap} · يتعادل لو تحرك السهم {even}$
 🟡 <100$: ...
 🔴 <50$: ما فيه عقد مناسب
 
 بِع عند +{take}%  |  اقطع عند {stop}%
+ما تحرك خلال {MAX_HOLD_MIN} دقيقة؟ اخرج — الفكرة ماتت
+اخرج قبل {ZERO_DTE_HARD_EXIT_ET} نيويورك مهما صار
 
 ⚠️ {caution إن وُجد}
-⏰ {time_riyadh} — الأرقام تقديرية لا مضمونة
+⏰ {time_riyadh} — هذا سعر تلك اللحظة
+تحقق من السعر قبل الشراء. الأرقام تقديرية لا مضمونة
 ```
+
+The header line under the score is the breakdown — `تدفق 28/30 · فني 26/30 ·
+خبر 20/20 · سيولة 14/20` — because "did the factors line up" is how Salem
+judges a setup and one folded score cannot answer it.
 A tier with `option_symbol: null` reads `{tier}: ما فيه عقد مناسب`.
+
+## Both alert paths build tiers with ONE function
+
+`scanner.build_tiers()`. monitor.py used to build the same dict by hand and
+omitted `dte` and `exit`, so an alert from the watchlist path — the one Salem
+actually receives — had no expiry tag, no exit plan, no hold clock and no
+hard-exit line: a contract expiring TONIGHT presented as if it had all week.
+The scanner path was correct, so every test passed.
+
+Two consequences worth keeping in mind when touching either file:
+
+- The shortlist carries `base_breakdown` (flow, catalyst, liquidity) because
+  the monitor can only recompute the technical 30. Without it a watchlist
+  alert has no breakdown line.
+- **Both paths must call `paper.record()`.** monitor.py did not, so the paper
+  month was scoring a smaller and different population than the one he
+  receives. A paper record measuring the wrong trades is worse than none.
 
 ## How an alert is actually produced
 
