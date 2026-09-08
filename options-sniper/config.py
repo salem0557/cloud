@@ -256,7 +256,17 @@ PAPER_NEAR_MISS = os.environ.get("PAPER_NEAR_MISS", "1").lower() in ("1", "true"
 # turn it off.
 WATCH_NOTICE       = int(os.environ.get("WATCH_NOTICE") or 1)
 APPROACH_ATR       = 0.60    # within this much of the level -> worth watching
-MIN_MAGNET_SHARE   = 0.15    # a strike taking under 15% of net flow is noise   # reject a setup whose target is already this close.
+MIN_MAGNET_SHARE   = 0.15    # a strike taking under 15% of net flow is noise
+# Share alone is not enough: 100% of nothing is still nothing. Three of the
+# five watch notices sent on 2026-09-08 read "صافي 0.0M$ شراء، 100% من تدفق
+# اليوم" — a strike with no money behind it, presented as where the money is.
+MIN_MAGNET_PREMIUM = 250_000
+# And a strike 35% away from price is not a magnet, it is a lottery ticket.
+# LYTE's notice pointed at one 35.1% away, DYN's at 20.8%, GH's at 10.7%.
+# Nothing that far can be reached inside the hold this system trades.
+MAX_MAGNET_DISTANCE_PCT = 8.0
+# The good notice has to be findable. Five at once on obscure names buries it.
+MAX_WATCH_PER_DAY  = 5
                             # Without it the scanner alerts on breakouts that have
                             # ALREADY run to target: price $102.40, target $102.58,
                             # 18c of room left and an "expected profit" of 6%.

@@ -11,6 +11,7 @@ import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import compose
+import config as C
 import uw
 
 
@@ -27,12 +28,14 @@ def test_the_magnet_is_where_money_is_ACCUMULATED_not_where_volume_is(monkeypatc
     """On the real NVDA tape the biggest gross strike was 230 at $61M bought —
     and $56M sold against it. Ranking on gross picks a strike being
     distributed; net picks the one being built."""
+    # Strikes kept inside MAX_MAGNET_DISTANCE_PCT so this measures the ranking
+    # and nothing else. The distance rule has its own tests below.
     monkeypatch.setattr(uw, "strike_flow", lambda t, d=None: rows(
-        (230, 61, 56, 0, 0),      # huge gross, net +5
-        (250, 12, 2, 0, 0),       # smaller gross, net +10
+        (232, 61, 56, 0, 0),      # huge gross, net +5
+        (236, 12, 2, 0, 0),       # smaller gross, net +10
     ))
     m = uw.magnet_strike("NVDA", "call", 228.0)
-    assert m["strike"] == 250.0
+    assert m["strike"] == 236.0
     assert m["net_premium"] == 10_000_000
 
 
@@ -132,3 +135,45 @@ def test_a_watch_notice_never_goes_through_the_composer():
         "technical": {"close": 100.0, "level": 100.5, "atr": 1.0},
         "magnet": None})
     assert "مو تنبيه دخول" in text
+
+
+# ── What a magnet is not ────────────────────────────────────────
+# Five watch notices went out on 2026-09-08. Three of them read
+# "صافي 0.0M$ شراء، 100% من تدفق اليوم" — a strike with no money on it,
+# presented as where the money is. One pointed at a strike 35.1% from price.
+# Salem, on receiving them: "كلها مراقبة ايش استفيد".
+
+def test_a_strike_with_no_money_on_it_is_not_a_magnet(monkeypatch):
+    """100% of nothing is still nothing. Share alone could never catch this."""
+    tiny = C.MIN_MAGNET_PREMIUM / 1e6 / 10
+    monkeypatch.setattr(uw, "strike_flow", lambda t, d=None: rows(
+        (232, tiny, 0, 0, 0),
+    ))
+    assert uw.magnet_strike("NVDA", "call", 228.0) is None
+
+
+def test_a_strike_far_out_of_reach_is_not_a_magnet(monkeypatch):
+    """LYTE's notice pointed at a strike 35.1% away. Nothing that far is
+    reachable inside the hold this system trades — it is a lottery ticket,
+    not a bet price is walking into."""
+    monkeypatch.setattr(uw, "strike_flow", lambda t, d=None: rows(
+        (308, 20, 0, 0, 0),       # 35% above 228
+    ))
+    assert uw.magnet_strike("NVDA", "call", 228.0) is None
+
+
+def test_a_reachable_strike_with_real_money_still_is_one(monkeypatch):
+    monkeypatch.setattr(uw, "strike_flow", lambda t, d=None: rows(
+        (236, 20, 0, 0, 0),
+    ))
+    m = uw.magnet_strike("NVDA", "call", 228.0)
+    assert m and m["strike"] == 236.0
+    assert m["distance_pct"] <= C.MAX_MAGNET_DISTANCE_PCT
+    assert m["net_premium"] >= C.MIN_MAGNET_PREMIUM
+
+
+def test_the_same_rules_apply_to_the_put_side(monkeypatch):
+    monkeypatch.setattr(uw, "strike_flow", lambda t, d=None: rows(
+        (140, 0, 0, 20, 0),       # 38% below 228
+    ))
+    assert uw.magnet_strike("NVDA", "put", 228.0) is None

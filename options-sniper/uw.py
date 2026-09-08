@@ -600,11 +600,19 @@ def magnet_strike(ticker, direction, spot, date=None):
         return None
     total = sum(n for n, _ in nets)
     net, row = max(nets, key=lambda pair: pair[0])
+    # A strike is only a magnet if there is real money on it AND price could
+    # plausibly get there. Neither test was applied, so notices went out saying
+    # "0.0M$ bought, 100% of today's flow" about a strike 35% away.
+    if net < C.MIN_MAGNET_PREMIUM:
+        return None
+    distance = abs(row["strike"] - spot) / spot * 100
+    if C.MAX_MAGNET_DISTANCE_PCT and distance > C.MAX_MAGNET_DISTANCE_PCT:
+        return None
     return {
         "strike": row["strike"],
         "net_premium": round(net, 0),
         "share": round(net / total, 3) if total else 0.0,
-        "distance_pct": round(abs(row["strike"] - spot) / spot * 100, 2),
+        "distance_pct": round(distance, 2),
         "volume": row["call_volume"] if up else row["put_volume"],
     }
 
