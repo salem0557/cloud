@@ -441,13 +441,39 @@ SESSION_WINDOWS = [
 #   per scan  = 1 (flow feed) + FINVIZ_LOOKUPS + 3 x CANDIDATES  (+ risk calls)
 #   per day   = that x ~39 scans, plus the monitor's ~3 per shortlist name
 FLOW_ALERT_LIMIT        = int(os.environ.get("FLOW_ALERT_LIMIT") or 500)
-MAX_CANDIDATES_PER_SCAN = int(os.environ.get("MAX_CANDIDATES_PER_SCAN") or 60)
+# Raised with CORE_TICKERS: the core names take their slots first, and at 60
+# they would have eaten half the scan, squeezing out the surprises the flow
+# feed exists to find. Measured cost at 80: ~390 UW requests a scan, ~15,000 a
+# day with the monitor, against a 30,000 allowance. Read uw.spent().
+MAX_CANDIDATES_PER_SCAN = int(os.environ.get("MAX_CANDIDATES_PER_SCAN") or 80)
 # Measured on 50 live UW flow alerts (2026-09-08): $250k dropped 25 of 34
 # tickers before a single data call, and the scan was nowhere near its
 # 60-candidate ceiling — so the filter was discarding names the budget could
 # comfortably afford. Cost at the new level: roughly 9,000 UW requests a day
 # against a 30,000 allowance. Read uw.spent() before moving it again.
 MIN_TICKER_PREMIUM      = 100_000   # skip tickers below this daily premium
+
+# ── Names that are ALWAYS looked at ─────────────────────────────
+# Discovery is flow-driven, and UW's flow-alert feed lists what is UNUSUAL.
+# A mega-cap trading its normal enormous volume is never unusual, so it never
+# gets flagged — and Finviz's movers screen misses it too, because 2% on NVDA
+# is not a mover. The 2026-09-08 13:00 scan proves it: 60 tickers evaluated,
+# and NVDA, TSLA, AAPL, MSFT, MU, AMD, SPY and QQQ were in none of them.
+#
+# That day NVDA fell 233.24 -> 225.81 (its 225 put 0.25 -> 1.60) and TSLA ran
+# 357.25 -> 370.00 (its 370 call 1.09 -> 3.75). Neither was ever looked at.
+#
+# This list does NOT replace flow discovery — the surprises Salem asked for
+# ("اريد ايضا المفاجات مثلا اوبر") still come from the feed and from Finviz.
+# It guarantees the big names are never simply absent.
+#
+# Cost: one flow lookup each for the ones the feed did not already carry, then
+# the usual per-candidate calls. Roughly 4,000-6,000 UW requests a day on top
+# of the current ~12,000, against a 30,000 allowance. Read uw.spent().
+CORE_TICKERS = [t.strip().upper() for t in (os.environ.get("CORE_TICKERS") or
+    "NVDA,TSLA,AAPL,MSFT,AMZN,GOOGL,META,AVGO,AMD,MU,NFLX,PLTR,COIN,MSTR,"
+    "SMCI,INTC,QCOM,ARM,TSM,ORCL,CRWD,JPM,BAC,XOM,LLY,UNH,"
+    "SPY,QQQ,IWM,SPX,NDX").split(",") if t.strip()]
 
 # ── Finviz Elite (candidate discovery only — never scored) ──────
 # Finviz costs nothing per ticker: one screener request returns every row, and

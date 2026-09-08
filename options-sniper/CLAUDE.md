@@ -202,7 +202,13 @@ because reading it as a sale would close a position he still holds.
   by a rally was invisible before. Between the open and the third bar the
   OPENING RANGE (`OPENING_RANGE_BARS`) is the level instead, at a higher volume
   bar (`OPENING_VOLUME_RATIO`), and those alerts are tagged 🌅. ATR and the
-  volume average still use the full `CANDLES_LOOKBACK` window. `THRESHOLD` was 85, which no
+  volume average still use the full `CANDLES_LOOKBACK` window.
+- `CORE_TICKERS` is always evaluated, whatever its premium and whether or not
+  UW flagged it. Flow discovery lists what is UNUSUAL, and a mega-cap trading
+  its normal huge volume never is — on 2026-09-08 NVDA, TSLA, AAPL, MSFT, MU
+  and AMD were in none of the 60 tickers scanned. Core names take their slots
+  first so a busy day in small caps cannot push them out; the rest of the cap
+  still goes to the surprises the feed exists to find. `THRESHOLD` was 85, which no
   live setup could reach; see config.py and tests/test_threshold_is_reachable.py
   and tests/test_near_miss.py before moving either gate.
 
