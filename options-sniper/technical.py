@@ -126,10 +126,22 @@ def _closed_strong(bar, direction, third=1/3):
 
 
 def _wick_back(bar, level, direction):
-    """Did price trade back through the level inside the breaking candle?"""
+    """Did price fall back THROUGH the level after having been above it?
+
+    Only meaningful for a bar that was already beyond the level when it opened.
+    The bar that MAKES a breakout starts below the level and ends above it, so
+    its low is under the level by construction — reading that as a reversal
+    rejected every real breakout on the very bar that made it.
+
+    Measured on BE, 2026-09-08 09:45 ET: opened 270.79, ran to 278.99, closed
+    278.44 — the top of its own range, on 4.86x average volume, through a level
+    at 274.70. A textbook break. The old test saw low 270.61 < 274.70 and
+    called it a reversal. It did that to every breakout, on both paths, which
+    is why confirms() had never once returned True.
+    """
     if direction == "call":
-        return bar["low"] < level
-    return bar["high"] > level
+        return bar["open"] > level and bar["low"] < level
+    return bar["open"] < level and bar["high"] > level
 
 
 def holds(tech):

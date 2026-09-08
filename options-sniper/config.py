@@ -77,18 +77,23 @@ WEIGHTS = {"flow": 30, "technical": 30, "catalyst": 20, "liquidity": 20}
 # That could never happen: the journal only fills from alerts, and there were
 # none. 70 is the number that starts the loop. It is a starting point to be
 # re-derived from real results, not a settled figure.
-THRESHOLD          = 65     # re-calibrate from journal.csv after 2-4 weeks
+# 65 was still above what a real setup produces. Measured on BE at 09:45 ET
+# on 2026-09-08 — the strongest tape of the day, a textbook break on 4.86x
+# volume — with every number read from UW: flow 21.2 + technical 29.5 +
+# catalyst 0 + liquidity 8.0 = 58.7. It cleared 65 only if a news catalyst
+# happened to land too. Salem asked for it loosened until an alert arrives.
+THRESHOLD          = 55     # re-calibrate from journal.csv after 2-4 weeks
 # The paper book's own gate, deliberately looser than the alert gate. Salem
 # asked for both to be loosened and the paper one loosened further: "سهل
 # الشروط على كل الاثنين لكن الورقي سهلها اكثر". Everything scoring between
 # PAPER_THRESHOLD and THRESHOLD is opened in 944 and never sent to 943, so a
 # month of results says what the alert gate would have earned at 55, at 60,
 # at 65 — measured, instead of argued.
-PAPER_THRESHOLD    = 55
+PAPER_THRESHOLD    = 45
 # Kept 20 below the threshold, as it was at 85/65. The gap is what lets a
 # ticker with strong flow but no break yet sit on the watchlist until the
 # break arrives and monitor.py adds the technical points.
-WATCHLIST_FLOOR    = 50     # candidates >= this go to shortlist.json
+WATCHLIST_FLOOR    = 40     # candidates >= this go to shortlist.json
 # The THRESHOLD is the quality gate; this is only a volume limit. The scanner
 # sorts candidates by score and stops below the threshold, so raising this does
 # not lower the quality of any single alert — it stops discarding setups that
@@ -125,7 +130,7 @@ MAX_PROFIT_CREDIT = 300.0    # cap on the profit term: a 900% estimate on a
 CANDLE_SIZE        = "15m"
 CANDLES_LOOKBACK   = 40     # bars used for level detection
 ATR_PERIOD         = 14
-VOLUME_SPIKE_RATIO = 1.5    # candle volume vs prior-bar average
+VOLUME_SPIKE_RATIO = 1.3    # candle volume vs prior-bar average
 TARGET_ATR_MULT    = 1.5    # target = broken level +/- 1.5 x ATR
 STOP_ATR_MULT      = 1.0    # stop   = broken level -/+ 1.0 x ATR
 # How much of the measured move must still be ahead of price to alert. At
@@ -216,7 +221,9 @@ MAX_SPREAD_ABS    = 0.06    # ...OR this many dollars wide, whichever is kinder.
                             # would fail a pure percentage cap — which emptied the
                             # 🔴 OTM tier on almost every scan. Cheap contracts are
                             # judged in cents, expensive ones in percent.
-MIN_OPEN_INTEREST = 300
+# 300 dropped 5 of 19 live BE strikes on 2026-09-08, among them the cheap far
+# strikes Salem trades. A same-day contract's open interest is thin by nature.
+MIN_OPEN_INTEREST = 150
 
 # ── Contract selection window ───────────────────────────────────
 MIN_DTE = 0                 # 0 = same-day expiry (0DTE) allowed — Salem's call
