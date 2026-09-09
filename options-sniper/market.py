@@ -145,6 +145,19 @@ def is_holiday(when=None):
     return day in holidays(day.year)
 
 
+def after_bell(now=None):
+    """True on a trading day once the bell has gone.
+
+    A session can only be summarised after it ends, so the daily reports test
+    this rather than `not is_open()` — which is also true all night, all
+    weekend, and every holiday.
+    """
+    now = now or now_et()
+    if now.weekday() >= 5 or is_holiday(now):
+        return False
+    return now.time() >= closes_at(now)
+
+
 def is_open(now=None):
     now = now or now_et()
     if now.weekday() >= 5:                          # Sat/Sun

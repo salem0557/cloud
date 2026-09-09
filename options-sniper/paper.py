@@ -246,10 +246,14 @@ def close_message(pos):
             f"دخول ${pos['entry_price']:.2f} ← خروج ${pos['exit_price']:.2f}")
 
 
-def daily_message(book=None):
-    """The end of a session: today alone, then the record it is building."""
+def daily_message(book=None, day=None):
+    """The end of a session: one day alone, then the record it is building.
+
+    `day` (YYYY-MM-DD) renders a PAST session from the book instead of today's
+    — the only way to recover a report for a day whose summary never went out.
+    """
     book = book or _load()
-    today = datetime.date.today().isoformat()
+    today = day or datetime.date.today().isoformat()
     done = [p for p in book["closed"] if (p.get("closed_at") or "")[:10] == today]
     s = summary(book)
     lines = [f"📄 ملخص التداول الورقي — {today}", ""]
@@ -272,7 +276,7 @@ def daily_message(book=None):
     if tested:
         def avg(rows):
             return sum(p["multiple"] for p in rows) / len(rows) if rows else 0.0
-        lines += ["", "🧪 قاعدة 0.75 ATR — ما رفضته مقابل ما قبِله:",
+        lines += ["", f"🧪 قاعدة {C.MIN_REMAINING_ATR} ATR — ما رفضته مقابل ما قبِله:",
                   f"  قبِلها  {len(normal):>3} صفقة   لكل 1$ ${avg(normal):.3f}",
                   f"  رفضها  {len(tested):>3} صفقة   لكل 1$ ${avg(tested):.3f}"]
         if len(tested) < C.PAPER_MIN_TRADES:
@@ -362,7 +366,12 @@ def main(argv=None):
     p.add_argument("action", choices=["mark", "report", "positions", "daily"],
                    help="mark: advance open positions; report: the record; "
                         "daily: send today's summary to Telegram")
+    p.add_argument("--date", help="with `daily`: print a PAST session's summary "
+                                  "(YYYY-MM-DD) instead of sending today's")
     args = p.parse_args(argv)
+    if args.action == "daily" and args.date:
+        print(daily_message(day=args.date))
+        return 0
     if args.action == "mark":
         closed = mark()
         print(f"{len(closed)} closed")

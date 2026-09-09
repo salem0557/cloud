@@ -113,6 +113,15 @@ def tick(marks):
     run("inbox", mine.poll_and_apply)
 
     if not is_open:
+        # The two daily reports — Salem's own trades and the paper book — are
+        # written to run on a CLOSED market: a session cannot be summarised
+        # before its bell. monitor.main() is their only caller, and this
+        # return used to sit ABOVE it, so neither report had ever been sent
+        # once, on any day. It runs once per session day now, after the close.
+        if market.after_bell(now) and marks["close"] != now.date():
+            marks["close"] = now.date()
+            log("after the bell — marking the paper book, sending the day's reports")
+            run("monitor", monitor.main)
         return
 
     # Positions Salem is IN are watched every minute, not every five:
@@ -146,7 +155,7 @@ def main():
                     f".env.example placeholder)")
 
     marks = {"scan": None, "monitor": None, "beat": None,
-             "watch": None, "open": None}
+             "watch": None, "open": None, "close": None}
 
     while not _stop:
         # A tick must never take the service down. Before this, any error
