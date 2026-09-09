@@ -79,6 +79,11 @@ def render_entry(p):
         head += f"  ({p['score']}/100 بعد خصم المخاطر)"
     else:
         head += f"  ({p['score']}/100)"
+    if tech.get("reversal"):
+        # A different trade from a breakout and it must not read like one: the
+        # level was pierced and reclaimed, the stop is the wick that failed
+        # rather than an ATR multiple, and it is bought INTO weakness.
+        head += "  🔄"
     if tech.get("opening_range"):
         # A different trade, and it must not read like the others. The level is
         # the first half hour's range rather than intraday structure, the move
@@ -86,6 +91,9 @@ def render_entry(p):
         # named on the alert instead of being folded in silently.
         head += "  🌅"
     lines = [head]
+    if tech.get("reversal"):
+        lines.append("🔄 كسر كاذب — البائعون اخترقوا المستوى وما ثبتوا، "
+                     f"والوقف تحت قاع الشمعة {tech['stop']:.2f}")
     if tech.get("opening_range"):
         lines.append("🌅 كسر نطاق الافتتاح — أسرع وأخطر من المعتاد")
     # "اذا تجمعت كل العوامل و التحليلات تدعم توقعك" — the four scores ARE that

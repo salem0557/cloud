@@ -113,6 +113,14 @@ def evaluate(ticker, flow, dry_run=False):
                 direction, tech = d, t
                 break
         if direction is None:
+            # No break held. Before giving up, ask whether one FAILED — a bar
+            # that pierced the level and closed back through it. That is the
+            # bottom Salem wants to buy, and it is invisible to confirms()
+            # because it is precisely a break that did not confirm.
+            rev = technical.reversal(candles)
+            if rev:
+                direction, tech = rev
+        if direction is None:
             direction = flow_direction(flow) or "call"
             tech = technical.analyse(candles, direction)
     else:

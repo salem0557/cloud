@@ -161,6 +161,10 @@ def _wire_evaluate(monkeypatch, remaining):
     monkeypatch.setattr(scanner.uw, "candles", lambda *a, **k: ["bar"] * 60)
     monkeypatch.setattr(scanner.technical, "analyse",
                         lambda *a, **k: _tech(remaining))
+    # These fixtures hand evaluate() placeholder candles because they patch
+    # analyse(). reversal() reads the bars for real, so it is patched too —
+    # this file is about the near-miss band, not the failed break.
+    monkeypatch.setattr(scanner.technical, "reversal", lambda *a, **k: None)
     monkeypatch.setattr(scanner.uw, "option_chain", lambda t: [{"strike": 500}])
     monkeypatch.setattr(scanner.uw, "news", lambda t: [])
     monkeypatch.setattr(scanner, "best_contract", lambda *a: {})

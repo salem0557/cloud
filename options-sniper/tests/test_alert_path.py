@@ -158,6 +158,7 @@ def test_an_empty_chain_is_named_as_such(monkeypatch):
             "closed_beyond": False, "expected_move": 3.0}
     monkeypatch.setattr(scanner.uw, "candles", lambda *a, **k: ["bar"] * 60)
     monkeypatch.setattr(scanner.technical, "analyse", lambda *a, **k: tech)
+    monkeypatch.setattr(scanner.technical, "reversal", lambda *a, **k: None)
     monkeypatch.setattr(scanner.uw, "option_chain", lambda t: [])
     monkeypatch.setattr(scanner, "flow_direction", lambda f: "call")
     assert scanner.evaluate("META", {"premium_usd": 1e6,

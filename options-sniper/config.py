@@ -223,6 +223,28 @@ LEVEL_MIN_BARS     = 3      # below this the session has no structure yet, so
 USE_OPENING_RANGE     = os.environ.get("USE_OPENING_RANGE", "1").lower() in ("1", "true", "yes")
 OPENING_RANGE_BARS    = 2     # 09:30-10:00 on the 15m frame
 OPENING_VOLUME_RATIO  = 1.5   # vs VOLUME_SPIKE_RATIO for the rest of the day
+
+# ── The failed break (reversal) ─────────────────────────────────
+# Salem, 2026-09-09, on the MSFT 495 call: it fell 4.23 -> 1.19 as the stock
+# sold off, then ran 1.19 -> 2.30 (+93%) on the bounce. "كيف تجعل استراتيجيتنا
+# تعمل لاخذ العقد بالاسفل وبيعه بالاعلى".
+#
+# The breakout rule cannot see that trade, and not by accident: while the stock
+# was making its low it was producing a PUT signal, and the moment he wants —
+# the bottom — is that put signal FAILING.
+#
+# So the failed break is its own signal. A bar that pierces support and CLOSES
+# BACK ABOVE it, in the top third of its own range, on volume: sellers pushed
+# through the level and could not hold it, and the ones who sold the break are
+# now trapped. Mirrored at the top for puts.
+#
+# Measured on NVDA's 15m tape, 5 sessions: TWO signals. That is not evidence of
+# anything and it is not treated as any — it is tagged separately so 944
+# measures it apart from the breakout, and after a month the book says which of
+# the two earns its place.
+USE_REVERSAL          = os.environ.get("USE_REVERSAL", "1").lower() in ("1", "true", "yes")
+REVERSAL_VOLUME_RATIO = 0.75  # the reclaim needs buyers behind it
+REVERSAL_CLOSE_THIRD  = 1 / 3 # close in the third of the bar that agrees
 # How many OHLC pages uw.candles() may walk back to reach that many REGULAR
 # bars. One page is not enough: UW answers timeframe=5D with 100 rows and no
 # more, ~60 of them pre/post-market, which left 39 usable against the 40

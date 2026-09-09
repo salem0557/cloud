@@ -95,6 +95,11 @@ def record(payload, tier=None):
         # MIN_REMAINING_ATR) and taken here only. Kept on the position so the
         # month can answer whether that rule earns its place.
         "near_miss": bool(payload.get("near_miss")),
+        # Which SETUP this was. Breakout and failed-break are different trades
+        # and the month has to score them apart, or a good one is hidden inside
+        # the average of a bad one.
+        "setup": ("reversal" if (payload.get("technical") or {}).get("reversal")
+                  else "breakout"),
         "reasoning": [l["text"] for l in
                       (payload.get("reasoning") or {}).get("links", [])],
         "open": True,
