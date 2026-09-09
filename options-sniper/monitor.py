@@ -23,6 +23,7 @@ import reasoning
 import state
 import technical
 import uw
+import verify
 from compose import compose, NO_TRADE
 from scanner import aggregate_flow, build_tiers, flow_reason
 from scoring import (ask_side_ratio, exit_rule, flow_direction,
@@ -264,6 +265,14 @@ def check_shortlist(dry_run=False):
         msg = compose("entry", payload)
         if msg.startswith(NO_TRADE):
             print(t, msg)
+            continue
+        # Same gate as the scanner's, on the same payload shape. Two send
+        # paths reaching Salem means two places a broken alert can leave from,
+        # and a check on only one of them is the kind of half-fix this file
+        # exists to make impossible.
+        broken = verify.blocks(payload, msg)
+        if broken:
+            print(f"  {t}: ALERT BLOCKED — {broken}")
             continue
         if dry_run:
             print("\n" + "=" * 50 + f"\n[DRY RUN] {t}\n" + "=" * 50 + "\n" + msg)
