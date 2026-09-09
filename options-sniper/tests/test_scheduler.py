@@ -37,11 +37,12 @@ def _wire(monkeypatch, spy, is_open, now):
     monkeypatch.setattr(scheduler.monitor, "watch_mine", spy.job("watch"))
     monkeypatch.setattr(scheduler.monitor, "main", spy.job("monitor"))
     monkeypatch.setattr(scheduler.scanner, "main", spy.job("scanner"))
+    monkeypatch.setattr(scheduler.spx, "send_report", spy.job("spx"))
 
 
 def _marks():
     return {"scan": None, "monitor": None, "beat": None,
-            "watch": None, "open": None, "close": None}
+            "watch": None, "open": None, "close": None, "spx": None}
 
 
 def _et(hour, minute):
@@ -69,7 +70,7 @@ def test_open_market_dispatches_every_job(monkeypatch):
     _wire(monkeypatch, spy, True, _et(10, 0))
     monkeypatch.setattr(scheduler.state, "capacity_left", lambda: 7)
     scheduler.tick(_marks())
-    assert set(spy.ran) == {"inbox", "watch", "scanner", "monitor"}
+    assert set(spy.ran) == {"inbox", "watch", "scanner", "monitor", "spx"}
 
 
 def test_after_the_bell_the_day_is_reported(monkeypatch):

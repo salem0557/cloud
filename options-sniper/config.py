@@ -53,6 +53,13 @@ TELEGRAM_PAPER_CHAT_ID = _clean("TELEGRAM_PAPER_CHAT_ID")
 # message_thread_id, so without these both topics get the group's General.
 TELEGRAM_TOPIC_ID       = _clean("TELEGRAM_TOPIC_ID")
 TELEGRAM_PAPER_TOPIC_ID = _clean("TELEGRAM_PAPER_TOPIC_ID")
+# A third topic, for the index read — Salem's own: t.me/<group>/945. Unset,
+# spx.py prints instead of sending and nothing else changes.
+TELEGRAM_SPX_CHAT_ID    = _clean("TELEGRAM_SPX_CHAT_ID")
+TELEGRAM_SPX_TOPIC_ID   = _clean("TELEGRAM_SPX_TOPIC_ID")
+# How often the index read is posted while the market is open. It is a read of
+# the field, not an alert, so it does not need the scanner's cadence.
+SPX_REPORT_EVERY_MIN    = int(os.environ.get("SPX_REPORT_EVERY_MIN") or 60)
 
 # ── Scoring (agreed design: 30/30/20/20) ────────────────────────
 WEIGHTS = {"flow": 30, "technical": 30, "catalyst": 20, "liquidity": 20}
