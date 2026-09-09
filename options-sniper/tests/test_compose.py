@@ -137,3 +137,23 @@ def test_days_are_counted_in_arabic_not_appended():
     assert compose._days_ar(2) == "يومان"
     assert compose._days_ar(9) == "9 أيام"
     assert compose._days_ar(38) == "38 يوم"
+
+
+def test_the_alert_names_the_price_that_kills_the_break():
+    """Salem asked how he tells a trap from a move inside the first minute.
+
+    The stop is a full ATR past the level — too far to answer that. The level
+    itself is the minute-scale test, so the message says it out loud.
+    """
+    p = _payload([_tier(1.85, 185)])
+    msg = compose.render_entry(p)
+    assert "الكسر يفشل" in msg
+    assert "182.40" in msg, "the level, not the stop"
+
+
+def test_a_reversal_does_not_get_the_break_line():
+    """Its level was already pierced and reclaimed — "لو رجع تحت المستوى" is
+    not what invalidates it, and the message says so in its own words."""
+    p = _payload([_tier(1.85, 185)])
+    p["technical"]["reversal"] = True
+    assert "الكسر يفشل" not in compose.render_entry(p)

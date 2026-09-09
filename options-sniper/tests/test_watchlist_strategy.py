@@ -29,9 +29,32 @@ def _broke(direction="call"):
 
 
 # ── The universe ────────────────────────────────────────────────
-def test_the_watchlist_is_the_eleven_names_from_the_screenshots():
-    assert set(C.WATCHLIST) == {"MU", "TSLA", "AMZN", "GOOGL", "AAPL",
-                                "INTC", "NVDA", "QQQ", "META", "MSFT", "F"}
+def test_the_watchlist_is_the_twenty_five_names():
+    """Salem, 2026-09-09: "ضيف اكبر الشركات سيولة كملها لل25 + مؤشر spx".
+
+    The eleven he picked from the screenshots, plus fourteen ranked by
+    MEASURED 30-day average option volume from UW's stock screener.
+    """
+    assert len(C.WATCHLIST) == 25
+    assert len(set(C.WATCHLIST)) == 25, "a duplicate wastes a scan slot"
+    # his own eleven, none of them dropped
+    for t in ("MU", "TSLA", "AMZN", "GOOGL", "AAPL", "INTC", "NVDA",
+              "QQQ", "META", "MSFT", "F"):
+        assert t in C.WATCHLIST, f"{t} was his pick and must not be dropped"
+
+
+def test_spx_is_not_in_the_watchlist():
+    """He asked for it. UW cannot serve it.
+
+    Measured 2026-09-09: the candle endpoint answers an index symbol with
+    data:[] and is_index:true under this subscription, at 1m and 15m alike.
+    No candles means no level, no break and no signal — a name that can never
+    produce an alert only costs requests and hides in the log as "no candles".
+    SPY is in the list instead: the same index, a tenth of the price, and the
+    most liquid options in the market.
+    """
+    assert "SPX" not in C.WATCHLIST
+    assert "SPY" in C.WATCHLIST
 
 
 def test_discovery_is_off_by_default():

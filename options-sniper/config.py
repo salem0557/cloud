@@ -297,6 +297,36 @@ STOP_ATR_MULT      = 1.0    # stop   = broken level -/+ 1.0 x ATR
 # measured this session whose gain/pain ratio clears 1. Six signals is not
 # proof — the paper book in 944 is what turns it into evidence — but the
 # direction agrees with what Salem asked for, and the cost is one signal.
+# ── The live re-check, one minute wide ──────────────────────────
+# Salem: "وش الطرق اللي تزود نسبة الضمان لكن ماتقلل التنبيهات كثير".
+#
+# Every other way of raising confidence costs signals: more volume, more room,
+# a stricter score. This one costs a request. The 15m bar closed beyond the
+# level; before the alert goes out, ask the 1m tape whether price is STILL on
+# that side of it. A break that has already given the level back is not an
+# entry any more, and nothing that was working is rejected.
+#
+# Re-measured 2026-09-09 across SIX names (SPY, NVDA, AMD, PLTR, MSTR, SOFI),
+# five sessions, 1m tape from UW — 23 signals instead of four:
+#
+#                        signals   ran    med MFE   med MAE   ربح/ألم
+#   without the re-check      23   35%      +0.36     +0.48      0.74
+#   with the re-check         19   42%      +0.38     +0.48      0.80
+#
+# It removed exactly four, and every one of them was a disaster:
+#
+#   AMD  09-03 19:30 put    MFE +0.91   MAE +8.26
+#   MSTR 09-04 19:15 call   MFE +0.00   MAE +2.82
+#   NVDA 09-04 14:15 call   MFE +0.01   MAE +1.87
+#   AMD  09-08 15:30 call   MFE +0.09   MAE +0.44
+#
+# It kept all eight that ran. Cost: 4 signals of 23. A rejected setup is still
+# opened in the PAPER book rather than discarded, so the month decides.
+#
+# UW unreachable returns None, and None is never a veto: a failed request must
+# not silently cancel a setup.
+USE_MINUTE_CONFIRM = os.environ.get("USE_MINUTE_CONFIRM", "1") != "0"
+
 MIN_REMAINING_ATR  = 1.00   # at most a third of the move already gone
 # The paper book takes anything with room still ahead of it. Below this it is
 # not a setup, it is the top: price has effectively reached its target and an
@@ -496,6 +526,16 @@ SETTLED = {"raise volume filter": "not supported on 6 signals: 0.75 ran 50%, "
                                   "1.30 ran 25%; sample far too small to act on",
            "skip midday": "rejected: pooled $1.021->$1.087 but "
                           "walk-forward $1.010->$0.979",
+           "require a close beyond the level": "kept, against the sample. "
+                          "It removes NVDA 2026-09-08 09:30, which was the "
+                          "BEST of five signals (+2.05 ATR). Kept anyway: a "
+                          "bar closing on the wrong side of the level is not "
+                          "a break, and the message prints that rule to Salem",
+           "add SPX to the watchlist": "impossible, not declined: UW answers "
+                          "an index symbol with data:[] and is_index:true at "
+                          "1m and 15m under this subscription (measured "
+                          "2026-09-09). No candles, no level, no signal. SPY "
+                          "is in the list instead",
            "loosen MIN_REMAINING_ATR below 1.0": "measured 2026-09-09 on 6 "
                           "signals: 0.38/0.50/0.75 all ran 50% with med MAE "
                           "0.82 ATR; 1.00 ran 60% with med MAE 0.50. Costs "
@@ -619,15 +659,37 @@ MIN_TICKER_PREMIUM      = 100_000   # skip tickers below this daily premium
 #       او كسر دعم مع سيولة في السهم و العقود على فريم ١٥ دقيقة ترسل لي افضل
 #       ثلاث عقود حسب ميزانيتي"
 #
-# Eleven names, from the two screenshots. Discovery is OFF: no market-wide
-# flow feed deciding the universe, no Finviz movers. These names and nothing
-# else, watched all session.
+# Discovery is OFF: no market-wide flow feed deciding the universe, no Finviz
+# movers. These names and nothing else, watched all session.
 #
-# What that buys: every one of them is deeply liquid, has same-day expiries and
+# What that buys: every one is deeply liquid, has same-day expiries and
 # penny-wide books, and is a name he can see moving on his own screen. The
 # scanner spent the whole of 2026-09-08 on GH, LYTE, TIGO, DYN and IONS.
+#
+# 2026-09-09, Salem: "ضيف اكبر الشركات سيولة كملها لل25 + مؤشر spx".
+#
+# Ranked by MEASURED 30-day average option volume (UW stock screener, not a
+# guess), leveraged and inverse ETFs excluded — a 3x product is a derivative
+# of a derivative and its 15m level means something different:
+#
+#   SPY 11.4M   QQQ 7.4M   NVDA 3.6M   TSLA 2.5M   IWM 1.5M   AAPL 1.4M
+#   MU 986k   AMZN 878k   INTC 782k   META 662k   MSFT 655k   PLTR 597k
+#   AMD 510k   GOOGL 482k   MSTR 476k   SOFI 372k   NFLX 312k   IREN 303k
+#   ORCL 298k   AVGO 285k   SMCI 272k   HOOD 241k   NBIS 234k   MARA 214k
+#
+# F is the twenty-fifth and is NOT in the market's top fifty by option volume.
+# It is here because Salem put it there, and it stays until he says otherwise.
+#
+# SPX IS NOT HERE, and cannot be. Measured 2026-09-09 against UW: an index
+# symbol answers the candle endpoint with data:[] and is_index:true under this
+# subscription, at 1m and at 15m alike. No candles means no 15m level, no
+# break, and no signal — ever. SPY is the same index at a tenth of the price
+# with the most liquid options in the market, and it is in the list. If the
+# UW plan ever gains index-candle access, adding "SPX" here is the whole
+# change.
 WATCHLIST = [t.strip().upper() for t in (os.environ.get("WATCHLIST") or
-    "MU,TSLA,AMZN,GOOGL,AAPL,INTC,NVDA,QQQ,META,MSFT,F").split(",") if t.strip()]
+    "SPY,QQQ,NVDA,TSLA,IWM,AAPL,MU,AMZN,INTC,META,MSFT,PLTR,AMD,GOOGL,"
+    "MSTR,SOFI,NFLX,IREN,ORCL,AVGO,SMCI,HOOD,NBIS,MARA,F").split(",") if t.strip()]
 # Off, and discovery comes back: the flow feed and Finviz choose the universe
 # again and WATCHLIST becomes a guaranteed core inside it.
 WATCHLIST_ONLY = os.environ.get("WATCHLIST_ONLY", "1").lower() in ("1", "true", "yes")

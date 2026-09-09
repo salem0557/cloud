@@ -352,6 +352,41 @@ def is_near_miss(tech):
     return C.PAPER_MIN_REMAINING_ATR <= remaining_atr(tech) < C.MIN_REMAINING_ATR
 
 
+def still_beyond(tech, minute_bar):
+    """Is the break STILL holding, at 1-minute resolution? -> True/False/None.
+
+    Salem, 2026-09-09, after being told no entry can be guaranteed:
+    "وش الطرق اللي تزود نسبة الضمان لكن ماتقلل التنبيهات كثير".
+
+    This is the one answer that costs seconds instead of signals. The 15m bar
+    closed beyond the level; the question here is whether price is still on
+    that side of it now. It rejects nothing that was ever working — only a
+    break that has already given the level back before he has read the alert.
+
+    Measured on NVDA, five sessions, against the 1m tape:
+
+      signal              1m close   holds   MFE     MAE
+      09-03 17:45 call     230.06    yes    +0.36   +0.50
+      09-04 14:15 call     234.01    NO     +0.01   +1.87   <- the trap
+      09-08 14:15 put      227.50    yes    +1.21   +0.00
+      09-08 15:45 put      226.26    yes    +0.59   +0.18
+
+    It caught the only trap and kept all three that worked. Four signals is
+    not a result — it is the reason the rejected ones go to the paper book
+    instead of being thrown away.
+
+    None when the bar is missing or the setup has no level: unknown is not a
+    veto.
+    """
+    if not tech or not minute_bar:
+        return None
+    level = tech.get("level")
+    close = minute_bar.get("close")
+    if level is None or not close:
+        return None
+    return close > level if tech.get("direction") == "call" else close < level
+
+
 def confirms(tech):
     """A break worth alerting on.
 
@@ -367,6 +402,14 @@ def confirms(tech):
     need = (C.OPENING_VOLUME_RATIO if tech.get("opening_range")
             else C.VOLUME_SPIKE_RATIO)
     return (tech["broke_level"]
+            # The bar has to CLOSE on the far side of the level. broke_level
+            # only asks whether the wick touched it, so without this a bar
+            # that pierced the level and closed back inside counted as a
+            # break — while the message printed "إغلاق شمعة 15د تحت X" as the
+            # entry rule. NVDA 2026-09-08 09:30: level 229.63, low 229.46,
+            # close 229.76. The code called it a breakdown; the close was
+            # above support, which is the definition of a failed break.
+            and tech["closed_beyond"]
             and tech["volume_ratio"] >= need
             and holds(tech)
             and not is_late(tech))
