@@ -71,9 +71,34 @@ def test_the_paper_feed_keeps_its_own_topic_with_a_shared_group(monkeypatch):
     assert calls == [("-1004330143547", "944")]
 
 
+def _check_src():
+    return (pathlib.Path(__file__).resolve().parent.parent
+            / "check.py").read_text()
+
+
 def test_check_reports_a_collision_when_two_feeds_share_a_topic():
     """The failure this cannot be allowed to miss: same group, same topic, two
     feeds. Nothing errors; they just merge."""
-    src = (pathlib.Path(__file__).resolve().parent.parent / "check.py").read_text()
+    src = _check_src()
     assert "collision" in src
     assert "TELEGRAM_SPX_TOPIC_ID" in src
+
+
+def test_check_sends_a_test_message_to_every_feed_not_just_the_first():
+    """Salem, 2026-09-09: "ماجاني تنبيه اختبار الا على قناة وحدة فقط".
+
+    check.py sent ONE message with no chat id — which telegram_send addresses
+    to the ALERTS topic by default — and then reported "send: PASS". A green
+    line that said nothing at all about 944 or 945.
+
+    Configured is not delivered: a topic id can be a number Telegram rejects,
+    a deleted thread, or one the bot was never added to, and all three look
+    exactly like a correct setup until something is actually sent.
+    """
+    src = _check_src()
+    body = src[src.index('section("7. Telegram")'):]
+    assert "for name, chat, topic, _var in _FEEDS:" in body, (
+        "the Telegram test must loop over every feed")
+    # the old single unaddressed send is what produced one message
+    assert 'send("✅ اختبار: بوت التنبيهات يعمل")' not in body
+    assert "chat_id=chat, topic=topic" in body
