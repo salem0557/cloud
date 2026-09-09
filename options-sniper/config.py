@@ -496,6 +496,11 @@ SETTLED = {"raise volume filter": "not supported on 6 signals: 0.75 ran 50%, "
                                   "1.30 ran 25%; sample far too small to act on",
            "skip midday": "rejected: pooled $1.021->$1.087 but "
                           "walk-forward $1.010->$0.979",
+           "require a close beyond the level": "kept, against the sample. "
+                          "It removes NVDA 2026-09-08 09:30, which was the "
+                          "BEST of five signals (+2.05 ATR). Kept anyway: a "
+                          "bar closing on the wrong side of the level is not "
+                          "a break, and the message prints that rule to Salem",
            "loosen MIN_REMAINING_ATR below 1.0": "measured 2026-09-09 on 6 "
                           "signals: 0.38/0.50/0.75 all ran 50% with med MAE "
                           "0.82 ATR; 1.00 ran 60% with med MAE 0.50. Costs "

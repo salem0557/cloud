@@ -120,6 +120,16 @@ def render_entry(p):
             f"كسر {tech['level']:.2f}، والمتوقع يوصل {tech['target']:.2f}",
             f"لو رجع {'تحت' if up else 'فوق'} {tech['stop']:.2f} — اخرج",
         ]
+    # Salem, 2026-09-09: "مايكون مقلب ويقلب علي السعر باقل من دقيقة".
+    # The stop sits a full ATR past the level; this line is the minute-scale
+    # test, and it is a statement about the SETUP, not an instruction to sell:
+    # once price is back on the wrong side of the level the break has failed,
+    # whatever he then decides to do about it. Measured on NVDA over five
+    # sessions, one signal in five went against the entry by 0.51 ATR inside
+    # the first minute and never came back.
+    if tech.get("level") is not None and not tech.get("reversal"):
+        lines.append(f"❗ الكسر يفشل لو رجع {'تحت' if up else 'فوق'} "
+                     f"{tech['level']:.2f} — هذا مقياسك بأول دقيقة")
     for gap in (p.get("reasoning") or {}).get("gaps") or []:
         lines.append(f"⚠️ {gap}")
 

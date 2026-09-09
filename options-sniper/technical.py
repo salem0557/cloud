@@ -367,6 +367,14 @@ def confirms(tech):
     need = (C.OPENING_VOLUME_RATIO if tech.get("opening_range")
             else C.VOLUME_SPIKE_RATIO)
     return (tech["broke_level"]
+            # The bar has to CLOSE on the far side of the level. broke_level
+            # only asks whether the wick touched it, so without this a bar
+            # that pierced the level and closed back inside counted as a
+            # break — while the message printed "إغلاق شمعة 15د تحت X" as the
+            # entry rule. NVDA 2026-09-08 09:30: level 229.63, low 229.46,
+            # close 229.76. The code called it a breakdown; the close was
+            # above support, which is the definition of a failed break.
+            and tech["closed_beyond"]
             and tech["volume_ratio"] >= need
             and holds(tech)
             and not is_late(tech))
