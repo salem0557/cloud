@@ -246,6 +246,22 @@ def build_tiers(cand):
     return tiers
 
 
+def still_holding(cand):
+    """Is the break still holding on the 1m tape? -> True to send.
+
+    Salem: "وش الطرق اللي تزود نسبة الضمان لكن ماتقلل التنبيهات كثير". Every
+    other way of raising confidence costs signals; this one costs a request.
+
+    True whenever the rule is OFF or UW cannot answer — unknown is never a
+    veto, and a failed request must not silently cancel an alert.
+    """
+    if not C.USE_MINUTE_CONFIRM:
+        return True
+    holding = technical.still_beyond(cand["technical"],
+                                     uw.last_closed_minute(cand["ticker"]))
+    return holding is not False
+
+
 def to_payload(cand):
     p = {k: cand[k] for k in ("ticker", "score", "raw_score", "score_breakdown",
                               "risk", "direction", "spot", "flow_reason",
@@ -448,6 +464,22 @@ def _scan(agg, dry_run, limit_tickers):
                        C.MIN_REMAINING_ATR))
             if not dry_run and paper.record(payload):
                 print(f"  {cand['ticker']}: paper book only — {why}")
+            continue
+
+        # Is the break still holding, right now, at 1-minute resolution?
+        # This is the last thing checked because it is the only gate that
+        # costs a request, and by here at most a handful of names survive.
+        if not dry_run and not still_holding(cand):
+            # Not thrown away: the paper book takes it, so the rule is judged
+            # on a month of results rather than on four signals.
+            payload["near_miss"] = True
+            payload["stale_break"] = True
+            if C.PAPER_NEAR_MISS and paper.record(payload):
+                print(f"  {cand['ticker']}: gave the level "
+                      f"{cand['technical']['level']:.2f} back before the "
+                      f"alert — paper book only")
+            else:
+                print(f"  {cand['ticker']}: gave the level back — skipped")
             continue
 
         # Final read. An unreachable analyst returns None and the alert goes

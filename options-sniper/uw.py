@@ -383,6 +383,19 @@ def candles(ticker, candle_size=None, timeframe="5D", limit=500, end_date=None):
     return kept
 
 
+def last_closed_minute(ticker):
+    """The newest CLOSED 1-minute bar, or None if UW cannot say.
+
+    One request, no paging: this answers "where is price right now" and a
+    single page of 1m bars always reaches back further than that needs.
+
+    None means unknown — the caller must treat it as "no opinion" and never as
+    a veto. A failed request must not silently cancel a setup.
+    """
+    rows, _ = _candle_page(ticker, "1m", False, "1D", 30, None)
+    return rows[-1] if rows else None
+
+
 def _candle_page(ticker, size, daily, timeframe, limit, end_date):
     """One OHLC request, parsed and filtered. -> (rows, oldest raw timestamp)."""
     try:

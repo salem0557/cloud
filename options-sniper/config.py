@@ -297,6 +297,25 @@ STOP_ATR_MULT      = 1.0    # stop   = broken level -/+ 1.0 x ATR
 # measured this session whose gain/pain ratio clears 1. Six signals is not
 # proof — the paper book in 944 is what turns it into evidence — but the
 # direction agrees with what Salem asked for, and the cost is one signal.
+# ── The live re-check, one minute wide ──────────────────────────
+# Salem: "وش الطرق اللي تزود نسبة الضمان لكن ماتقلل التنبيهات كثير".
+#
+# Every other way of raising confidence costs signals: more volume, more room,
+# a stricter score. This one costs a request. The 15m bar closed beyond the
+# level; before the alert goes out, ask the 1m tape whether price is STILL on
+# that side of it. A break that has already given the level back is not an
+# entry any more, and nothing that was working is rejected.
+#
+# NVDA, five sessions, checked against the 1m tape: it caught the one signal
+# that went 1.87 ATR against the entry and never recovered, and kept all three
+# that worked. Four signals is not a result, which is why a rejected setup is
+# opened in the PAPER book rather than discarded — a month of those says
+# whether this rule earns its request.
+#
+# UW unreachable returns None, and None is never a veto: a failed request must
+# not silently cancel a setup.
+USE_MINUTE_CONFIRM = os.environ.get("USE_MINUTE_CONFIRM", "1") != "0"
+
 MIN_REMAINING_ATR  = 1.00   # at most a third of the move already gone
 # The paper book takes anything with room still ahead of it. Below this it is
 # not a setup, it is the top: price has effectively reached its target and an
