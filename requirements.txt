@@ -7,3 +7,4 @@ python-dotenv>=1.0
 matplotlib>=3.7
 mplfinance
 tabulate>=0.9
+ccxt>=4.2
