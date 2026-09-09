@@ -372,9 +372,10 @@ def summary(book=None):
             "avg": avg, "pnl": pnl}
 
 
-def daily_message(book=None):
+def daily_message(book=None, day=None):
+    """`day` (YYYY-MM-DD) renders a past session instead of today's."""
     book = book or _load(MINE_FILE, {"open": [], "closed": []})
-    today = datetime.date.today().isoformat()
+    today = day or datetime.date.today().isoformat()
     done = [p for p in book["closed"]
             if (p.get("exit_at") or "")[:10] == today and p.get("multiple")]
     s = summary(book)

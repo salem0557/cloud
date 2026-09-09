@@ -41,7 +41,7 @@ def _wire(monkeypatch, spy, is_open, now):
 
 def _marks():
     return {"scan": None, "monitor": None, "beat": None,
-            "watch": None, "open": None}
+            "watch": None, "open": None, "close": None}
 
 
 def _et(hour, minute):
@@ -72,10 +72,50 @@ def test_open_market_dispatches_every_job(monkeypatch):
     assert set(spy.ran) == {"inbox", "watch", "scanner", "monitor"}
 
 
-def test_closed_market_reads_the_inbox_and_nothing_else(monkeypatch):
-    """He may report a fill after the bell; nothing is scanned or alerted."""
+def test_after_the_bell_the_day_is_reported(monkeypatch):
+    """Salem, 2026-09-09: "انت ما اعطيتني تقريرك ليوم الامس الورقي و الحقيقي".
+
+    He never got one, on any day. Both daily summaries live inside
+    monitor.main() and both refuse to send while the market is open — and the
+    closed-market branch used to `return` above the line that calls it. The
+    reports were unreachable code.
+    """
     spy = Spy()
     _wire(monkeypatch, spy, False, _et(18, 0))
+    scheduler.tick(_marks())
+    assert spy.ran == ["inbox", "monitor"]
+
+
+def test_the_day_is_reported_once_and_not_every_tick(monkeypatch):
+    spy = Spy()
+    marks = _marks()
+    _wire(monkeypatch, spy, False, _et(18, 0))
+    scheduler.tick(marks)
+    spy.ran.clear()
+    scheduler.tick(marks)
+    assert spy.ran == ["inbox"]
+
+
+def test_nothing_is_scanned_or_alerted_after_the_bell(monkeypatch):
+    """The report is the ONLY thing the closed branch may do."""
+    spy = Spy()
+    _wire(monkeypatch, spy, False, _et(18, 0))
+    scheduler.tick(_marks())
+    assert "scanner" not in spy.ran and "watch" not in spy.ran
+
+
+def test_before_the_bell_there_is_no_day_to_report(monkeypatch):
+    """Pre-market: the market is closed, but the session has not happened."""
+    spy = Spy()
+    _wire(monkeypatch, spy, False, _et(7, 0))
+    scheduler.tick(_marks())
+    assert spy.ran == ["inbox"]
+
+
+def test_no_report_on_a_weekend(monkeypatch):
+    """`not is_open` is also true all weekend. after_bell() is not."""
+    spy = Spy()
+    _wire(monkeypatch, spy, False, datetime.datetime(2026, 9, 12, 18, 0))
     scheduler.tick(_marks())
     assert spy.ran == ["inbox"]
 
