@@ -107,7 +107,8 @@ def test_a_near_miss_does_not_consume_the_daily_alert_cap(monkeypatch):
     import scanner
     reserved = []
     monkeypatch.setattr(C, "WATCHLIST_ONLY", False)
-    monkeypatch.setattr(scanner.state, "record_alert", lambda t: reserved.append(t) or True)
+    monkeypatch.setattr(scanner.state, "record_alert",
+                        lambda t, **kw: reserved.append(t) or True)
     monkeypatch.setattr(scanner, "send", lambda m: 1)
     monkeypatch.setattr(scanner.paper, "record", lambda p, tier=None: {})
     monkeypatch.setattr(scanner.market, "is_open", lambda *a: True)
@@ -225,7 +226,7 @@ def _wire_main(monkeypatch, cand, shortlist_name):
     monkeypatch.setattr(scanner.paper, "record",
                         lambda p, tier=None: recorded.append(p) or {})
     monkeypatch.setattr(scanner.state, "record_alert",
-                        lambda t: reserved.append(t) or True)
+                        lambda t, **kw: reserved.append(t) or True)
     monkeypatch.setattr(scanner.market, "is_open", lambda *a: True)
     monkeypatch.setattr(scanner.state, "capacity_left", lambda: 30)
     monkeypatch.setattr(scanner.state, "read", lambda: {"alerted_tickers": []})

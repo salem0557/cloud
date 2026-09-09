@@ -332,7 +332,10 @@ def _scan(agg, dry_run, limit_tickers):
                                "vol_oi_ratio": 0.0, "alerts": 0,
                                "underlying_price": 0.0, "rules": []})
 
-    already = set(state.read().get("alerted_tickers", []))
+    # Not a lockout any more: a name that alerted earlier is still evaluated,
+    # and state.record_alert() decides at the send whether this break is a new
+    # and stronger one or the same setup arriving again.
+    already = set() if C.REALERT else set(state.read().get("alerted_tickers", []))
     cap = limit_tickers or C.MAX_CANDIDATES_PER_SCAN
 
     def usable(t, f):
@@ -478,9 +481,13 @@ def _scan(agg, dry_run, limit_tickers):
             journal.log_alert(payload)
             sent += 1
             continue
-        if not state.record_alert(cand["ticker"]):
-            print("Daily cap reached — stopping.")
-            break
+        t = cand["technical"]
+        if not state.record_alert(cand["ticker"], level=t.get("level"),
+                                  direction=cand["direction"],
+                                  atr=t.get("atr")):
+            print(f"  {cand['ticker']}: already alerted on this move, or the "
+                  f"day's cap is reached")
+            continue
         mid = send(msg)
         if mid:
             mine.remember_alert(mid, payload)

@@ -139,7 +139,7 @@ def check_shortlist(dry_run=False):
     shortlist = load_json(C.SHORTLIST_FILE, [])
     if not shortlist:
         return 0
-    already = set(state.read().get("alerted_tickers", []))
+    already = set() if C.REALERT else set(state.read().get("alerted_tickers", []))
     sent = 0
     for item in shortlist:
         if not dry_run and state.capacity_left() == 0:
@@ -269,8 +269,10 @@ def check_shortlist(dry_run=False):
             print("\n" + "=" * 50 + f"\n[DRY RUN] {t}\n" + "=" * 50 + "\n" + msg)
             sent += 1
             continue
-        if not state.record_alert(t):
-            break
+        if not state.record_alert(t, level=tech.get("level"),
+                                  direction=item["direction"],
+                                  atr=tech.get("atr")):
+            continue
         mid = send(msg)
         if mid:
             # The message id is what a REPLY resolves against, so "دخلت" under

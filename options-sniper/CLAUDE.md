@@ -207,6 +207,12 @@ because reading it as a sale would close a position he still holds.
   that failed rather than an ATR multiple; it is tagged 🔄 on the alert and
   `setup: "reversal"` in the paper book so 944 scores the two apart.
   `USE_REVERSAL=0` turns it off.
+- A name may alert MORE THAN ONCE a day (`REALERT`), but only on a genuinely
+  different break: `REALERT_COOLDOWN_MIN` since the last, AND a level at least
+  `REALERT_LEVEL_ATR` beyond the one already alerted in that direction. A
+  direction flip always qualifies. `MAX_ALERTS_PER_TICKER` stops one runaway
+  name eating the day. Never remove the lock outright — the level barely moves
+  between scans, so the identical setup would re-send every ten minutes.
   `WATCHLIST_ONLY=0` restores discovery, and then:
 - Gates by KIND of setup. A CONFIRMED BREAK is judged by `BREAK_THRESHOLD`
   (50) — price agreeing is the one input that cannot be talked into it. A

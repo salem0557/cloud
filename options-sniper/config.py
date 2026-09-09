@@ -169,6 +169,27 @@ WATCHLIST_FLOOR    = min(THRESHOLD, BREAK_THRESHOLD) - WEIGHTS["technical"]  # 2
 # six times faster at 30 than at 5, which is the reason it exists.
 MAX_ALERTS_PER_DAY = int(os.environ.get("MAX_ALERTS_PER_DAY") or 5)
 
+# ── Alerting the same name twice ────────────────────────────────
+# A ticker used to be locked out for the rest of the day the moment it alerted
+# once. Salem: "كيف افك هذا القيد ليعطيني كسور متكررة اقوى". On 2026-09-08 TSLA
+# broke at 09:45 and again, harder, hours later — only the first would have
+# reached him, and the second was the better trade.
+#
+# The lock is not removed, it is made conditional. Simply removing it re-sends
+# the SAME break every scan: the level barely moves, so the same setup would
+# clear the gate again ten minutes later.
+#
+# A second alert on a name needs BOTH:
+#   - REALERT_COOLDOWN_MIN since the last one, so one move is one alert, and
+#   - a level at least REALERT_LEVEL_ATR beyond the level already alerted,
+#     in the same direction — a genuinely higher high, not the same one again.
+# A direction FLIP always qualifies: a name that broke up in the morning and
+# breaks down in the afternoon is a different trade, not a repeat.
+REALERT                = os.environ.get("REALERT", "1").lower() in ("1", "true", "yes")
+REALERT_COOLDOWN_MIN   = 45
+REALERT_LEVEL_ATR      = 0.5
+MAX_ALERTS_PER_TICKER  = 3    # one runaway name must not eat the day's quota
+
 # ── Budget bands (contract cost = ask x 100) ────────────────────
 # Each band is a RANGE with a floor and a ceiling, not a target price. The old
 # tiers were nested caps — every contract under $50 also qualified for the $100

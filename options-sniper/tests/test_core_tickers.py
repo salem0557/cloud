@@ -99,13 +99,28 @@ def test_the_surprises_still_get_in(monkeypatch, wired):
     assert "UBER" in wired and "TSLA" in wired
 
 
-def test_a_core_name_already_alerted_today_is_not_re_evaluated(monkeypatch, wired):
+def test_with_REALERT_off_a_name_already_alerted_is_skipped(monkeypatch, wired):
+    monkeypatch.setattr(C, "REALERT", False)
     monkeypatch.setattr(scanner.state, "read",
                         lambda: {"alerted_tickers": ["NVDA"]})
     monkeypatch.setattr(scanner, "aggregate_flow", lambda a: {"NVDA": _flow(5_000_000)})
     monkeypatch.setattr(scanner.uw, "ticker_flow_alerts", lambda t: [])
     scanner.main()
     assert "NVDA" not in wired
+
+
+def test_with_REALERT_on_it_is_still_evaluated(monkeypatch, wired):
+    """Salem: "كيف افك هذا القيد ليعطيني كسور متكررة اقوى". The name is no
+    longer locked out of the SCAN; record_alert() decides at the send whether
+    this break is a new and stronger one, which is where the judgement belongs
+    — the scan cannot know the level until it has measured it."""
+    monkeypatch.setattr(C, "REALERT", True)
+    monkeypatch.setattr(scanner.state, "read",
+                        lambda: {"alerted_tickers": ["NVDA"]})
+    monkeypatch.setattr(scanner, "aggregate_flow", lambda a: {"NVDA": _flow(5_000_000)})
+    monkeypatch.setattr(scanner.uw, "ticker_flow_alerts", lambda t: [])
+    scanner.main()
+    assert "NVDA" in wired
 
 
 def test_a_failed_core_lookup_does_not_stop_the_scan(monkeypatch, wired, capsys):
