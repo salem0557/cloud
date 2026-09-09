@@ -198,3 +198,46 @@ def test_loosening_the_entry_gate_does_not_silence_the_exit_warning():
     action, why = advisor.verdict(_f(pressure={"ask_share": 0.30,
                                                "volume": 300, "minutes": 10}))
     assert action == "راقب" and any("الشراء خف" in w for w in why)
+
+
+# ── The exit signal reads THIS contract's rule ──────────────────
+# Salem: "اترك خروجي انا اريد الدخول ... انا اضفت امر اشتريت سترايك مثلا 182
+# من اجل ان اول مايخف الشراء تبلغني واخرج". The advisor IS his exit, so it has
+# to speak the plan the alert printed. It read EXIT_RULES[0] — the same-day
+# row, +40% — for every position, and told him to close a 17-day contract at
+# +40% when the message he bought from said +80%.
+#
+# EXIT_RULES itself is untouched. This only makes the advisor read the right
+# line of it.
+
+def test_a_same_day_contract_is_judged_by_the_same_day_target():
+    take = C.EXIT_RULES[0][1]
+    action, why = advisor.verdict(_f(pct=take + 1, dte=0))
+    assert action == "اخرج" and any(str(take) in w for w in why)
+
+
+def test_a_multi_day_contract_is_not_closed_at_the_zero_dte_target():
+    """+40% on a 17-day contract whose plan is +80% is not the target."""
+    import paper
+    zero_take = C.EXIT_RULES[0][1]
+    long_take = paper.rule_for(17)[0]
+    assert long_take > zero_take, "the fixture needs rows that differ"
+    action, _ = advisor.verdict(_f(pct=zero_take + 1, dte=17))
+    assert action != "اخرج", "closed on the 0DTE target"
+
+
+def test_it_does_close_the_multi_day_contract_at_its_own_target():
+    import paper
+    long_take = paper.rule_for(17)[0]
+    action, why = advisor.verdict(_f(pct=long_take + 1, dte=17))
+    assert action == "اخرج" and any(str(long_take) in w for w in why)
+
+
+def test_the_position_carries_its_dte_into_the_read(monkeypatch):
+    """The fix is inert unless read() passes dte through — it did not."""
+    monkeypatch.setattr(advisor, "contract_tape", lambda *a, **k: [])
+    monkeypatch.setattr(advisor, "strike_net", lambda *a, **k: None)
+    f = advisor.read({"option_symbol": "X", "ticker": "TSLA", "strike": 372.5,
+                      "type": "call", "dte": 17, "entry_price": 1.5},
+                     deep=False)
+    assert f["dte"] == 17
