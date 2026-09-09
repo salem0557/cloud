@@ -23,6 +23,7 @@ import market
 import mine
 import monitor
 import scanner
+import spx
 import state
 
 _stop = False
@@ -138,6 +139,11 @@ def tick(marks):
         log("running scanner")
         run("scanner", scanner.main)
 
+    x = slot(now, C.SPX_REPORT_EVERY_MIN)
+    if x != marks["spx"]:
+        marks["spx"] = x
+        run("spx", spx.send_report)
+
     m = slot(now, C.MONITOR_EVERY_MIN)
     if m != marks["monitor"]:
         marks["monitor"] = m
@@ -155,7 +161,7 @@ def main():
                     f".env.example placeholder)")
 
     marks = {"scan": None, "monitor": None, "beat": None,
-             "watch": None, "open": None, "close": None}
+             "watch": None, "open": None, "close": None, "spx": None}
 
     while not _stop:
         # A tick must never take the service down. Before this, any error

@@ -776,6 +776,72 @@ def gex_levels(ticker, date=None):
     return out
 
 
+def market_tide(date=None, interval_5m=True):
+    """GET /api/market/market-tide — the market's own direction, in dollars.
+
+    UW's definition: calls bought at the ASK add to net call premium, calls
+    sold at the BID subtract from it; the same for puts. Trades at the mid are
+    not counted. So net_call_premium rising while net_put_premium falls is
+    money moving to the upside, market-wide, and the reverse is money moving
+    down. It is not a price and it is not a forecast — it is where the
+    premium went.
+
+    Returns rows ascending in time, numbers as floats. [] when UW cannot say.
+    """
+    try:
+        raw = _get("/api/market/market-tide",
+                   {"interval_5m": "true" if interval_5m else "false",
+                    **({"date": date} if date else {})})
+    except UWError as e:
+        print(f"  [uw] market tide failed: {e}")
+        return []
+    rows = [{"timestamp": r.get("timestamp") or "",
+             "net_call_premium": _num(r.get("net_call_premium")),
+             "net_put_premium": _num(r.get("net_put_premium")),
+             "net_volume": _num(r.get("net_volume"))}
+            for r in (raw or []) if isinstance(r, dict)]
+    rows.sort(key=lambda r: r["timestamp"])
+    return rows
+
+
+def index_close(ticker, date=None):
+    """The last close of an INDEX, which the candle endpoint will not serve.
+
+    Measured 2026-09-09: /api/stock/SPX/ohlc/* answers data:[] with
+    is_index:true under this subscription, at every candle size. The max-pain
+    endpoint carries the index's own close alongside its strikes and does
+    answer, so that is where the price comes from. Odd, and true.
+
+    0.0 when UW cannot say — never a guess, never a stale number.
+    """
+    try:
+        raw = _get(f"/api/stock/{ticker}/max-pain",
+                   {**({"date": date} if date else {})})
+    except UWError as e:
+        print(f"  [uw] {ticker} index close failed: {e}")
+        return 0.0
+    rows = raw if isinstance(raw, list) else []
+    return _num(rows[0].get("close")) if rows else 0.0
+
+
+def max_pain(ticker, date=None):
+    """GET /api/stock/{ticker}/max-pain — the strike where the most open
+    contracts expire worthless, per expiry. Rows as UW returns them, ascending
+    by expiry, with the numbers parsed."""
+    try:
+        raw = _get(f"/api/stock/{ticker}/max-pain",
+                   {**({"date": date} if date else {})})
+    except UWError as e:
+        print(f"  [uw] {ticker} max pain failed: {e}")
+        return []
+    rows = [{"expiry": r.get("expiry") or "",
+             "max_pain": _num(r.get("max_pain")),
+             "close": _num(r.get("close"))}
+            for r in (raw or []) if isinstance(r, dict)]
+    rows.sort(key=lambda r: r["expiry"])
+    return rows
+
+
 def stock_technicals(ticker, as_of=None, period=14):
     """Daily ATR, RSI and distance from the 20-day average, from one pull.
 

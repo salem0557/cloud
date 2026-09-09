@@ -27,6 +27,7 @@ import risk
 import state
 import technical
 import uw
+import verify
 from compose import compose, NO_TRADE
 from scoring import (ask_side_ratio, best_contract, contract_cost, exit_rule,
                      expected_profit_pct, flow_direction, flow_score,
@@ -506,6 +507,16 @@ def _scan(agg, dry_run, limit_tickers):
         msg = compose("entry", payload)
         if msg.startswith(NO_TRADE):
             print(cand["ticker"], msg)
+            continue
+        # The last gate. Salem: "لا اريد ان اشتري عقد ترسل تنبيه عليه ويكون
+        # مقلب بسبب خطاء برمجي". A contradiction between what this alert
+        # claims and what its own numbers say is a BUG, and the only safe
+        # thing to do with a bug at this point is send nothing.
+        broken = verify.blocks(payload, msg)
+        if broken:
+            print(f"  {cand['ticker']}: ALERT BLOCKED — {broken}")
+            journal.log_alert({**payload, "outcome": "blocked",
+                               "notes": broken}, kind="blocked")
             continue
         if dry_run:
             print("\n" + "=" * 50 + f"\n[DRY RUN] {cand['ticker']}\n" + "=" * 50)

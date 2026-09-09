@@ -239,19 +239,39 @@ def _wire_main(monkeypatch, cand, shortlist_name):
     monkeypatch.setattr(scanner.uw, "flow_alerts", lambda *a, **k: [])
     monkeypatch.setattr(scanner.uw, "spent", lambda: "")
     monkeypatch.setattr(scanner.finviz, "movers", lambda **k: [])
+    # A payload the way production builds one. It used to be a three-key stub,
+    # which is fine for a test about SCORES and useless the moment anything
+    # downstream reads the alert — verify.blocks() reads all of it, exactly as
+    # it does on the real path.
     monkeypatch.setattr(scanner, "to_payload",
-                        lambda c: {"ticker": c["ticker"], "tiers": [],
-                                   "score": c["score"]})
+                        lambda c: {"ticker": c["ticker"], "score": c["score"],
+                                   "direction": c["direction"],
+                                   "spot": c["spot"],
+                                   "technical": c["technical"],
+                                   "tiers": [_tier()]})
+    monkeypatch.setattr(scanner, "still_holding", lambda c: True)
     monkeypatch.setattr(scanner, "aggregate_flow",
                         lambda a: {cand["ticker"]: {"premium_usd": 1e6}})
     monkeypatch.setattr(scanner, "evaluate", lambda t, f, d=False: cand)
-    monkeypatch.setattr(scanner, "compose", lambda kind, p: "alert text")
+    # The message must carry the contract's own numbers, because that is one
+    # of the things the gate checks — a renderer showing a price the payload
+    # does not hold is the defect Salem hit on 2026-09-08.
+    monkeypatch.setattr(scanner, "compose",
+                        lambda kind, p: "alert text 500 @ $1.85")
     monkeypatch.setattr(scanner.mine, "remember_alert", lambda mid, p: None)
     monkeypatch.setattr(scanner.journal, "log_alert", lambda p, kind=None: None)
     monkeypatch.setattr(C, "MIN_TICKER_PREMIUM", 0)
     monkeypatch.setattr(C, "SHORTLIST_FILE", pathlib.Path(shortlist_name))
     scanner.main()
     return sent, recorded, reserved
+
+
+def _tier():
+    """One real contract, on the same side as the setup below."""
+    return {"tier": "\U0001f7e2", "option_symbol": "AMD260918C00500000",
+            "strike": 500, "type": "call", "expiry": "2099-09-18",
+            "ask": 1.85, "bid": 1.75, "cost": 185.0, "delta": 0.44,
+            "open_interest": 900, "dte": 9}
 
 
 def _cand(score, room):
