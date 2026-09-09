@@ -225,12 +225,35 @@ if st["n"] or st["open"]:
               if st["n"] else ""))
 else:
     report("record", WARN, "empty — no alert has opened a paper position yet")
-if C.TELEGRAM_PAPER_CHAT_ID:
-    report("paper chat", OK, f"separate — {C.TELEGRAM_PAPER_CHAT_ID[:6]}…")
-else:
-    report("paper chat", WARN,
-           "not set — results will share the alerts chat "
-           "(set TELEGRAM_PAPER_CHAT_ID)")
+# The three feeds, as they will actually be addressed.
+#
+# Salem's destinations are three TOPICS in ONE forum group — the chat id is
+# the same for all of them, so the topic id is the only thing separating
+# them. A missing topic id does not fail: it silently posts into the group's
+# General topic, next to another feed, and looks like the split working until
+# you open the group. This prints where each feed is really going and says so
+# out loud when two of them resolve to the same place.
+_FEEDS = [
+    ("alerts 943", C.TELEGRAM_CHAT_ID, C.TELEGRAM_TOPIC_ID, ""),
+    ("paper 944", C.TELEGRAM_PAPER_CHAT_ID or C.TELEGRAM_CHAT_ID,
+     C.TELEGRAM_PAPER_TOPIC_ID, "TELEGRAM_PAPER_TOPIC_ID"),
+    ("spx 945", C.TELEGRAM_SPX_CHAT_ID or C.TELEGRAM_CHAT_ID,
+     C.TELEGRAM_SPX_TOPIC_ID, "TELEGRAM_SPX_TOPIC_ID"),
+]
+_seen = {}
+for name, chat, topic, var in _FEEDS:
+    where = f"{chat or '—'} / topic {topic or 'General'}"
+    if not chat:
+        report(name, BAD, "no chat id")
+    elif not topic and var:
+        report(name, WARN, f"{where} — set {var} or it lands beside another feed")
+    else:
+        report(name, OK, where)
+    _seen.setdefault((chat, topic or None), []).append(name)
+for key, names in _seen.items():
+    if len(names) > 1:
+        report("collision", BAD,
+               " + ".join(names) + " all post to the same chat AND topic")
 
 # ── 5. Telegram ─────────────────────────────────────────────────
 section("7. Telegram")
