@@ -192,7 +192,10 @@ def test_a_flat_candle_is_not_treated_as_a_rejection():
 def test_the_bar_that_makes_the_breakout_confirms():
     """Opens below the level, crosses it, closes at the top of its range."""
     c = flat(50)
-    c[-1] = {"open": 99.8, "high": 101.4, "low": 99.7, "close": 101.3,
+    # The close sits 0.49 ATR past the level: a real break with most of the
+    # measured move still ahead of it. Pushed further (101.3, 0.76 ATR past)
+    # the same bar is correctly rejected — see the test below.
+    c[-1] = {"open": 99.8, "high": 101.1, "low": 99.7, "close": 101.0,
              "volume": 5000, "end_time": "last"}
     t = technical.analyse(c, "call")
     assert t["broke_level"], "did not clear the 100.5 level"
@@ -204,11 +207,27 @@ def test_the_bar_that_makes_the_breakout_confirms():
 
 def test_the_same_for_a_breakdown():
     c = flat(50)
-    c[-1] = {"open": 100.2, "high": 100.3, "low": 98.6, "close": 98.7,
+    c[-1] = {"open": 100.2, "high": 100.3, "low": 98.9, "close": 99.0,
              "volume": 5000, "end_time": "last"}
     t = technical.analyse(c, "put")
     assert t["broke_level"] and t["wick_back"] is False
     assert technical.holds(t) and technical.confirms(t)
+
+
+def test_the_same_break_extended_too_far_does_not_confirm():
+    """Salem: "عادي ارتفاع 20 او 30 دولار لكن مايكون وصل قمته".
+
+    Same bar shape, same volume, same held break — only pushed 0.76 ATR past
+    the level instead of 0.49. Two thirds of the measured move is behind it,
+    so it is no longer an entry.
+    """
+    c = flat(50)
+    c[-1] = {"open": 99.8, "high": 101.4, "low": 99.7, "close": 101.3,
+             "volume": 5000, "end_time": "last"}
+    t = technical.analyse(c, "call")
+    assert t["broke_level"] and technical.holds(t)
+    assert technical.is_late(t)
+    assert not technical.confirms(t)
 
 
 def test_be_at_0945_on_the_day_nothing_alerted():

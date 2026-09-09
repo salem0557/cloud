@@ -8,9 +8,10 @@ The band between them is the point. A setup that is real enough to be worth
 measuring but not good enough to send goes into the paper book alone, so the
 alert gate can be re-derived from a month of outcomes instead of argued over.
 
-Measured 2026-09-08, the two strongest names in the market, at the old 0.75:
-BE was rejected at +0.56 ATR and AMD at +0.71, and the day produced no alert
-at all. Both now clear the loosened alert gate.
+Measured 2026-09-08, the two strongest names in the market: BE at +0.56 ATR
+and AMD at +0.71. Both were rejected, the day produced no alert, the gate was
+loosened to 0.38 to let them through — and both went on to LOSE. At the
+measured 1.00 they are paper-only again, which is where they belonged.
 
 The line that must never bend: nothing in the paper band reaches Salem. No
 Telegram, no daily cap, no alert journal. He sees 943; this lives in 944.
@@ -37,12 +38,17 @@ def test_room_left_but_under_the_alert_gate_is_a_near_miss():
     assert technical.is_late(_tech(0.30))       # still not an alert
 
 
-def test_the_two_names_that_produced_no_alert_now_clear_the_alert_gate():
-    """BE +0.56 and AMD +0.71 on 2026-09-08. Neither is a paper-only trade
-    any more; both are alerts. This is what loosening the gate bought."""
+def test_the_two_names_that_produced_no_alert_are_paper_only_again():
+    """BE +0.56 and AMD +0.71 on 2026-09-08.
+
+    Loosening the gate to 0.38 turned these into alerts. Both then lost:
+    BE 278.44 -> 276 within the hour, AMD 500.00 -> 499. At 1.00 they are
+    back in the paper book, where a losing setup costs nothing and still
+    gets counted.
+    """
     for room in (0.56, 0.71):
-        assert not technical.is_late(_tech(room))
-        assert not technical.is_near_miss(_tech(room))
+        assert technical.is_late(_tech(room))
+        assert technical.is_near_miss(_tech(room))
 
 
 def test_a_break_past_its_target_is_never_a_near_miss():
