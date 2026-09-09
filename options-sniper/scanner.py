@@ -133,7 +133,7 @@ def evaluate(ticker, flow, dry_run=False):
                               f"{max(C.CANDLES_LOOKBACK, C.ATR_PERIOD + 2)}")
         return None
     near_miss = False
-    if tech["broke_level"] and technical.is_late(tech):
+    if technical.has_setup(tech) and technical.is_late(tech):
         if C.PAPER_NEAR_MISS and technical.is_near_miss(tech):
             # Room left, but under the rule's minimum. Salem does not see this
             # one; the paper book takes it so the rule can be judged on results

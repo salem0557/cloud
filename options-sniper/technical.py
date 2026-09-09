@@ -328,6 +328,17 @@ def is_late(tech):
     return remaining_atr(tech) < C.MIN_REMAINING_ATR
 
 
+def has_setup(tech):
+    """True when tech describes an entry with a level, a target and room.
+
+    Two shapes qualify: a break of the level, and a reversal — the failed
+    break that reclaimed it. Both carry a target, so both can be too late,
+    and the room gate has to see both. Before this, a reversal skipped the
+    gate entirely because it never sets broke_level.
+    """
+    return bool(tech) and bool(tech.get("broke_level") or tech.get("reversal"))
+
+
 def is_near_miss(tech):
     """Broke its level, still has room toward the target — but less than the
     rule demands. Not an alert. A paper test of the rule itself.
@@ -336,7 +347,7 @@ def is_near_miss(tech):
     reached or passed its target has no room worth buying and is never a near
     miss, it is the top.
     """
-    if not tech or not tech.get("broke_level"):
+    if not has_setup(tech):
         return False
     return C.PAPER_MIN_REMAINING_ATR <= remaining_atr(tech) < C.MIN_REMAINING_ATR
 

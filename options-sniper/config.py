@@ -92,7 +92,7 @@ WEIGHTS = {"flow": 30, "technical": 30, "catalyst": 20, "liquidity": 20}
 #   gate                     shipped    now
 #   THRESHOLD                     85     45
 #   WATCHLIST_FLOOR               65     30
-#   MIN_REMAINING_ATR           0.75   0.38
+#   MIN_REMAINING_ATR           0.75   1.00  (raised back, measured)
 #   VOLUME_SPIKE_RATIO           1.5   0.75
 #   MIN_OPEN_INTEREST            300    150
 #   MIN_ASK_SIDE_RATIO          0.55   0.28
@@ -278,10 +278,26 @@ ATR_PERIOD         = 14
 VOLUME_SPIKE_RATIO = 0.75   # candle volume vs prior-bar average
 TARGET_ATR_MULT    = 1.5    # target = broken level +/- 1.5 x ATR
 STOP_ATR_MULT      = 1.0    # stop   = broken level -/+ 1.0 x ATR
-# How much of the measured move must still be ahead of price to alert. At
-# 0.75 this rejected the two strongest names in the market on 2026-09-08 —
-# BE at +0.56 ATR and AMD at +0.71 — and the day produced no alert at all.
-MIN_REMAINING_ATR  = 0.38   # half of 0.75
+# How much of the measured move must still be ahead of price to alert.
+#
+# Salem, 2026-09-09: "ايه عادي ارتفاع 20 او 30 دولار لكن مايكون وصل قمته".
+# A rise before the alert is fine; the top is not. This line is the only
+# place that rule lives. The arithmetic: the target sits TARGET_ATR_MULT
+# (1.5) ATR past the level, so requiring R ATR of room means at most
+# (1 - R/1.5) of the move may already be gone.
+#
+#   room   gone at worst   signals   ran   med MFE   med MAE   ربح/ألم
+#   0.38            75%          6     3     +0.59     +0.82      0.72
+#   0.75            50%          6     3     +0.59     +0.82      0.72
+#   1.00            33%          5     3     +0.59     +0.50      1.18
+#   1.12            25%          5     3     +0.59     +0.50      1.18
+#
+# NVDA, five sessions, 15m bars, 8-bar hold. Tightening 0.38 -> 1.00 costs
+# ONE signal of six, and halves the median drawdown. It is the only setting
+# measured this session whose gain/pain ratio clears 1. Six signals is not
+# proof — the paper book in 944 is what turns it into evidence — but the
+# direction agrees with what Salem asked for, and the cost is one signal.
+MIN_REMAINING_ATR  = 1.00   # at most a third of the move already gone
 # The paper book takes anything with room still ahead of it. Below this it is
 # not a setup, it is the top: price has effectively reached its target and an
 # entry has nothing left to collect.
@@ -479,7 +495,12 @@ WALK_FORWARD = {"pair": "+60/-35", "avg": 1.010, "sessions": 8, "won": 5}
 SETTLED = {"raise volume filter": "not supported on 6 signals: 0.75 ran 50%, "
                                   "1.30 ran 25%; sample far too small to act on",
            "skip midday": "rejected: pooled $1.021->$1.087 but "
-                          "walk-forward $1.010->$0.979"}
+                          "walk-forward $1.010->$0.979",
+           "loosen MIN_REMAINING_ATR below 1.0": "measured 2026-09-09 on 6 "
+                          "signals: 0.38/0.50/0.75 all ran 50% with med MAE "
+                          "0.82 ATR; 1.00 ran 60% with med MAE 0.50. Costs "
+                          "one signal of six and is the only gain/pain above "
+                          "1.0 measured. Do not loosen without new evidence"}
 
 # ── What no desk would go live without ──────────────────────────
 # Per contract, per side. $0.65 is the common retail rate; some brokers charge
