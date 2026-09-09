@@ -72,6 +72,7 @@ def test_a_ticker_that_never_broke_is_not_a_near_miss():
 def test_the_scanner_sends_a_near_miss_to_paper_and_never_to_telegram(monkeypatch):
     import scanner
     sent, recorded = [], []
+    monkeypatch.setattr(C, "WATCHLIST_ONLY", False)
     monkeypatch.setattr(scanner, "send", lambda m: sent.append(m) or 1)
     monkeypatch.setattr(scanner.paper, "record", lambda p, tier=None: recorded.append(p) or {})
     monkeypatch.setattr(scanner.market, "is_open", lambda *a: True)
@@ -105,7 +106,9 @@ def test_a_near_miss_does_not_consume_the_daily_alert_cap(monkeypatch):
     """30 alerts a day is what Salem SEES. A silent paper trade is not one."""
     import scanner
     reserved = []
-    monkeypatch.setattr(scanner.state, "record_alert", lambda t: reserved.append(t) or True)
+    monkeypatch.setattr(C, "WATCHLIST_ONLY", False)
+    monkeypatch.setattr(scanner.state, "record_alert",
+                        lambda t, **kw: reserved.append(t) or True)
     monkeypatch.setattr(scanner, "send", lambda m: 1)
     monkeypatch.setattr(scanner.paper, "record", lambda p, tier=None: {})
     monkeypatch.setattr(scanner.market, "is_open", lambda *a: True)
@@ -130,6 +133,7 @@ def test_a_near_miss_stays_off_the_watchlist(monkeypatch):
     """The watchlist is for names that have NOT broken yet. This one has."""
     import json
     import scanner
+    monkeypatch.setattr(C, "WATCHLIST_ONLY", False)
     out = pathlib.Path("/tmp/_nm_shortlist3.json")
     monkeypatch.setattr(C, "SHORTLIST_FILE", out)
     monkeypatch.setattr(C, "MIN_TICKER_PREMIUM", 0)
@@ -158,6 +162,10 @@ def _wire_evaluate(monkeypatch, remaining):
     monkeypatch.setattr(scanner.uw, "candles", lambda *a, **k: ["bar"] * 60)
     monkeypatch.setattr(scanner.technical, "analyse",
                         lambda *a, **k: _tech(remaining))
+    # These fixtures hand evaluate() placeholder candles because they patch
+    # analyse(). reversal() reads the bars for real, so it is patched too —
+    # this file is about the near-miss band, not the failed break.
+    monkeypatch.setattr(scanner.technical, "reversal", lambda *a, **k: None)
     monkeypatch.setattr(scanner.uw, "option_chain", lambda t: [{"strike": 500}])
     monkeypatch.setattr(scanner.uw, "news", lambda t: [])
     monkeypatch.setattr(scanner, "best_contract", lambda *a: {})
@@ -213,11 +221,12 @@ def test_the_two_gates_are_ordered():
 def _wire_main(monkeypatch, cand, shortlist_name):
     import scanner
     sent, recorded, reserved = [], [], []
+    monkeypatch.setattr(C, "WATCHLIST_ONLY", False)  # score gates = discovery mode
     monkeypatch.setattr(scanner, "send", lambda m: sent.append(m) or 1)
     monkeypatch.setattr(scanner.paper, "record",
                         lambda p, tier=None: recorded.append(p) or {})
     monkeypatch.setattr(scanner.state, "record_alert",
-                        lambda t: reserved.append(t) or True)
+                        lambda t, **kw: reserved.append(t) or True)
     monkeypatch.setattr(scanner.market, "is_open", lambda *a: True)
     monkeypatch.setattr(scanner.state, "capacity_left", lambda: 30)
     monkeypatch.setattr(scanner.state, "read", lambda: {"alerted_tickers": []})

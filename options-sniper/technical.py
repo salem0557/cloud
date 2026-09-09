@@ -207,6 +207,96 @@ def holds(tech):
     return bool(tech.get("closed_strong")) and not tech.get("wick_back")
 
 
+def reversal(candles, lookback=None):
+    """The FAILED break. -> (direction, tech) or None.
+
+    A bar that pierces support and closes back ABOVE it, in the top third of
+    its own range, on volume: sellers pushed through the level and could not
+    hold it, and everyone who sold the break is trapped above their entry. The
+    snap-back is the trade. Mirrored at the top for puts.
+
+    This is the setup Salem pointed at on the MSFT 495 call — 4.23 -> 1.19 on
+    the sell-off, then 1.19 -> 2.30 on the bounce. The breakout rule cannot see
+    it: while the stock was making its low it was producing a PUT signal, and
+    the bottom he wants is that signal failing.
+
+    Returns the same tech shape analyse() does, so every caller downstream —
+    the message, the contract picker, the paper book — needs no special case.
+    """
+    if not C.USE_REVERSAL:
+        return None
+    lookback = lookback or C.CANDLES_LOOKBACK
+    if not candles or len(candles) < max(lookback, C.ATR_PERIOD + 2):
+        return None
+    prior, _ = _level_window(candles, candles[-lookback:][:-1])
+    if len(prior) < C.LEVEL_MIN_BARS:
+        return None
+    bar = candles[-1]
+    rng = bar["high"] - bar["low"]
+    if rng <= 0:
+        return None
+    avg = sum(c["volume"] for c in prior) / len(prior)
+    if avg <= 0 or bar["volume"] / avg < C.REVERSAL_VOLUME_RATIO:
+        return None
+    pos = (bar["close"] - bar["low"]) / rng
+    support = min(c["low"] for c in prior)
+    resistance = max(c["high"] for c in prior)
+
+    if (bar["low"] < support and bar["close"] > support
+            and pos >= 1 - C.REVERSAL_CLOSE_THIRD):
+        direction, level, stop = "call", support, bar["low"]
+    elif (bar["high"] > resistance and bar["close"] < resistance
+          and pos <= C.REVERSAL_CLOSE_THIRD):
+        direction, level, stop = "put", resistance, bar["high"]
+    else:
+        return None
+
+    tech = analyse(candles, direction, lookback)
+    if tech is None:
+        return None
+    a = tech["atr"]
+    up = direction == "call"
+    target = level + C.TARGET_ATR_MULT * a if up else level - C.TARGET_ATR_MULT * a
+    remaining = (target - bar["close"]) / a if up else (bar["close"] - target) / a
+    tech.update({
+        "reversal": True,
+        "level": round(level, 2),
+        # The stop is the wick that failed, not an ATR multiple: if price goes
+        # back through it the reclaim did not happen and the idea is simply gone.
+        "stop": round(stop, 2),
+        "target": round(target, 2),
+        "remaining_atr": round(remaining, 2),
+        "expected_move": round(max(0.0, remaining) * a, 2),
+        "entry_rule": (f"استرجع {level:.2f} بعد اختراقه" if up
+                       else f"فشل فوق {level:.2f} وأغلق تحته"),
+    })
+    return direction, tech
+
+
+def is_signal(tech, flow_direction=None, direction=None):
+    """Salem's rule, stated in his own words on 2026-09-09:
+
+        "ان كان هنالك اختراق مقاومة او كسر دعم مع سيولة في السهم و العقود
+         على فريم 15 دقيقة ترسل لي افضل ثلاث عقود"
+
+    A 15m break, volume in the STOCK behind it, and money on that side in the
+    OPTIONS. confirms() is the first two — the level broken on a closed candle,
+    volume above the average, the break held, and room left to the target. The
+    third is the option flow pointing the same way as the break.
+
+    Flow that is unknown does not veto: UW returns nothing for a name with no
+    unusual activity, and "no alerts today" is not "the money is on the other
+    side". Flow that actively disagrees does veto.
+    """
+    # A failed break is its own signal and does not have to confirm() — it is
+    # by definition a break that did NOT hold.
+    if not (tech or {}).get("reversal") and not confirms(tech):
+        return False
+    if flow_direction and direction and flow_direction != direction:
+        return False
+    return True
+
+
 def alert_gate(tech):
     """The score this setup must reach to be SENT.
 

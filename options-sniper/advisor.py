@@ -26,6 +26,7 @@ this project rather than new ones invented for the occasion.
 import datetime
 
 import config as C
+import paper
 import market
 import technical
 import uw
@@ -131,6 +132,10 @@ def read(pos, tech=None, deep=True):
     now_px = last_price(rows)
     return {
         "ticker": pos.get("ticker", ""), "strike": pos.get("strike"),
+        # Carried so verdict() can read THIS contract's exit row rather than
+        # defaulting to the same-day one. Without it rule_for(None) falls to
+        # the 0DTE line and every position is judged against +40%.
+        "dte": pos.get("dte"),
         "is_call": is_call, "entry": pos.get("entry_price"),
         "price": now_px, "pct": _pct(now_px, pos.get("entry_price")),
         "pressure": contract_pressure(rows),
@@ -196,8 +201,17 @@ def verdict(f):
     if left is not None and 0 < left <= CLOSING_WARN_MIN:
         return "اخرج", [f"باقي {left} دقيقة على الإغلاق — العقد ينتهي اليوم"]
 
-    # 3. the profit is there
-    take = C.EXIT_RULES[0][1]
+    # 3. the profit is there — against THIS contract's rule, not the 0DTE one.
+    #
+    # EXIT_RULES[0] is the same-day row (+40%). Reading it for every position
+    # told Salem to exit a 17-day contract at +40% when the alert he acted on
+    # had printed +80% for it, so the advice contradicted the plan in the very
+    # message he bought from. paper.rule_for() is the single place that maps a
+    # dte to its row; the advisor uses it now, as the book and the alert do.
+    #
+    # His exit is HIS: "اترك خروجي انا اريد الدخول". The rules table is
+    # untouched — this only makes the advisor read the right line of it.
+    take = paper.rule_for(f.get("dte"))[0]
     if f.get("pct") is not None and f["pct"] >= take:
         why.append(f"وصل {f['pct']:+.0f}% — الهدف {take}%")
         out = "اخرج"

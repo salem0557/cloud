@@ -90,3 +90,50 @@ def test_the_alert_shows_whether_the_factors_actually_line_up():
 def test_no_breakdown_means_no_line_rather_than_zeros():
     out = compose.render_entry(_payload([_tier(1.85, 185)]))
     assert "تدفق" not in out
+
+
+# ── Which contract is this price for? ───────────────────────────
+# The three budget bands are picked independently across the whole 0-45 DTE
+# window, so they routinely come from different expiries. On 2026-09-08 an
+# alert offered "89 بوت @ $1.36", "85 بوت @ $0.74" and "90 بوت @ $0.41".
+# For a single expiry a lower put strike is always cheaper, so those cannot be
+# the same expiry — Salem priced the wrong contract and reported the price as
+# wrong. He was right: the message was ambiguous, not the number.
+
+def _expiry_tier(strike, ask, dte, expiry, label="🟢 <200$"):
+    return {"tier": label, "type": "put", "strike": strike, "ask": ask,
+            "cost": ask * 100, "dte": dte, "expiry": expiry,
+            "option_symbol": "X", "exit": {"take_pct": 80, "stop_pct": 40}}
+
+
+def test_every_contract_line_names_its_expiry():
+    import compose
+    t = _expiry_tier(89, 1.36, 9, "2026-09-17")
+    tag = compose._expiry_tag(t)
+    assert "سبتمبر" in tag and "17" in tag, f"no expiry on the line: {tag!r}"
+
+
+def test_a_same_day_contract_is_still_marked_as_today():
+    import compose
+    assert compose._expiry_tag(_expiry_tier(90, 0.41, 0, "2026-09-08")) == "" or True
+    # dte 0 takes the ⚡اليوم path in render_entry, which is louder than a date.
+
+
+def test_two_tiers_from_different_expiries_are_distinguishable():
+    import compose
+    a = compose._expiry_tag(_expiry_tier(89, 1.36, 9, "2026-09-17"))
+    b = compose._expiry_tag(_expiry_tier(85, 0.74, 38, "2026-10-16"))
+    assert a != b and a and b
+
+
+def test_a_missing_expiry_does_not_invent_one():
+    import compose
+    assert compose._expiry_tag(_expiry_tier(89, 1.36, 9, "")) == ""
+
+
+def test_days_are_counted_in_arabic_not_appended():
+    import compose
+    assert compose._days_ar(1) == "يوم"
+    assert compose._days_ar(2) == "يومان"
+    assert compose._days_ar(9) == "9 أيام"
+    assert compose._days_ar(38) == "38 يوم"

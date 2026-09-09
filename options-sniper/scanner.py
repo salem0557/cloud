@@ -98,10 +98,35 @@ def evaluate(ticker, flow, dry_run=False):
     evaluate.last_skip to the reason, so a scan that scores nothing can say
     why instead of printing an empty shortlist and leaving it there."""
     evaluate.last_skip = None
-    direction = flow_direction(flow)
-
     candles = uw.candles(ticker, timeframe="5D")
-    tech = technical.analyse(candles, direction)
+
+    # WHICH WAY. Under the watchlist strategy the BREAK picks the direction:
+    # "اختراق مقاومة او كسر دعم". Taking it from the option flow instead — as
+    # discovery mode does, because flow is the only thing it knows about a name
+    # — made the flow agree with itself by construction, and measured the wrong
+    # side of the chart whenever the tape and the price disagreed.
+    if C.WATCHLIST_ONLY:
+        direction, tech = None, None
+        for d in ("call", "put"):
+            t = technical.analyse(candles, d)
+            if t and technical.confirms(t):
+                direction, tech = d, t
+                break
+        if direction is None:
+            # No break held. Before giving up, ask whether one FAILED — a bar
+            # that pierced the level and closed back through it. That is the
+            # bottom Salem wants to buy, and it is invisible to confirms()
+            # because it is precisely a break that did not confirm.
+            rev = technical.reversal(candles)
+            if rev:
+                direction, tech = rev
+        if direction is None:
+            direction = flow_direction(flow) or "call"
+            tech = technical.analyse(candles, direction)
+    else:
+        direction = flow_direction(flow)
+        tech = technical.analyse(candles, direction)
+
     if tech is None:
         evaluate.last_skip = (f"no candles" if not candles else
                               f"only {len(candles)} bars, need "
@@ -244,6 +269,21 @@ def main(dry_run=False, limit_tickers=None):
         print("Daily cap reached — scan skipped.")
         return 0
 
+    if C.WATCHLIST_ONLY:
+        # Discovery off. These names and nothing else, every scan, all session.
+        agg = {}
+        for ticker in C.WATCHLIST:
+            try:
+                t_alerts = uw.ticker_flow_alerts(ticker)
+            except uw.UWError as e:
+                print(f"  [flow] {ticker}: {e}")
+                continue
+            if t_alerts:
+                agg.update(aggregate_flow(t_alerts))
+        print(f"Watchlist: {len(C.WATCHLIST)} names, "
+              f"{len(agg)} with option flow today")
+        return _scan(agg, dry_run, limit_tickers)
+
     alerts = uw.flow_alerts()
     print(f"UW flow alerts: {len(alerts)}")
     agg = aggregate_flow(alerts)
@@ -276,7 +316,26 @@ def main(dry_run=False, limit_tickers=None):
         print(f"Core names: {len(C.CORE_TICKERS)} "
               f"({len(missing)} not in the UW feed)")
 
-    already = set(state.read().get("alerted_tickers", []))
+    return _scan(agg, dry_run, limit_tickers)
+
+
+def _scan(agg, dry_run, limit_tickers):
+    if C.WATCHLIST_ONLY:
+        # A name with no unusual option flow today still has a chart. "No
+        # alerts on the feed" is not "nothing is happening" — it is the normal
+        # state of a mega-cap, which is why these names were invisible before.
+        for t in C.WATCHLIST:
+            agg.setdefault(t, {"premium_usd": 0.0, "sweep_count": 0,
+                               "call_premium": 0.0, "put_premium": 0.0,
+                               "call_ask_premium": 0.0, "put_ask_premium": 0.0,
+                               "ask_premium": 0.0, "bid_premium": 0.0,
+                               "vol_oi_ratio": 0.0, "alerts": 0,
+                               "underlying_price": 0.0, "rules": []})
+
+    # Not a lockout any more: a name that alerted earlier is still evaluated,
+    # and state.record_alert() decides at the send whether this break is a new
+    # and stronger one or the same setup arriving again.
+    already = set() if C.REALERT else set(state.read().get("alerted_tickers", []))
     cap = limit_tickers or C.MAX_CANDIDATES_PER_SCAN
 
     def usable(t, f):
@@ -355,11 +414,20 @@ def main(dry_run=False, limit_tickers=None):
     gates = [C.THRESHOLD, C.BREAK_THRESHOLD]
     if C.PAPER_NEAR_MISS:
         gates.append(C.PAPER_THRESHOLD)
-    floor = min(gates)
+    # Under the watchlist strategy the score is not a gate, so the loop must
+    # not stop on it — it stops on the break, per candidate, below.
+    floor = float("-inf") if C.WATCHLIST_ONLY else min(gates)
     for cand in candidates:
         if cand["score"] < floor:
             break
-        gate = technical.alert_gate(cand["technical"])
+        if C.WATCHLIST_ONLY:
+            # Salem's rule, not a score: a 15m break with volume behind it and
+            # the option flow not pointing the other way.
+            side = flow_direction(cand["flow"]) if cand.get("flow") else None
+            signal = technical.is_signal(cand["technical"], side, cand["direction"])
+            gate = -1 if signal else float("inf")
+        else:
+            gate = technical.alert_gate(cand["technical"])
         payload = to_payload(cand)
 
         # Two ways to end up in the paper book and not in 943: the score sits
@@ -413,9 +481,13 @@ def main(dry_run=False, limit_tickers=None):
             journal.log_alert(payload)
             sent += 1
             continue
-        if not state.record_alert(cand["ticker"]):
-            print("Daily cap reached — stopping.")
-            break
+        t = cand["technical"]
+        if not state.record_alert(cand["ticker"], level=t.get("level"),
+                                  direction=cand["direction"],
+                                  atr=t.get("atr")):
+            print(f"  {cand['ticker']}: already alerted on this move, or the "
+                  f"day's cap is reached")
+            continue
         mid = send(msg)
         if mid:
             mine.remember_alert(mid, payload)

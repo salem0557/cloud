@@ -31,6 +31,7 @@ def _flow(prem):
 @pytest.fixture
 def wired(monkeypatch, tmp_path):
     seen = []
+    monkeypatch.setattr(C, "WATCHLIST_ONLY", False)  # score gates = discovery mode
     monkeypatch.setattr(C, "SHORTLIST_FILE", tmp_path / "shortlist.json")
     monkeypatch.setattr(C, "STATE_FILE", tmp_path / "state.json")
     monkeypatch.setattr(C, "LOCK_FILE", tmp_path / "state.lock")
@@ -98,13 +99,28 @@ def test_the_surprises_still_get_in(monkeypatch, wired):
     assert "UBER" in wired and "TSLA" in wired
 
 
-def test_a_core_name_already_alerted_today_is_not_re_evaluated(monkeypatch, wired):
+def test_with_REALERT_off_a_name_already_alerted_is_skipped(monkeypatch, wired):
+    monkeypatch.setattr(C, "REALERT", False)
     monkeypatch.setattr(scanner.state, "read",
                         lambda: {"alerted_tickers": ["NVDA"]})
     monkeypatch.setattr(scanner, "aggregate_flow", lambda a: {"NVDA": _flow(5_000_000)})
     monkeypatch.setattr(scanner.uw, "ticker_flow_alerts", lambda t: [])
     scanner.main()
     assert "NVDA" not in wired
+
+
+def test_with_REALERT_on_it_is_still_evaluated(monkeypatch, wired):
+    """Salem: "كيف افك هذا القيد ليعطيني كسور متكررة اقوى". The name is no
+    longer locked out of the SCAN; record_alert() decides at the send whether
+    this break is a new and stronger one, which is where the judgement belongs
+    — the scan cannot know the level until it has measured it."""
+    monkeypatch.setattr(C, "REALERT", True)
+    monkeypatch.setattr(scanner.state, "read",
+                        lambda: {"alerted_tickers": ["NVDA"]})
+    monkeypatch.setattr(scanner, "aggregate_flow", lambda a: {"NVDA": _flow(5_000_000)})
+    monkeypatch.setattr(scanner.uw, "ticker_flow_alerts", lambda t: [])
+    scanner.main()
+    assert "NVDA" in wired
 
 
 def test_a_failed_core_lookup_does_not_stop_the_scan(monkeypatch, wired, capsys):
@@ -124,9 +140,9 @@ def test_a_failed_core_lookup_does_not_stop_the_scan(monkeypatch, wired, capsys)
 # ── The shipped list ────────────────────────────────────────────
 def test_the_names_salem_asked_for_are_in_the_default_list():
     """"لا اريد فقط تسلا ونفديا اريد كل الشركات الكبرى تكون مرئية مثل MU و SPX"."""
-    for t in ("NVDA", "TSLA", "MU", "SPX", "AAPL", "MSFT", "AMD", "META",
-              "AMZN", "GOOGL", "AVGO", "SPY", "QQQ"):
-        assert t in C.CORE_TICKERS, f"{t} would still be invisible"
+    for t in ("NVDA", "TSLA", "MU", "AAPL", "MSFT", "META", "AMZN",
+              "GOOGL", "INTC", "QQQ", "F"):
+        assert t in C.WATCHLIST, f"{t} would not be watched"
 
 
 def test_the_list_is_overridable_without_a_deploy():
@@ -134,10 +150,10 @@ def test_the_list_is_overridable_without_a_deploy():
     dropped from Railway rather than through a merge."""
     import importlib
     import os
-    os.environ["CORE_TICKERS"] = "abc, def"
+    os.environ["WATCHLIST"] = "abc, def"
     try:
         importlib.reload(C)
-        assert C.CORE_TICKERS == ["ABC", "DEF"]
+        assert C.WATCHLIST == ["ABC", "DEF"]
     finally:
-        del os.environ["CORE_TICKERS"]
+        del os.environ["WATCHLIST"]
         importlib.reload(C)

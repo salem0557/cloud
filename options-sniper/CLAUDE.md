@@ -192,6 +192,28 @@ because reading it as a sale would close a position he still holds.
   scores 0 on a call setup, 20 on a put setup
 - Liquidity (0–20): spread (percent OR cents) and open interest, measured on a
   contract Salem can actually afford
+- STRATEGY (2026-09-09, Salem's own words): watch ONLY `WATCHLIST` — MU, TSLA,
+  AMZN, GOOGL, AAPL, INTC, NVDA, QQQ, META, MSFT, F. Discovery is OFF: no
+  market-wide flow feed choosing the universe, no Finviz movers. The signal is
+  `technical.is_signal()` — a 15m break of resistance or support, volume in the
+  stock behind it, and option flow not pointing the other way. The SCORE is not
+  a gate in this mode; it is computed and shown because the paper book compares
+  it. The break also picks the DIRECTION (call on a resistance break, put on a
+  support break) — taking it from option flow made the flow agree with itself.
+  A second signal shares the pipeline: `technical.reversal()`, the FAILED
+  break — a bar that pierces the level and closes back through it on volume,
+  with the sellers of the break trapped. It does NOT have to `confirms()`,
+  since by definition it is a break that did not hold; its stop is the wick
+  that failed rather than an ATR multiple; it is tagged 🔄 on the alert and
+  `setup: "reversal"` in the paper book so 944 scores the two apart.
+  `USE_REVERSAL=0` turns it off.
+- A name may alert MORE THAN ONCE a day (`REALERT`), but only on a genuinely
+  different break: `REALERT_COOLDOWN_MIN` since the last, AND a level at least
+  `REALERT_LEVEL_ATR` beyond the one already alerted in that direction. A
+  direction flip always qualifies. `MAX_ALERTS_PER_TICKER` stops one runaway
+  name eating the day. Never remove the lock outright — the level barely moves
+  between scans, so the identical setup would re-send every ten minutes.
+  `WATCHLIST_ONLY=0` restores discovery, and then:
 - Gates by KIND of setup. A CONFIRMED BREAK is judged by `BREAK_THRESHOLD`
   (50) — price agreeing is the one input that cannot be talked into it. A
   setup with no break is a forecast and clears `THRESHOLD` (70). ALERT (943):

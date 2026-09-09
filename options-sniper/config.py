@@ -125,7 +125,18 @@ WEIGHTS = {"flow": 30, "technical": 30, "catalyst": 20, "liquidity": 20}
 #     gate 55   27 of 41
 #     gate 50   34 of 41
 #
-THRESHOLD          = 70     # no break: has to be exceptional
+# In WATCHLIST_ONLY mode the gate is not a score at all. Salem named the signal
+# himself: a 15m break of resistance or support, with volume in the stock AND
+# money on that side in the options, and then the three contracts. So that is
+# the rule — technical.confirms() plus option flow agreeing — and the score is
+# still computed and printed, because it is what the paper book compares, but
+# it does not decide whether the alert is sent.
+#
+# The reason to drop the score as a gate: it mixed a headline, a spread and a
+# premium total into one number, and on 2026-09-08 it let ten alerts through
+# with technical 0.0 — no break at all — while silencing TSLA and NVDA while
+# they ran. A break IS the signal; the rest is context.
+THRESHOLD          = 70     # no break: has to be exceptional (discovery mode)
 BREAK_THRESHOLD    = 50     # price already confirmed it
 # The paper book's own gate, deliberately looser than the alert gate. Salem
 # asked for both to be loosened and the paper one loosened further: "سهل
@@ -157,6 +168,27 @@ WATCHLIST_FLOOR    = min(THRESHOLD, BREAK_THRESHOLD) - WEIGHTS["technical"]  # 2
 # qualified but arrived late in the day. It does mean a losing strategy loses
 # six times faster at 30 than at 5, which is the reason it exists.
 MAX_ALERTS_PER_DAY = int(os.environ.get("MAX_ALERTS_PER_DAY") or 5)
+
+# ── Alerting the same name twice ────────────────────────────────
+# A ticker used to be locked out for the rest of the day the moment it alerted
+# once. Salem: "كيف افك هذا القيد ليعطيني كسور متكررة اقوى". On 2026-09-08 TSLA
+# broke at 09:45 and again, harder, hours later — only the first would have
+# reached him, and the second was the better trade.
+#
+# The lock is not removed, it is made conditional. Simply removing it re-sends
+# the SAME break every scan: the level barely moves, so the same setup would
+# clear the gate again ten minutes later.
+#
+# A second alert on a name needs BOTH:
+#   - REALERT_COOLDOWN_MIN since the last one, so one move is one alert, and
+#   - a level at least REALERT_LEVEL_ATR beyond the level already alerted,
+#     in the same direction — a genuinely higher high, not the same one again.
+# A direction FLIP always qualifies: a name that broke up in the morning and
+# breaks down in the afternoon is a different trade, not a repeat.
+REALERT                = os.environ.get("REALERT", "1").lower() in ("1", "true", "yes")
+REALERT_COOLDOWN_MIN   = 45
+REALERT_LEVEL_ATR      = 0.5
+MAX_ALERTS_PER_TICKER  = 3    # one runaway name must not eat the day's quota
 
 # ── Budget bands (contract cost = ask x 100) ────────────────────
 # Each band is a RANGE with a floor and a ceiling, not a target price. The old
@@ -212,6 +244,28 @@ LEVEL_MIN_BARS     = 3      # below this the session has no structure yet, so
 USE_OPENING_RANGE     = os.environ.get("USE_OPENING_RANGE", "1").lower() in ("1", "true", "yes")
 OPENING_RANGE_BARS    = 2     # 09:30-10:00 on the 15m frame
 OPENING_VOLUME_RATIO  = 1.5   # vs VOLUME_SPIKE_RATIO for the rest of the day
+
+# ── The failed break (reversal) ─────────────────────────────────
+# Salem, 2026-09-09, on the MSFT 495 call: it fell 4.23 -> 1.19 as the stock
+# sold off, then ran 1.19 -> 2.30 (+93%) on the bounce. "كيف تجعل استراتيجيتنا
+# تعمل لاخذ العقد بالاسفل وبيعه بالاعلى".
+#
+# The breakout rule cannot see that trade, and not by accident: while the stock
+# was making its low it was producing a PUT signal, and the moment he wants —
+# the bottom — is that put signal FAILING.
+#
+# So the failed break is its own signal. A bar that pierces support and CLOSES
+# BACK ABOVE it, in the top third of its own range, on volume: sellers pushed
+# through the level and could not hold it, and the ones who sold the break are
+# now trapped. Mirrored at the top for puts.
+#
+# Measured on NVDA's 15m tape, 5 sessions: TWO signals. That is not evidence of
+# anything and it is not treated as any — it is tagged separately so 944
+# measures it apart from the breakout, and after a month the book says which of
+# the two earns its place.
+USE_REVERSAL          = os.environ.get("USE_REVERSAL", "1").lower() in ("1", "true", "yes")
+REVERSAL_VOLUME_RATIO = 0.75  # the reclaim needs buyers behind it
+REVERSAL_CLOSE_THIRD  = 1 / 3 # close in the third of the bar that agrees
 # How many OHLC pages uw.candles() may walk back to reach that many REGULAR
 # bars. One page is not enough: UW answers timeframe=5D with 100 rows and no
 # more, ~60 of them pre/post-market, which left 39 usable against the 40
@@ -400,7 +454,31 @@ WALK_FORWARD = {"pair": "+60/-35", "avg": 1.010, "sessions": 8, "won": 5}
 # The pattern was real in those sessions and did not repeat. Acting on it
 # would have cost about three cents per dollar while showing a nicer table.
 # The flag stays, because the next hypothesis deserves the same test.
-SETTLED = {"skip midday": "rejected: pooled $1.021->$1.087 but "
+# RAISING VOLUME_SPIKE_RATIO ON THE WATCHLIST STRATEGY: not supported.
+#
+# Measured 2026-09-09 on NVDA's real 15m tape, 130 bars over 5 sessions, by
+# walking every bar, taking is_signal() at face value, and reading the stock's
+# MFE/MAE over the 30-minute hold:
+#
+#     vol ratio   signals   ran   ran%   med MFE   med MAE
+#          0.75         6     3    50%     +0.59     +0.82
+#          1.00         4     1    25%     +0.36     +1.32
+#          1.30         4     1    25%     +0.36     +1.32
+#          1.50         3     1    33%     +0.36     +0.82
+#
+# Asking for more volume did not separate the runners from the fades — it
+# removed a winner. I had recommended putting this back to 1.3, and this does
+# not support it. That was reasoning, not measurement, and it is recorded as
+# such rather than quietly dropped.
+#
+# SIX SIGNALS IS NOT A RESULT, and nothing is changed on the strength of it.
+# What the sample does say is worth writing down: all three that ran were on
+# 2026-09-08, a trending day; all three that faded were on 09-03 and 09-04,
+# choppy ones. And the MEDIAN DRAWDOWN (0.82 ATR) EXCEEDED THE MEDIAN GAIN
+# (0.59). On this evidence the exit rule decides the outcome, not the entry.
+SETTLED = {"raise volume filter": "not supported on 6 signals: 0.75 ran 50%, "
+                                  "1.30 ran 25%; sample far too small to act on",
+           "skip midday": "rejected: pooled $1.021->$1.087 but "
                           "walk-forward $1.010->$0.979"}
 
 # ── What no desk would go live without ──────────────────────────
@@ -513,10 +591,26 @@ MIN_TICKER_PREMIUM      = 100_000   # skip tickers below this daily premium
 # Cost: one flow lookup each for the ones the feed did not already carry, then
 # the usual per-candidate calls. Roughly 4,000-6,000 UW requests a day on top
 # of the current ~12,000, against a 30,000 allowance. Read uw.spent().
-CORE_TICKERS = [t.strip().upper() for t in (os.environ.get("CORE_TICKERS") or
-    "NVDA,TSLA,AAPL,MSFT,AMZN,GOOGL,META,AVGO,AMD,MU,NFLX,PLTR,COIN,MSTR,"
-    "SMCI,INTC,QCOM,ARM,TSM,ORCL,CRWD,JPM,BAC,XOM,LLY,UNH,"
-    "SPY,QQQ,IWM,SPX,NDX").split(",") if t.strip()]
+# ── THE WATCHLIST — the only names this system trades ───────────
+# Salem, 2026-09-09, replacing everything that came before it:
+#   "١- فقط الشركات التي بالصورة
+#    ٢- فقط راقب هذه الشركات والتدفقات على عقودها وان كان هنالك اختراق مقاومة
+#       او كسر دعم مع سيولة في السهم و العقود على فريم ١٥ دقيقة ترسل لي افضل
+#       ثلاث عقود حسب ميزانيتي"
+#
+# Eleven names, from the two screenshots. Discovery is OFF: no market-wide
+# flow feed deciding the universe, no Finviz movers. These names and nothing
+# else, watched all session.
+#
+# What that buys: every one of them is deeply liquid, has same-day expiries and
+# penny-wide books, and is a name he can see moving on his own screen. The
+# scanner spent the whole of 2026-09-08 on GH, LYTE, TIGO, DYN and IONS.
+WATCHLIST = [t.strip().upper() for t in (os.environ.get("WATCHLIST") or
+    "MU,TSLA,AMZN,GOOGL,AAPL,INTC,NVDA,QQQ,META,MSFT,F").split(",") if t.strip()]
+# Off, and discovery comes back: the flow feed and Finviz choose the universe
+# again and WATCHLIST becomes a guaranteed core inside it.
+WATCHLIST_ONLY = os.environ.get("WATCHLIST_ONLY", "1").lower() in ("1", "true", "yes")
+CORE_TICKERS = WATCHLIST
 
 # ── Finviz Elite (candidate discovery only — never scored) ──────
 # Finviz costs nothing per ticker: one screener request returns every row, and
