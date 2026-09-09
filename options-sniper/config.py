@@ -411,7 +411,31 @@ WALK_FORWARD = {"pair": "+60/-35", "avg": 1.010, "sessions": 8, "won": 5}
 # The pattern was real in those sessions and did not repeat. Acting on it
 # would have cost about three cents per dollar while showing a nicer table.
 # The flag stays, because the next hypothesis deserves the same test.
-SETTLED = {"skip midday": "rejected: pooled $1.021->$1.087 but "
+# RAISING VOLUME_SPIKE_RATIO ON THE WATCHLIST STRATEGY: not supported.
+#
+# Measured 2026-09-09 on NVDA's real 15m tape, 130 bars over 5 sessions, by
+# walking every bar, taking is_signal() at face value, and reading the stock's
+# MFE/MAE over the 30-minute hold:
+#
+#     vol ratio   signals   ran   ran%   med MFE   med MAE
+#          0.75         6     3    50%     +0.59     +0.82
+#          1.00         4     1    25%     +0.36     +1.32
+#          1.30         4     1    25%     +0.36     +1.32
+#          1.50         3     1    33%     +0.36     +0.82
+#
+# Asking for more volume did not separate the runners from the fades — it
+# removed a winner. I had recommended putting this back to 1.3, and this does
+# not support it. That was reasoning, not measurement, and it is recorded as
+# such rather than quietly dropped.
+#
+# SIX SIGNALS IS NOT A RESULT, and nothing is changed on the strength of it.
+# What the sample does say is worth writing down: all three that ran were on
+# 2026-09-08, a trending day; all three that faded were on 09-03 and 09-04,
+# choppy ones. And the MEDIAN DRAWDOWN (0.82 ATR) EXCEEDED THE MEDIAN GAIN
+# (0.59). On this evidence the exit rule decides the outcome, not the entry.
+SETTLED = {"raise volume filter": "not supported on 6 signals: 0.75 ran 50%, "
+                                  "1.30 ran 25%; sample far too small to act on",
+           "skip midday": "rejected: pooled $1.021->$1.087 but "
                           "walk-forward $1.010->$0.979"}
 
 # ── What no desk would go live without ──────────────────────────
