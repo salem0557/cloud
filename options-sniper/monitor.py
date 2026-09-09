@@ -210,7 +210,12 @@ def check_shortlist(dry_run=False):
         score = round(min(100.0, base + technical_score(tech)), 1)
         # This path only gets here on a CONFIRMED break (or a near miss), so
         # the gate is BREAK_THRESHOLD — price has already agreed.
-        gate = technical.alert_gate(tech)
+        if C.WATCHLIST_ONLY:
+            side = flow_direction(fresh) if fresh else None
+            gate = (-1 if technical.is_signal(tech, side, item["direction"])
+                    else float("inf"))
+        else:
+            gate = technical.alert_gate(tech)
         floor = min(gate, C.PAPER_THRESHOLD) if C.PAPER_NEAR_MISS else gate
         if score < floor:
             print(f"  {t}: break confirmed but score {score} < {floor}")

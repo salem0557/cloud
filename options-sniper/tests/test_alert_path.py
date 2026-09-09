@@ -69,13 +69,43 @@ def test_the_message_from_those_tiers_states_every_exit_rule():
     assert "تدفق 28/30" in out                     # do the factors line up
 
 
-def test_the_shortlist_carries_the_components_the_monitor_cannot_recompute():
+def test_the_shortlist_carries_the_components_the_monitor_cannot_recompute(
+        monkeypatch, tmp_path):
     """The monitor re-derives only the technical 30. Without the other three
-    a watchlist alert had no breakdown line at all."""
-    import inspect
-    src = inspect.getsource(scanner.main)
-    assert '"base_breakdown"' in src
-    assert all(k in src for k in ("flow", "catalyst", "liquidity"))
+    a watchlist alert had no breakdown line at all.
+
+    Checked on the file the scanner actually writes, not on its source: the
+    source test broke the moment the code moved to another function, which is
+    the wrong thing for a test to notice.
+    """
+    import json
+    out = tmp_path / "shortlist.json"
+    monkeypatch.setattr(C, "SHORTLIST_FILE", out)
+    monkeypatch.setattr(C, "STATE_FILE", tmp_path / "state.json")
+    monkeypatch.setattr(C, "LOCK_FILE", tmp_path / "state.lock")
+    monkeypatch.setattr(C, "WATCHLIST_ONLY", False)
+    monkeypatch.setattr(C, "MIN_TICKER_PREMIUM", 0)
+    monkeypatch.setattr(scanner.market, "is_open", lambda *a: True)
+    monkeypatch.setattr(scanner.state, "capacity_left", lambda: 30)
+    monkeypatch.setattr(scanner.uw, "flow_alerts", lambda *a, **k: [{"x": 1}])
+    monkeypatch.setattr(scanner.uw, "spent", lambda: "")
+    monkeypatch.setattr(scanner.finviz, "movers", lambda **k: [])
+    monkeypatch.setattr(scanner.uw, "ticker_flow_alerts", lambda t: [])
+    monkeypatch.setattr(scanner, "aggregate_flow",
+                        lambda a: {"NVDA": {"premium_usd": 5e6}} if a else {})
+    cand = dict(_cand(), ticker="NVDA", score=55.0, near_miss=False,
+                score_breakdown={"flow": 20.0, "technical": 0.0,
+                                 "catalyst": 12.0, "liquidity": 23.0})
+    monkeypatch.setattr(scanner, "evaluate", lambda t, f, d=False: cand)
+    monkeypatch.setattr(scanner, "to_payload", lambda c: {"ticker": c["ticker"],
+                                                          "tiers": []})
+    monkeypatch.setattr(scanner.paper, "record", lambda p, tier=None: None)
+    monkeypatch.setattr(scanner.technical, "confirms", lambda t: False)
+    scanner.main()
+    rows = json.loads(out.read_text())
+    assert rows, "nothing reached the shortlist"
+    assert set(rows[0]["base_breakdown"]) == {"flow", "catalyst", "liquidity"}
+    assert "base_score" in rows[0]
 
 
 def test_the_watchlist_path_records_into_the_paper_book():

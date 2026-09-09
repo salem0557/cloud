@@ -27,6 +27,36 @@ def _required_present(p):
 
 
 # ── Deterministic renderer ──────────────────────────────────────
+def _expiry_tag(t):
+    """" (17 سبتمبر · 9 أيام)" — which contract this price belongs to."""
+    exp = (t.get("expiry") or "")[:10]
+    if not exp:
+        return ""
+    dte = t.get("dte")
+    day = ""
+    try:
+        y, m, d = (int(x) for x in exp.split("-"))
+        day = f"{d} {AR_MONTHS[m - 1]}"
+    except (ValueError, IndexError):
+        day = exp
+    return f" ({day}" + (f" · {_days_ar(dte)})" if dte else ")")
+
+
+def _days_ar(n):
+    """Arabic counts days by form, not by appending a plural. 1 يوم, 2 يومان,
+    3-10 أيام, 11+ يوم — writing "9 يوم" reads as broken Arabic."""
+    n = int(n)
+    if n == 1:
+        return "يوم"
+    if n == 2:
+        return "يومان"
+    return f"{n} أيام" if 3 <= n <= 10 else f"{n} يوم"
+
+
+AR_MONTHS = ("يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو",
+             "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر")
+
+
 def render_entry(p):
     """The alert, deterministic. This is the path Railway takes.
 
@@ -91,7 +121,15 @@ def render_entry(p):
             lines.append(f"{t['tier']}: ما فيه عقد مناسب")
             continue
         kind = "كول" if t["type"] == "call" else "بوت"
-        tag = " ⚡اليوم" if t.get("dte") == 0 else ""
+        # The EXPIRY, on every line, always. The three budget bands are picked
+        # independently across the whole 0-45 DTE window, so they routinely come
+        # from different expiries — and without the date on the line there is no
+        # way to tell which contract a price belongs to. On 2026-09-08 an alert
+        # offered "89 بوت @ $1.36", "85 بوت @ $0.74" and "90 بوت @ $0.41": for
+        # one expiry a lower put strike is always cheaper, so those three cannot
+        # be the same expiry, and Salem priced the wrong contract and found the
+        # number wrong. He was right — the message was ambiguous, not the price.
+        tag = " ⚡اليوم" if t.get("dte") == 0 else _expiry_tag(t)
         # The ceiling, per contract. Salem reads the alert minutes after it is
         # sent, and by then the contract may have moved: "لي ان شاهدته ارتفع
         # قبل دخولي اتجاهله". Everything measured assumes entry at the price

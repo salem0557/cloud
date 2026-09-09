@@ -207,6 +207,28 @@ def holds(tech):
     return bool(tech.get("closed_strong")) and not tech.get("wick_back")
 
 
+def is_signal(tech, flow_direction=None, direction=None):
+    """Salem's rule, stated in his own words on 2026-09-09:
+
+        "ان كان هنالك اختراق مقاومة او كسر دعم مع سيولة في السهم و العقود
+         على فريم 15 دقيقة ترسل لي افضل ثلاث عقود"
+
+    A 15m break, volume in the STOCK behind it, and money on that side in the
+    OPTIONS. confirms() is the first two — the level broken on a closed candle,
+    volume above the average, the break held, and room left to the target. The
+    third is the option flow pointing the same way as the break.
+
+    Flow that is unknown does not veto: UW returns nothing for a name with no
+    unusual activity, and "no alerts today" is not "the money is on the other
+    side". Flow that actively disagrees does veto.
+    """
+    if not confirms(tech):
+        return False
+    if flow_direction and direction and flow_direction != direction:
+        return False
+    return True
+
+
 def alert_gate(tech):
     """The score this setup must reach to be SENT.
 

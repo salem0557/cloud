@@ -192,6 +192,15 @@ because reading it as a sale would close a position he still holds.
   scores 0 on a call setup, 20 on a put setup
 - Liquidity (0–20): spread (percent OR cents) and open interest, measured on a
   contract Salem can actually afford
+- STRATEGY (2026-09-09, Salem's own words): watch ONLY `WATCHLIST` — MU, TSLA,
+  AMZN, GOOGL, AAPL, INTC, NVDA, QQQ, META, MSFT, F. Discovery is OFF: no
+  market-wide flow feed choosing the universe, no Finviz movers. The signal is
+  `technical.is_signal()` — a 15m break of resistance or support, volume in the
+  stock behind it, and option flow not pointing the other way. The SCORE is not
+  a gate in this mode; it is computed and shown because the paper book compares
+  it. The break also picks the DIRECTION (call on a resistance break, put on a
+  support break) — taking it from option flow made the flow agree with itself.
+  `WATCHLIST_ONLY=0` restores discovery, and then:
 - Gates by KIND of setup. A CONFIRMED BREAK is judged by `BREAK_THRESHOLD`
   (50) — price agreeing is the one input that cannot be talked into it. A
   setup with no break is a forecast and clears `THRESHOLD` (70). ALERT (943):

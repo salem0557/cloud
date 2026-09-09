@@ -125,7 +125,18 @@ WEIGHTS = {"flow": 30, "technical": 30, "catalyst": 20, "liquidity": 20}
 #     gate 55   27 of 41
 #     gate 50   34 of 41
 #
-THRESHOLD          = 70     # no break: has to be exceptional
+# In WATCHLIST_ONLY mode the gate is not a score at all. Salem named the signal
+# himself: a 15m break of resistance or support, with volume in the stock AND
+# money on that side in the options, and then the three contracts. So that is
+# the rule — technical.confirms() plus option flow agreeing — and the score is
+# still computed and printed, because it is what the paper book compares, but
+# it does not decide whether the alert is sent.
+#
+# The reason to drop the score as a gate: it mixed a headline, a spread and a
+# premium total into one number, and on 2026-09-08 it let ten alerts through
+# with technical 0.0 — no break at all — while silencing TSLA and NVDA while
+# they ran. A break IS the signal; the rest is context.
+THRESHOLD          = 70     # no break: has to be exceptional (discovery mode)
 BREAK_THRESHOLD    = 50     # price already confirmed it
 # The paper book's own gate, deliberately looser than the alert gate. Salem
 # asked for both to be loosened and the paper one loosened further: "سهل
@@ -513,10 +524,26 @@ MIN_TICKER_PREMIUM      = 100_000   # skip tickers below this daily premium
 # Cost: one flow lookup each for the ones the feed did not already carry, then
 # the usual per-candidate calls. Roughly 4,000-6,000 UW requests a day on top
 # of the current ~12,000, against a 30,000 allowance. Read uw.spent().
-CORE_TICKERS = [t.strip().upper() for t in (os.environ.get("CORE_TICKERS") or
-    "NVDA,TSLA,AAPL,MSFT,AMZN,GOOGL,META,AVGO,AMD,MU,NFLX,PLTR,COIN,MSTR,"
-    "SMCI,INTC,QCOM,ARM,TSM,ORCL,CRWD,JPM,BAC,XOM,LLY,UNH,"
-    "SPY,QQQ,IWM,SPX,NDX").split(",") if t.strip()]
+# ── THE WATCHLIST — the only names this system trades ───────────
+# Salem, 2026-09-09, replacing everything that came before it:
+#   "١- فقط الشركات التي بالصورة
+#    ٢- فقط راقب هذه الشركات والتدفقات على عقودها وان كان هنالك اختراق مقاومة
+#       او كسر دعم مع سيولة في السهم و العقود على فريم ١٥ دقيقة ترسل لي افضل
+#       ثلاث عقود حسب ميزانيتي"
+#
+# Eleven names, from the two screenshots. Discovery is OFF: no market-wide
+# flow feed deciding the universe, no Finviz movers. These names and nothing
+# else, watched all session.
+#
+# What that buys: every one of them is deeply liquid, has same-day expiries and
+# penny-wide books, and is a name he can see moving on his own screen. The
+# scanner spent the whole of 2026-09-08 on GH, LYTE, TIGO, DYN and IONS.
+WATCHLIST = [t.strip().upper() for t in (os.environ.get("WATCHLIST") or
+    "MU,TSLA,AMZN,GOOGL,AAPL,INTC,NVDA,QQQ,META,MSFT,F").split(",") if t.strip()]
+# Off, and discovery comes back: the flow feed and Finviz choose the universe
+# again and WATCHLIST becomes a guaranteed core inside it.
+WATCHLIST_ONLY = os.environ.get("WATCHLIST_ONLY", "1").lower() in ("1", "true", "yes")
+CORE_TICKERS = WATCHLIST
 
 # ── Finviz Elite (candidate discovery only — never scored) ──────
 # Finviz costs nothing per ticker: one screener request returns every row, and
