@@ -20,6 +20,7 @@ import mine
 import market
 import paper
 import reasoning
+import scanner
 import state
 import technical
 import uw
@@ -152,6 +153,17 @@ def check_shortlist(dry_run=False):
         try:
             candles = uw.candles(t, timeframe="5D")
             tech = technical.analyse(candles, item["direction"])
+            # The scanner tries the REVERSAL when no break confirms; this path
+            # did not, so the setup Salem asked for by name — "مايكروسوفت نزل
+            # ونزل وكسر دعم ... وفجأة ارتد" — was invisible here. A reversal
+            # never sets broke_level, so confirms() below rejects it and the
+            # name fell through to a watch notice instead: the scanner alerts
+            # it, the monitor calls the same bar "no break". One setup, two
+            # answers, five minutes apart.
+            if tech is not None and not technical.confirms(tech):
+                rev = technical.reversal(candles)
+                if rev and rev[0] == item["direction"]:
+                    tech = rev[1]
         except uw.UWError as e:
             print(f"  {t}: {e}")
             continue
@@ -260,6 +272,15 @@ def check_shortlist(dry_run=False):
             if not dry_run and paper.record(payload):
                 print(f"  {t}: {technical.remaining_atr(tech):.2f} ATR left, "
                       f"rule wants {C.MIN_REMAINING_ATR} — paper book only")
+            continue
+
+        # The 1m re-check, same as the scanner's. It was wired into one send
+        # path and not the other, so an alert leaving through the monitor
+        # skipped the gate that removed four disasters out of twenty-three.
+        if not dry_run and not scanner.still_holding(
+                {"ticker": t, "technical": tech}):
+            print(f"  {t}: gave the level {tech.get('level')} back before the "
+                  f"alert — skipped")
             continue
 
         msg = compose("entry", payload)

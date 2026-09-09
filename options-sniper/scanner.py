@@ -456,6 +456,14 @@ def _scan(agg, dry_run, limit_tickers):
             # on AND it clears the paper gate — otherwise it is taken nowhere.
             if not C.PAPER_NEAR_MISS or cand["score"] < C.PAPER_THRESHOLD:
                 continue
+            # AND only if there is a setup at all. Under WATCHLIST_ONLY the
+            # gate above is +inf for anything that is not a signal, so
+            # "score < gate" is true for every name on the list — including
+            # ones with no break, no reversal and nothing else. Without this
+            # line the paper book fills with tickers rather than trades, and
+            # the book is the one thing that decides whether the rule works.
+            if C.WATCHLIST_ONLY and not technical.has_setup(cand["technical"]):
+                continue
             payload["near_miss"] = True
             why = ("score {:.1f} < {} but >= {}".format(
                        cand["score"], gate, C.PAPER_THRESHOLD)
