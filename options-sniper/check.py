@@ -225,6 +225,8 @@ if st["n"] or st["open"]:
               if st["n"] else ""))
 else:
     report("record", WARN, "empty — no alert has opened a paper position yet")
+# ── 7. Telegram ─────────────────────────────────────────────────
+section("7. Telegram")
 # The three feeds, as they will actually be addressed.
 #
 # Salem's destinations are three TOPICS in ONE forum group — the chat id is
@@ -255,16 +257,35 @@ for key, names in _seen.items():
         report("collision", BAD,
                " + ".join(names) + " all post to the same chat AND topic")
 
-# ── 5. Telegram ─────────────────────────────────────────────────
-section("7. Telegram")
+# EVERY feed, not just the first one.
+#
+# Salem, 2026-09-09, after this file reported all three topics configured:
+# "ماجاني تنبيه اختبار الا على قناة وحدة فقط". He was right, and the check
+# was the thing at fault. It sent ONE message with no chat id, which
+# telegram_send addresses to the ALERTS topic by default, then reported
+# "send: PASS" — a green line that said nothing whatsoever about 944 or 945.
+#
+# Configured is not delivered. A topic id can be a number Telegram rejects, a
+# thread that was deleted, or one the bot was never added to, and every one of
+# those looks identical to a correct setup until something is actually sent.
+# So each feed gets its own message, named after itself, and each reports its
+# own result. Three messages in three threads is also the only way to SEE a
+# collision: two of them arriving in one thread is the failure this cannot
+# describe in words.
 if "--no-telegram" in sys.argv:
     report("send", WARN, "skipped (--no-telegram)")
 elif not (C.TELEGRAM_TOKEN and C.TELEGRAM_CHAT_ID):
     report("send", BAD, "credentials missing — cannot test")
 else:
     from telegram_send import send  # noqa: E402
-    report("send", OK if send("✅ اختبار: بوت التنبيهات يعمل") else BAD,
-           "check your phone" )
+    for name, chat, topic, _var in _FEEDS:
+        if not chat:
+            report(f"{name} تسليم", BAD, "no chat id — nothing sent")
+            continue
+        ok = send(f"✅ اختبار: هذي رسالة قسم «{name}»", chat_id=chat, topic=topic)
+        report(f"{name} تسليم", OK if ok else BAD,
+               "sent — it must arrive in THIS topic and no other" if ok else
+               f"تيليجرام رفض chat {chat} / topic {topic or 'General'}")
 
 # ── Verdict ─────────────────────────────────────────────────────
 section("Verdict")
