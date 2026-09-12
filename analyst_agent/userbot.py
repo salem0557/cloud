@@ -15,7 +15,7 @@ import logging
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
-from . import analyst, config, gate
+from . import analyst, config, doctor, gate
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s",
                     level=logging.INFO)
@@ -102,6 +102,13 @@ async def main() -> None:
             if not answer_it:
                 return
             text = (event.message.message or "").strip()
+            if gate.is_diag(text):
+                if not gate.diag_allowed(event.sender_id, bool(event.is_private)):
+                    return
+                await event.reply("جاري الفحص… ⏳")
+                checks = await asyncio.to_thread(doctor.run_all)
+                await event.reply(doctor.report(checks))
+                return
             canned = gate.command_reply(text)
             if canned:
                 await event.reply(canned)
@@ -142,6 +149,10 @@ async def main() -> None:
             except Exception:
                 pass
 
+    if config.STARTUP_CHECK:
+        for line in doctor.report(doctor.run_all(quick=True)).splitlines():
+            if line.strip():
+                log.info("%s", line)
     log.info("analyst userbot is running — waiting for charts")
     await client.run_until_disconnected()
 

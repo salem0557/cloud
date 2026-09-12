@@ -181,7 +181,41 @@ python -m analyst_agent.cli 2222.SR 1d --no-news
 وحدّ للطلبات المتزامنة `ANALYST_MAX_CONCURRENT`.
 
 ## أوامر سريعة داخل تلقرام
-`‎/help` · `‎/frames` · `‎/ping`
+`‎/help` · `‎/frames` · `‎/ping` · `‎/diag` (فحص شامل — للمالك فقط)
+
+## المتغيرات
+
+مطلوبة (اثنان فقط):
+
+| Name | من وين |
+|---|---|
+| `ANALYST_BOT_TOKEN` | @BotFather ← `/newbot` |
+| `GROQ_API_KEY` | console.groq.com/keys |
+
+مستحسن:
+
+| Name | القيمة | الفائدة |
+|---|---|---|
+| `ANALYST_OWNER_IDS` | معرّفك الرقمي (من @userinfobot) | يعفيك من الانتظار بين الطلبات، ويسمح لك بـ `/diag` |
+
+اختيارية (لها قيم افتراضية تعمل بلا تعديل): `ANALYST_US_ONLY` `ANALYST_DEFAULT_FRAME`
+`ANALYST_ANSWER_ALL_PHOTOS` `ANALYST_ALLOW_NON_EQUITY` `ANALYST_ALLOWED_CHATS`
+`ANALYST_USER_COOLDOWN` `ANALYST_MAX_CONCURRENT` `ANALYST_NEWS` `ANALYST_SOCIAL`
+`ANALYST_CHART_BARS` `GROQ_TEXT_MODEL` `GROQ_VISION_MODEL` — القائمة الكاملة في `.env.example`.
+
+## كيف تتأكد أنه يعمل
+
+```bash
+python -m analyst_agent.doctor          # فحص شامل
+python -m analyst_agent.doctor --quick  # فحص سريع بلا مكالمات شبكة ثقيلة
+```
+
+يفحص: المكتبات، مفتاح Groq والموديلات المتاحة ومكالمة حقيقية، توكن تلقرام
+و**هل Privacy Mode مقفول**، بيانات السوق، جلسة السوق، رسم التشارت، وتحليلاً
+كاملاً من البداية للنهاية — ويطبع ✅/❌ لكل بند مع سبب الفشل.
+
+ونفس التقرير يُطبع تلقائياً في سجلّات التشغيل عند كل إعادة نشر، وتحصل عليه في
+تلقرام بإرسال `/diag`.
 
 ---
 

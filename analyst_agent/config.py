@@ -102,6 +102,9 @@ ANSWER_ALL_PHOTOS = _bool("ANALYST_ANSWER_ALL_PHOTOS",
 MAX_CONCURRENT = _int("ANALYST_MAX_CONCURRENT", 2)
 USER_COOLDOWN = _int("ANALYST_USER_COOLDOWN", 20)  # seconds between requests
 SEND_TYPING = _bool("ANALYST_SEND_TYPING", True)
+# Log a short health report on boot, so the deploy logs say whether this
+# instance can actually answer before anyone tries it.
+STARTUP_CHECK = _bool("ANALYST_STARTUP_CHECK", True)
 REPLY_LANG = os.getenv("ANALYST_LANG", "ar").strip().lower()
 
 # --- Market data ------------------------------------------------------------

@@ -15,7 +15,8 @@ from . import config, frames, symbols
 CAPTION_LIMIT = 1024      # Telegram's cap on a photo caption
 MESSAGE_LIMIT = 4000      # under Telegram's 4096-char message cap
 
-COMMANDS = {"/help", ".help", "/start", "مساعدة", "/frames", "/ping", ".ping"}
+DIAG_COMMANDS = {"/diag", ".diag", "/فحص", "فحص"}
+COMMANDS = {"/help", ".help", "/start", "مساعدة", "/frames", "/ping", ".ping"} | DIAG_COMMANDS
 
 HELP = """أنا محلل فني آلي للسوق الأمريكي 📈
 
@@ -31,7 +32,7 @@ HELP = """أنا محلل فني آلي للسوق الأمريكي 📈
 الدعوم والمقاومات، فيبوناتشي، VWAP) + قراءة فنية مع خطة دخول وستوب وأهداف،
 وحالة جلسة السوق الأمريكي.
 
-الأوامر: /help | /frames | /ping"""
+الأوامر: /help | /frames | /ping | /diag (فحص شامل — للمالك)"""
 
 _last_request: dict[int, float] = {}
 
@@ -65,6 +66,21 @@ def chat_allowed(chat_id: int) -> bool:
 
 def is_command(text: str | None) -> bool:
     return bool(text) and text.strip().lower().split("@")[0] in COMMANDS
+
+
+def is_diag(text: str | None) -> bool:
+    return bool(text) and text.strip().lower().split("@")[0] in DIAG_COMMANDS
+
+
+def diag_allowed(user_id: int | None, is_private: bool) -> bool:
+    """The health report names models and settings, so it is owners-only.
+
+    With no owners configured it is allowed in private chats, so a fresh
+    install can still be checked before ANALYST_OWNER_IDS is set.
+    """
+    if config.OWNER_IDS:
+        return user_id in config.OWNER_IDS
+    return is_private
 
 
 def cooldown_ok(user_id: int | None) -> bool:

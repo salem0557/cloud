@@ -24,7 +24,7 @@ from telegram.constants import ChatAction, ChatType
 from telegram.ext import (Application, ApplicationBuilder, ContextTypes,
                           MessageHandler, filters)
 
-from . import analyst, config, gate
+from . import analyst, config, doctor, gate
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s",
                     level=logging.INFO)
@@ -100,6 +100,13 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not answer_it:
         return
 
+    if gate.is_diag(incoming.text):
+        if not gate.diag_allowed(incoming.user_id, incoming.is_private):
+            return
+        await update.effective_message.reply_text("جاري الفحص… ⏳")
+        checks = await asyncio.to_thread(doctor.run_all)
+        await update.effective_message.reply_text(doctor.report(checks))
+        return
     canned = gate.command_reply(incoming.text)
     if canned:
         await update.effective_message.reply_text(canned)
@@ -144,6 +151,11 @@ def build() -> Application:
 
 def main() -> None:
     app = build()
+    if config.STARTUP_CHECK:
+        # The deploy logs alone should say whether this instance can work.
+        for line in doctor.report(doctor.run_all(quick=True)).splitlines():
+            if line.strip():
+                log.info("%s", line)
     log.info("analyst bot is running — waiting for charts")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
