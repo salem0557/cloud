@@ -95,3 +95,21 @@ def test_saudi_helpers():
 def test_crypto_is_covered(text, expected):
     found = symbols.resolve(text)
     assert found and found[0].symbol == expected
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("LINKUSD كم سيصل سعرها؟", "LINK-USD"),
+    ("BTCUSDT", "BTC-USD"),
+    ("ethusd يومي", "ETH-USD"),
+    ("SOL/USD 15m", "SOL-USD"),
+    ("DOGEUSDT", "DOGE-USD"),
+])
+def test_exchange_style_pairs(text, expected):
+    """TradingView and Binance write pairs as one word."""
+    found = symbols.resolve(text)
+    assert found and found[0].symbol == expected
+
+
+def test_currency_pairs_are_not_read_as_coins():
+    assert symbols.resolve("eurusd 1h")[0].symbol == "EURUSD=X"
+    assert symbols.resolve("usdjpy")[0].symbol == "USDJPY=X"

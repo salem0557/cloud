@@ -142,6 +142,12 @@ def cooldown_ok(user_id: int | None) -> bool:
     return True
 
 
+def analysable(msg: Incoming) -> bool:
+    """Is there anything here to analyse — a chart, a ticker, or a timeframe?"""
+    return bool(msg.has_photo or msg.replied_has_photo or has_trigger(msg.text)
+                or frames.parse(msg.text) or symbols.resolve(msg.text))
+
+
 def topic_of(msg: Incoming) -> int | None:
     """The topic a message sits in, with General normalised to 1."""
     if not msg.is_forum:
@@ -169,10 +175,17 @@ def decide(msg: Incoming) -> tuple[bool, str]:
         return True, "command"
 
     if msg.is_private and config.DM_ALWAYS_ANSWER:
-        if (msg.has_photo or msg.replied_has_photo or has_trigger(msg.text)
-                or frames.parse(msg.text) or symbols.resolve(msg.text)):
+        if analysable(msg):
             return True, "private chat"
         return False, "private but nothing to analyse"
+
+    # A topic dedicated to asking the agent: everything in it is addressed to
+    # it, so no trigger word is needed — but it still only speaks when there is
+    # something to analyse, so ordinary chatter there stays unanswered.
+    if config.QA_TOPIC and topic_of(msg) == config.QA_TOPIC:
+        if analysable(msg):
+            return True, "qa topic"
+        return False, "qa topic but nothing to analyse"
 
     if has_trigger(msg.text):
         return True, "trigger word"

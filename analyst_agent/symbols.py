@@ -226,14 +226,27 @@ def resolve(text: str | None, all_markets: bool = False) -> list[Candidate]:
                 continue
             out.append(Candidate(f"{token}.SR", "tadawul", "tadawul-code", 0.9))
 
-    # 5. FX pairs: EURUSD, usd/jpy.
+    # 5. Exchange-style crypto pairs written as one word: LINKUSD, BTCUSDT.
+    #    Checked before the FX rule so a real currency pair still wins below.
+    if config.ALLOW_NON_EQUITY:
+        for m in re.finditer(r"(?<![\w])([a-z]{2,6})\s*[-/]?\s*usd[tc]?(?![\w])", t):
+            base = m.group(1)
+            if base in FX_CODES:
+                continue                      # EURUSD is a currency pair, not a coin
+            mapped = CRYPTO.get(base)
+            if mapped:
+                out.append(Candidate(mapped, "crypto", "pair", 0.95))
+            elif base not in STOPWORDS:
+                out.append(Candidate(f"{base.upper()}-USD", "crypto", "pair-guess", 0.7))
+
+    # 6. FX pairs: EURUSD, usd/jpy.
     if all_markets or config.ALLOW_NON_EQUITY:
         for m in re.finditer(r"(?<![\w])([a-z]{3})\s*/?\s*([a-z]{3})(?![\w])", t):
             a, b = m.group(1), m.group(2)
             if a in FX_CODES and b in FX_CODES and a != b:
                 out.append(Candidate(f"{a}{b}=X".upper(), "fx", "fx-pair", 0.9))
 
-    # 6. Bare upper-case-ish tickers, lowest confidence.
+    # 7. Bare upper-case-ish tickers, lowest confidence.
     for m in re.finditer(r"(?<![\w$])([a-z]{1,5})(?![\w])", t):
         token = m.group(1)
         if token in STOPWORDS or token in FRAME_ALIASES or len(token) < 2:

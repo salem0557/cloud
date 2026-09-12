@@ -171,3 +171,42 @@ def test_topic_limit_does_not_apply_to_private_chats(monkeypatch):
 def test_no_topic_limit_when_unset(monkeypatch):
     monkeypatch.setattr(config, "QA_TOPIC", 0)
     assert gate.decide(forum(55))[0] is True
+
+
+def qa(text="", photo=False, topic=1773):
+    return gate.Incoming(text=text, has_photo=photo, chat_id=-1002, user_id=777,
+                         is_forum=True, topic_id=topic)
+
+
+def test_qa_topic_needs_no_trigger_word(monkeypatch):
+    """A topic dedicated to asking the agent: everything there is addressed to it."""
+    monkeypatch.setattr(config, "QA_TOPIC", 1773)
+    answer, why = gate.decide(qa("LINKUSD كم سيصل سعرها بعد ساعة؟"))
+    assert answer is True and why == "qa topic"
+    assert gate.decide(qa("NVDA؟"))[0] is True
+    assert gate.decide(qa("على الخمس دقايق"))[0] is True
+    assert gate.decide(qa(photo=True))[0] is True
+
+
+def test_qa_topic_still_ignores_plain_chatter(monkeypatch):
+    monkeypatch.setattr(config, "QA_TOPIC", 1773)
+    assert gate.decide(qa("صباح الخير شباب"))[0] is False
+    assert gate.decide(qa("الله يعطيك العافية"))[0] is False
+
+
+def test_outside_the_qa_topic_nothing_is_answered(monkeypatch):
+    monkeypatch.setattr(config, "QA_TOPIC", 1773)
+    assert gate.decide(qa("NVDA وش رايك", topic=1))[0] is False
+
+
+def test_groups_without_a_qa_topic_keep_the_trigger_rule(monkeypatch):
+    monkeypatch.setattr(config, "QA_TOPIC", 0)
+    assert gate.decide(group(text="NVDA وش رايك"))[0] is False
+    assert gate.decide(group(text="حلل NVDA"))[0] is True
+
+
+def test_analysable():
+    assert gate.analysable(gate.Incoming(text="NVDA")) is True
+    assert gate.analysable(gate.Incoming(text="يومي")) is True
+    assert gate.analysable(gate.Incoming(has_photo=True)) is True
+    assert gate.analysable(gate.Incoming(text="كيف الحال")) is False
