@@ -67,9 +67,16 @@ def check_groq_models() -> Check:
     if not models:
         return Check("موديلات Groq", False, "تعذّر الوصول إلى Groq — تأكد من المفتاح والاتصال", True)
     text = groq_client.resolve_model("text")
-    vision = groq_client.resolve_model("vision")
+    vision_models = groq_client.vision_capable(models)
+    if not vision_models:
+        return Check("موديلات Groq", False,
+                     f"{len(models)} موديل متاح لكن لا يوجد موديل يقرأ الصور — "
+                     "التحليل النصي يعمل، وقراءة التشارت من الصورة لا تعمل. "
+                     f"النصي: {text}")
     return Check("موديلات Groq", True,
-                 f"{len(models)} موديل متاح | النصي: {text} | قراءة الصور: {vision}")
+                 f"{len(models)} موديل | النصي: {text} | "
+                 f"قراءة الصور: {groq_client.resolve_model('vision')} "
+                 f"(متاح منها {len(vision_models)})")
 
 
 def check_groq_call() -> Check:

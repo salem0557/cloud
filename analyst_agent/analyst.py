@@ -25,9 +25,9 @@ log = logging.getLogger(__name__)
 
 NO_SYMBOL = (
     "ما عرفت الرمز 🤔\n"
-    "أرسل الصورة ومعها الرمز والفريم، مثال:\n"
+    "اكتب الرمز مع الصورة، مثال:\n"
+    "• «NVDA وش رايك؟»\n"
     "• «حلل TSLA فريم 15 دقيقة»\n"
-    "• «أرامكو يومي»\n"
     "• «BTC 4 ساعات»"
 )
 NO_DATA = ("جبت الرمز {symbol} لكن ما توفرت بيانات كافية له على فريم {frame}.\n"
@@ -122,7 +122,9 @@ def analyze(caption: str | None = None, image: bytes | None = None,
                           symbol=elsewhere[0].symbol)
         hint = ""
         if read and read.error:
-            hint = f"\n(قراءة الصورة تعذّرت: {read.error})"
+            # The reason matters to whoever runs the bot, not to the group.
+            log.warning("vision read failed: %s", read.error)
+            hint = "\n(ما قدرت أقرأ الرمز من الصورة — اكتبه معها)"
         elif read and not read.is_chart:
             hint = "\n(الصورة لا تبدو تشارت)"
         return Answer(False, NO_SYMBOL + hint, debug={"vision": read.to_dict() if read else None})
