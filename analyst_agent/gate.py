@@ -154,8 +154,10 @@ def decide(msg: Incoming) -> tuple[bool, str]:
     if not chat_allowed(msg.chat_id):
         return False, "chat not allowed"
     # In a forum group with a configured Q&A topic, every other topic is
-    # somebody else's conversation: stay out of it entirely.
-    if config.QA_TOPIC and msg.is_forum and not msg.is_private:
+    # somebody else's conversation: stay out of it entirely. /here is the one
+    # exception — it is how you discover a topic's id, including the id of the
+    # topic the agent is being configured to stay out of.
+    if config.QA_TOPIC and msg.is_forum and not msg.is_private and not is_here(msg.text):
         if topic_of(msg) != config.QA_TOPIC:
             return False, f"wrong topic ({topic_of(msg)})"
     # A userbot runs as its owner's account, so his ordinary chatter arrives

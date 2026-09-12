@@ -142,3 +142,32 @@ def test_chunks_respect_the_telegram_limit():
 
 def test_short_text_is_one_chunk():
     assert gate.chunks("سطر واحد") == ["سطر واحد"]
+
+
+def forum(topic, text="حلل", photo=True):
+    return gate.Incoming(text=text, has_photo=photo, chat_id=-1002,
+                         user_id=777, is_forum=True, topic_id=topic)
+
+
+def test_only_the_configured_topic_is_answered(monkeypatch):
+    monkeypatch.setattr(config, "QA_TOPIC", 1773)
+    assert gate.decide(forum(1773))[0] is True
+    assert gate.decide(forum(1))[0] is False
+    assert gate.decide(forum(None))[0] is False      # General reads as topic 1
+
+
+def test_here_works_in_any_topic(monkeypatch):
+    """You cannot configure a topic id you have no way to read."""
+    monkeypatch.setattr(config, "QA_TOPIC", 1773)
+    assert gate.decide(forum(1, text="/here", photo=False))[0] is True
+    assert gate.decide(forum(999, text="/here", photo=False))[0] is True
+
+
+def test_topic_limit_does_not_apply_to_private_chats(monkeypatch):
+    monkeypatch.setattr(config, "QA_TOPIC", 1773)
+    assert gate.decide(gate.Incoming(chat_id=5, has_photo=True, is_private=True))[0] is True
+
+
+def test_no_topic_limit_when_unset(monkeypatch):
+    monkeypatch.setattr(config, "QA_TOPIC", 0)
+    assert gate.decide(forum(55))[0] is True
