@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from . import config
 from .frames import ALIASES as FRAME_ALIASES
 from .frames import normalize
 
@@ -137,13 +138,20 @@ def _clean(text: str) -> str:
     return re.sub(r"[^\w؀-ۿ$^&\.\-= ]+", " ", t)
 
 
-def _lookup_names(t: str) -> list[Candidate]:
+def _tables(all_markets: bool = False) -> list[tuple[dict, str, float]]:
+    """Name tables consulted for this deployment, in confidence order."""
+    tables: list[tuple[dict, str, float]] = [(US_NAMES, "us", 0.92),
+                                             (INDICES, "index", 0.88)]
+    if all_markets or not config.US_ONLY:
+        tables = [(TADAWUL, "tadawul", 0.93), (SAUDI_INDEX, "index", 0.9)] + tables
+    if all_markets or config.ALLOW_NON_EQUITY:
+        tables += [(CRYPTO, "crypto", 0.9), (COMMODITIES, "commodity", 0.9)]
+    return tables
+
+
+def _lookup_names(t: str, all_markets: bool = False) -> list[Candidate]:
     out: list[Candidate] = []
-    tables = [
-        (TADAWUL, "tadawul", 0.93), (SAUDI_INDEX, "index", 0.9),
-        (US_NAMES, "us", 0.92), (CRYPTO, "crypto", 0.9),
-        (COMMODITIES, "commodity", 0.9), (INDICES, "index", 0.88),
-    ]
+    tables = _tables(all_markets)
     for table, kind, conf in tables:
         for name, symbol in table.items():
             name_n = normalize(name)
@@ -161,8 +169,13 @@ def _numeric_is_frame(t: str, token: str) -> bool:
                 or re.search(rf"\b{token}\s*(?:m|min|h|دق|دقيقه|دقيقة|دقائق)", t))
 
 
-def resolve(text: str | None) -> list[Candidate]:
-    """Ranked symbol candidates found in free text (best first)."""
+def resolve(text: str | None, all_markets: bool = False) -> list[Candidate]:
+    """Ranked symbol candidates found in free text (best first).
+
+    `all_markets=True` ignores this deployment's market limits — used only to
+    tell the user "that symbol is outside the market I am set up for" instead
+    of the unhelpful "I could not find a symbol".
+    """
     if not text:
         return []
     t = _clean(text)
@@ -178,20 +191,23 @@ def resolve(text: str | None) -> list[Candidate]:
             out.append(Candidate(m.group(1).upper(), "explicit", "yahoo-form", 0.97))
 
     # 3. Arabic/English asset names.
-    out.extend(_lookup_names(t))
+    out.extend(_lookup_names(t, all_markets))
 
-    # 4. Tadawul 4-digit codes.
-    for m in re.finditer(r"(?<![\w.])(\d{4})(?![\w.])", t):
-        token = m.group(1)
-        if _numeric_is_frame(t, token):
-            continue
-        out.append(Candidate(f"{token}.SR", "tadawul", "tadawul-code", 0.9))
+    # 4. Tadawul 4-digit codes (skipped in US-only mode: "2222" is not a
+    #    US ticker, and reading it as one would answer on the wrong asset).
+    if all_markets or (not config.US_ONLY and config.ASSUME_TADAWUL_FOR_DIGITS):
+        for m in re.finditer(r"(?<![\w.])(\d{4})(?![\w.])", t):
+            token = m.group(1)
+            if _numeric_is_frame(t, token):
+                continue
+            out.append(Candidate(f"{token}.SR", "tadawul", "tadawul-code", 0.9))
 
-    # 5. FX pairs: EURUSD, usd/jpy, SAR JPY.
-    for m in re.finditer(r"(?<![\w])([a-z]{3})\s*/?\s*([a-z]{3})(?![\w])", t):
-        a, b = m.group(1), m.group(2)
-        if a in FX_CODES and b in FX_CODES and a != b:
-            out.append(Candidate(f"{a}{b}=X".upper(), "fx", "fx-pair", 0.9))
+    # 5. FX pairs: EURUSD, usd/jpy.
+    if all_markets or config.ALLOW_NON_EQUITY:
+        for m in re.finditer(r"(?<![\w])([a-z]{3})\s*/?\s*([a-z]{3})(?![\w])", t):
+            a, b = m.group(1), m.group(2)
+            if a in FX_CODES and b in FX_CODES and a != b:
+                out.append(Candidate(f"{a}{b}=X".upper(), "fx", "fx-pair", 0.9))
 
     # 6. Bare upper-case-ish tickers, lowest confidence.
     for m in re.finditer(r"(?<![\w$])([a-z]{1,5})(?![\w])", t):
@@ -201,12 +217,26 @@ def resolve(text: str | None) -> list[Candidate]:
         if re.search(rf"(?<![\w$]){token}(?![\w])", _clean(text)) and token.isalpha():
             out.append(Candidate(token.upper(), "us", "bare-token", 0.45))
 
-    # De-duplicate, keeping the best reason for each symbol.
+    # De-duplicate, keeping the best reason for each symbol, and drop anything
+    # this deployment does not cover.
     best: dict[str, Candidate] = {}
     for c in out:
+        if not all_markets and not serves(c.symbol):
+            continue
         if c.symbol not in best or c.confidence > best[c.symbol].confidence:
             best[c.symbol] = c
     return sorted(best.values(), key=lambda c: -c.confidence)
+
+
+def serves(symbol: str) -> bool:
+    """Is this symbol inside the market this deployment answers for?"""
+    upper = symbol.upper()
+    if config.US_ONLY and (upper.endswith(".SR") or "TASI" in upper):
+        return False
+    if not config.ALLOW_NON_EQUITY and (upper.endswith("-USD") or upper.endswith("=X")
+                                        or upper.endswith("=F")):
+        return False
+    return True
 
 
 def normalize_symbol(raw: str | None) -> str | None:
@@ -222,7 +252,7 @@ def normalize_symbol(raw: str | None) -> str | None:
     if ":" in s:                      # exchange prefix from TradingView
         exchange, s = s.split(":", 1)
         if exchange in ("TADAWUL", "SAU", "SASE") and s.isdigit():
-            return f"{s}.SR"
+            return None if config.US_ONLY else f"{s}.SR"
     low = s.lower()
     for table in (CRYPTO, COMMODITIES, INDICES, TADAWUL, SAUDI_INDEX, US_NAMES):
         if low in {k.lower() for k in table}:
@@ -231,11 +261,11 @@ def normalize_symbol(raw: str | None) -> str | None:
         base = s.replace("PERP", "").replace("USDT", "")
         return f"{base}-USD"
     if s.isdigit() and len(s) == 4:
-        return f"{s}.SR"
+        return None if config.US_ONLY else f"{s}.SR"
     if re.fullmatch(r"[A-Z]{6}", s) and s[:3].lower() in FX_CODES and s[3:].lower() in FX_CODES:
         return f"{s}=X"
     if re.fullmatch(r"[A-Z0-9\.\-\^=]{1,12}", s):
-        return s
+        return s if serves(s) else None
     return None
 
 

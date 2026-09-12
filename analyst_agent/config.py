@@ -101,8 +101,15 @@ DEFAULT_FRAME = os.getenv("ANALYST_DEFAULT_FRAME", "1d").strip()
 CHART_BARS = _int("ANALYST_CHART_BARS", 140)
 MIN_BARS = _int("ANALYST_MIN_BARS", 60)  # below this the read is unreliable
 DATA_TIMEOUT = _int("ANALYST_DATA_TIMEOUT", 30)
-# Tadawul: a bare 4-digit ticker (2222) is resolved as 2222.SR.
+# US-only mode (the default): Saudi names and bare 4-digit Tadawul codes are
+# not treated as symbols, and session/freshness notes use the NYSE clock.
+# Set ANALYST_US_ONLY=false to bring Tadawul back.
+US_ONLY = _bool("ANALYST_US_ONLY", True)
+# Only consulted when US_ONLY is false: a bare 4-digit ticker (2222) -> 2222.SR.
 ASSUME_TADAWUL_FOR_DIGITS = _bool("ANALYST_ASSUME_TADAWUL", True)
+# Crypto, metals and FX stay available even in US-only mode; turn them off to
+# make the agent answer for US-listed tickers and indices only.
+ALLOW_NON_EQUITY = _bool("ANALYST_ALLOW_NON_EQUITY", True)
 
 # --- Indicators -------------------------------------------------------------
 EMA_FAST = _int("ANALYST_EMA_FAST", 20)

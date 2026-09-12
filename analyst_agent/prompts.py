@@ -25,6 +25,9 @@ SYSTEM = """أنت محلل فني محترف بخبرة عشرين سنة في 
 7) اكتب بالعربية الفصحى المبسطة، أرقام إنجليزية، بلا رموز ماركداون معقّدة (لا جداول ولا عناوين #)، ومناسب
    لقراءته في تيليجرام.
 8) لا تكتب إخلاء مسؤولية طويلاً؛ سطر واحد في النهاية يكفي.
+9) تخصصك السوق الأمريكي. انظر إلى technicals.session: إن كان السوق مغلقاً أو في البري ماركت/الأفتر
+   أورز، أو كانت آخر شمعة متأخرة (stale_note)، فقل ذلك بسطر واحد قبل الخطة — الخطة تُنفَّذ عند
+   الافتتاح وليس الآن.
 
 اكتب الإجابة بهذا الهيكل بالضبط وبهذا الترتيب:
 
@@ -136,6 +139,14 @@ def fallback_text(*, symbol: str, frame_label: str, facts: dict, verdict: dict,
         ]
     else:
         lines += ["🧭 الخطة: لا صفقة واضحة على هذا الفريم — السوق عرضي والانتظار أفضل."]
+    market_session = facts.get("session") or {}
+    if market_session.get("phase_ar"):
+        extra = ""
+        if market_session.get("minutes_to_close"):
+            extra = f" (يتبقى {market_session['minutes_to_close']} دقيقة للإغلاق)"
+        lines.append(f"🕒 حالة السوق: {market_session['phase_ar']}{extra}")
+    if market_session.get("stale_note"):
+        lines.append("⚠️ " + market_session["stale_note"])
     lines.append(f"⚠️ ما يلغي السيناريو: {verdict['invalidation']}")
     for conflict in verdict.get("conflicts") or []:
         lines.append("⚠️ " + conflict)

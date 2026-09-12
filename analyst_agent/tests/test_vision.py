@@ -7,9 +7,9 @@ from analyst_agent import groq_client, vision
 
 def _reply(**overrides):
     payload = {
-        "is_chart": True, "symbol": "TADAWUL:2222", "company_name": "Saudi Aramco",
-        "exchange": "TADAWUL", "timeframe": "1D", "last_price": "27.85",
-        "currency": "SAR", "indicators_visible": ["RSI", "Volume"],
+        "is_chart": True, "symbol": "NASDAQ:TSLA", "company_name": "Tesla Inc",
+        "exchange": "NASDAQ", "timeframe": "1D", "last_price": "27.85",
+        "currency": "USD", "indicators_visible": ["RSI", "Volume"],
         "user_drawings": ["support zone"], "drawn_prices": ["27.00"],
         "chart_style": "candles", "visible_date_range": "Jan-Sep 2026",
         "notes": "log scale",
@@ -22,11 +22,20 @@ def test_reads_symbol_and_frame(monkeypatch):
     monkeypatch.setattr(vision.groq_client, "vision_chat", lambda *a, **k: _reply())
     read = vision.read_chart(b"img")
     assert read.is_chart
-    assert read.symbol == "2222.SR"
+    assert read.symbol == "TSLA"
     assert read.frame_key == "1d"
     assert read.last_price == 27.85
     assert "RSI" in read.indicators
     assert read.drawings == ["support zone"]
+
+
+def test_saudi_screenshot_is_rejected_in_us_only_mode(monkeypatch):
+    """A Tadawul screenshot must not resolve to a symbol this agent skips."""
+    monkeypatch.setattr(vision.groq_client, "vision_chat",
+                        lambda *a, **k: _reply(symbol="TADAWUL:2222",
+                                               company_name="Saudi Aramco",
+                                               exchange="TADAWUL"))
+    assert vision.read_chart(b"img").symbol is None
 
 
 def test_company_name_saves_a_missing_ticker(monkeypatch):

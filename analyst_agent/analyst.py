@@ -18,7 +18,8 @@ import re
 from dataclasses import dataclass, field
 
 from . import (chart as chart_mod, config, frames, groq_client, indicators,
-               market, news as news_mod, prompts, symbols, verdict as verdict_mod)
+               market, news as news_mod, prompts, session as session_mod, symbols,
+               verdict as verdict_mod)
 
 log = logging.getLogger(__name__)
 
@@ -30,7 +31,9 @@ NO_SYMBOL = (
     "• «BTC 4 ساعات»"
 )
 NO_DATA = ("جبت الرمز {symbol} لكن ما توفرت بيانات كافية له على فريم {frame}.\n"
-           "جرّب فريم أعلى، أو تأكد من الرمز (للسوق السعودي استخدم الرقم مثل 2222).")
+           "جرّب فريم أعلى، أو تأكد من الرمز.")
+OUT_OF_MARKET = ("الرمز {symbol} خارج السوق الذي أنا مضبوط عليه (السوق الأمريكي).\n"
+                 "لو تبيني أغطّيه، غيّر ANALYST_US_ONLY=false في ملف .env.")
 
 
 @dataclass
@@ -93,6 +96,13 @@ def analyze(caption: str | None = None, image: bytes | None = None,
 
     candidates, symbol_source = _pick_symbol(caption, read)
     if not candidates:
+        # Distinguish "I found nothing" from "I found something I do not cover".
+        elsewhere = symbols.resolve(caption, all_markets=True) if caption else []
+        if read and read.symbol_raw and not elsewhere:
+            elsewhere = symbols.resolve(read.symbol_raw, all_markets=True)
+        if elsewhere:
+            return Answer(False, OUT_OF_MARKET.format(symbol=elsewhere[0].symbol),
+                          symbol=elsewhere[0].symbol)
         hint = ""
         if read and read.error:
             hint = f"\n(قراءة الصورة تعذّرت: {read.error})"
@@ -111,6 +121,11 @@ def analyze(caption: str | None = None, image: bytes | None = None,
     facts = indicators.analyze(data.df, used.key, daily_df=data.daily_df)
     facts["frame_label"] = used.label_ar
     facts["frame_source"] = frame_source
+    # A US read has to state which session it is looking at, and how old the
+    # last candle is in its own bar units.
+    facts["session"] = session_mod.state()
+    facts["session"].update(session_mod.bar_freshness(data.last_time.to_pydatetime(),
+                                                      used.minutes))
     context_facts = None
     if data.context_df is not None and len(data.context_df) >= 30:
         ctx_frame = frames.context_frame(used)

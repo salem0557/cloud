@@ -83,6 +83,20 @@ def test_unknown_symbol_asks_for_one(offline):
     assert "ما عرفت الرمز" in answer.text
 
 
+def test_saudi_request_says_it_is_out_of_market(offline):
+    """US-only deployment: name the reason instead of "I found no symbol"."""
+    answer = analyst.analyze("حلل أرامكو يومي")
+    assert not answer.ok
+    assert "خارج السوق" in answer.text
+    assert answer.symbol == "2222.SR"
+
+
+def test_session_state_reaches_the_answer(offline):
+    answer = analyst.analyze("حلل TSLA يومي")
+    assert answer.ok
+    assert "حالة السوق" in answer.text
+
+
 def test_missing_data_is_reported(offline, monkeypatch):
     monkeypatch.setattr(analyst.market, "load", lambda *a, **k: None)
     answer = analyst.analyze("حلل TSLA يومي")

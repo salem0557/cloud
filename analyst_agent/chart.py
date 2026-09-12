@@ -194,6 +194,9 @@ def render(symbol: str, df: pd.DataFrame, frame_label: str, facts: dict,
         ]
         if verdict_dict and verdict_dict.get("rr"):
             box.append(f"R:R {verdict_dict['rr']}   risk {verdict_dict.get('risk_pct')}%")
+        market_session = facts.get("session") or {}
+        if market_session.get("phase"):
+            box.append(f"session {market_session['phase']}   {market_session.get('now_et', '')}")
         ax.text(0.006, 0.985, "\n".join(box), transform=ax.transAxes, fontsize=7.6,
                 va="top", ha="left", color="#e2e8f0", family="monospace",
                 bbox=dict(boxstyle="round,pad=0.4", facecolor="#111c33ee",

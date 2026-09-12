@@ -96,11 +96,14 @@ def read_chart(image: bytes) -> ChartRead:
     symbol_raw = data.get("symbol") or None
     resolved = symbols.normalize_symbol(symbol_raw)
     if not resolved:
-        # Fall back to the printed company name ("Saudi Aramco", "تسلا").
+        # Fall back to the printed company name ("Tesla Inc", "تسلا") — but only
+        # a real name-table hit: a loose word match would turn "Saudi Aramco"
+        # into the ticker "SAUDI".
         for text in (data.get("company_name"), data.get("exchange")):
-            found = symbols.resolve(text) if text else []
-            if found:
-                resolved = found[0].symbol
+            named = [c for c in (symbols.resolve(text) if text else [])
+                     if c.reason.startswith("name:") or c.reason == "cashtag"]
+            if named:
+                resolved = named[0].symbol
                 break
     # A Saudi-looking numeric code needs the exchange suffix Yahoo expects.
     exchange = (data.get("exchange") or "").upper()
