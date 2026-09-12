@@ -118,14 +118,22 @@ async def main() -> None:
 
             log.info("analysing for chat=%s user=%s (%s): %r",
                      event.chat_id, event.sender_id, why, text[:80])
+            addressed = gate.addressed_explicitly(gate.Incoming(
+                text=text, has_photo=bool(event.message.photo),
+                is_private=bool(event.is_private),
+                mentioned=bool(getattr(event, "mentioned", False))))
             async with semaphore:
                 if config.SEND_TYPING:
                     async with event.client.action(event.chat_id, "typing"):
                         image = await _image_bytes(event)
-                        answer = await asyncio.to_thread(analyst.analyze, text, image)
+                        answer = await asyncio.to_thread(analyst.analyze, text, image,
+                                                         None, True, addressed)
                 else:
                     image = await _image_bytes(event)
-                    answer = await asyncio.to_thread(analyst.analyze, text, image)
+                    answer = await asyncio.to_thread(analyst.analyze, text, image,
+                                                     None, True, addressed)
+            if answer.silent:
+                return      # the photo was not a chart: no reply at all
             await _send_answer(event, answer)
         except Exception:
             log.exception("handler failed")

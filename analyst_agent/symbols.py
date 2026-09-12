@@ -133,8 +133,15 @@ class Candidate:
     confidence: float
 
 
+# Arabic punctuation sits inside the same Unicode block as Arabic letters, so
+# a trailing "؟" used to glue itself to the name and break every word-boundary
+# lookaround ("نفيديا؟" matched nothing).
+ARABIC_PUNCT = re.compile(r"[؟،؛٪٫٬؍!]")
+
+
 def _clean(text: str) -> str:
     t = normalize(text)
+    t = ARABIC_PUNCT.sub(" ", t)
     return re.sub(r"[^\w؀-ۿ$^&\.\-= ]+", " ", t)
 
 

@@ -45,6 +45,7 @@ class Answer:
     symbol: str | None = None
     frame_key: str | None = None
     used_model: str | None = None
+    silent: bool = False      # send nothing at all (the photo was not a chart)
     debug: dict = field(default_factory=dict)
 
 
@@ -85,14 +86,30 @@ def _pick_frame(caption: str | None, read, default: str | None) -> tuple[frames.
 
 
 def analyze(caption: str | None = None, image: bytes | None = None,
-            default_frame: str | None = None, with_news: bool = True) -> Answer:
-    """Full pipeline. Never raises: every failure returns a readable Answer."""
+            default_frame: str | None = None, with_news: bool = True,
+            addressed: bool = True) -> Answer:
+    """Full pipeline. Never raises: every failure returns a readable Answer.
+
+    `addressed=False` means the user did not ask the agent directly — a photo
+    dropped into a group with any caption at all. In that case a picture that
+    is not a chart produces `silent`, so the group gets no reply instead of a
+    "I could not find a symbol" for every screenshot someone shares.
+    """
     question = clean_question(caption)
     read = None
     if image and config.GROQ_API_KEY:
         read = vision_read(image)
     elif image and not config.GROQ_API_KEY:
         log.warning("image received but GROQ_API_KEY is not set — skipping vision")
+
+    caption_candidates = symbols.resolve(caption) if caption else []
+    if image and not addressed and not caption_candidates:
+        # Nothing points at a chart: either vision says it is not one, or there
+        # was no vision read to go on. Either way, say nothing.
+        if read is None or not read.is_chart:
+            reason = "vision says not a chart" if read else "no vision read"
+            log.info("ignoring photo silently (%s)", reason)
+            return Answer(False, "", silent=True, debug={"skipped": reason})
 
     candidates, symbol_source = _pick_symbol(caption, read)
     if not candidates:

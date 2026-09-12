@@ -115,7 +115,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             if config.SEND_TYPING:
                 await context.bot.send_chat_action(incoming.chat_id, ChatAction.TYPING)
             image = await _photo_bytes(update)
-            answer = await asyncio.to_thread(analyst.analyze, incoming.text, image)
+            answer = await asyncio.to_thread(
+                analyst.analyze, incoming.text, image, None, True,
+                gate.addressed_explicitly(incoming))
+        if answer.silent:
+            return          # the photo was not a chart: no reply at all
         await _send(update, answer)
     except Exception:
         log.exception("handler failed")

@@ -77,27 +77,39 @@ ALIASES: dict[str, str] = {
     "1mn": "1mo", "mo": "1mo", "1m0": "1mo",
 }
 
-# Arabic phrasing, longest first so "ربع ساعة" wins over "ساعة".
+# Fixed Arabic phrases and digit+unit forms, checked before anything looser.
 ARABIC_PATTERNS: list[tuple[str, str]] = [
-    (r"ربع\s*ساعه?", "15m"),
-    (r"نص\s*ساعه?|نصف\s*ساعه?", "30m"),
+    # The lookbehind keeps "اربع ساعات" (four hours) out of "ربع ساعة"
+    # (quarter hour) — the second is a substring of the first.
+    (r"(?<![ء-ي])(?:ال)?ربع\s*ساعه?", "15m"),
+    (r"(?<![ء-ي])(?:ال)?نصف?\s*ساعه?", "30m"),
     (r"(?:ال)?شهري|شهر(?:ي)?\b|شهرية", "1mo"),
     (r"(?:ال)?اسبوعي|(?:ال)?أسبوعي|اسبوع\b|أسبوع\b|اسبوعية", "1wk"),
     (r"(?:ال)?يومي|(?:ال)?اليوم\b|يوميه|يومية|يوم\b", "1d"),
-    (r"(\d+)\s*(?:دقيقه|دقيقة|دقائق|د)\b", "MIN"),
+    (r"(\d+)\s*(?:دقيقه|دقيقة|دقائق|دقايق|د)\b", "MIN"),
     (r"(\d+)\s*(?:ساعه|ساعة|ساعات|س)\b", "HOUR"),
     (r"(\d+)\s*(?:يوم|ايام|أيام)\b", "DAY"),
-    (r"(?:ال)?ساعه|(?:ال)?ساعة|ساعي", "1h"),
-    (r"(?:ال)?دقيقه|(?:ال)?دقيقة", "1m"),
 ]
 
-WORD_NUMBERS = {
-    "خمس": 5, "خمسة": 5, "عشر": 10, "عشرة": 10, "خمسطعش": 15, "خمستعشر": 15,
-    "ربع": 15, "ثلاثين": 30, "ثلاثون": 30, "نص": 30, "نصف": 30, "اربع": 4,
-    "أربع": 4, "اربعة": 4, "أربعة": 4, "ساعتين": 120, "ساعتان": 120,
-    "دقيقتين": 2, "يومين": 2880,
+# "خمس دقايق", "أربع ساعات" — a spelled-out count before the unit. Checked
+# after the fixed phrases (so "ربع ساعة" stays 15m) but before the bare units
+# (so "خمس دقايق" is not read as the bare word "دقايق" = 1m).
+WORD_COUNTS: dict[str, int] = {
+    "دقيقتين": 2, "ساعتين": 2, "يومين": 2,
+    "ثلاث": 3, "ثلاثة": 3, "اربع": 4, "أربع": 4, "اربعة": 4, "أربعة": 4,
+    "خمس": 5, "خمسة": 5, "ست": 6, "سته": 6, "ستة": 6, "سبع": 7, "سبعة": 7,
+    "ثمان": 8, "ثمانية": 8, "تسع": 9, "تسعة": 9, "عشر": 10, "عشرة": 10,
+    "خمستعشر": 15, "خمسطعش": 15, "عشرين": 20, "ثلاثين": 30, "ثلاثون": 30,
+    "اربعين": 40, "خمسين": 50,
 }
+MINUTE_WORDS = r"(?:دقيقه|دقيقة|دقائق|دقايق)"
+HOUR_WORDS = r"(?:ساعه|ساعة|ساعات|سوايع)"
 
+# Last resort: the unit on its own ("على الدقيقة", "فريم الساعة").
+BARE_UNIT_PATTERNS: list[tuple[str, str]] = [
+    (r"(?:ال)?ساعه|(?:ال)?ساعة|ساعي", "1h"),
+    (r"(?:ال)?دقيقه|(?:ال)?دقيقة|(?:ال)?دقايق|(?:ال)?دقائق", "1m"),
+]
 
 def normalize(text: str) -> str:
     """Arabic-Indic digits -> ASCII, tatweel and diacritics stripped, lowercased."""
@@ -134,7 +146,9 @@ def get(key: str) -> Frame:
 def parse(text: str | None) -> Frame | None:
     """First timeframe mentioned in free text, or None if nothing looks like one.
 
-    Handles "15m", "M15", "240", "h4", "4 ساعات", "ربع ساعة", "يومي", "daily".
+    Handles "15m", "M15", "240", "h4", "4 ساعات", "خمس دقايق", "ربع ساعة",
+    "يومي", "daily" — in that order of specificity, so a looser spelling never
+    shadows a more exact one.
     """
     if not text:
         return None
@@ -153,15 +167,15 @@ def parse(text: str | None) -> Frame | None:
             return FRAMES["1d"] if days <= 1 else _from_minutes(days * 1440)
         return FRAMES[target]
 
-    for word, minutes in WORD_NUMBERS.items():
-        if re.search(rf"\b{word}\s*(?:دقيقه|دقيقة|دقائق)", t):
-            return _from_minutes(minutes)
-        if re.search(rf"\b{word}\s*(?:ساعه|ساعة|ساعات)", t):
-            return _from_minutes(minutes if minutes >= 60 else minutes * 60)
-    if re.search(r"\bساعتين\b", t):
-        return FRAMES["2h"]
-    if re.search(r"\bدقيقتين\b", t):
-        return FRAMES["2m"]
+    for word, count in WORD_COUNTS.items():
+        if re.search(rf"{word}\s*{MINUTE_WORDS}", t) or word == "دقيقتين" and word in t:
+            return _from_minutes(count)
+        if re.search(rf"{word}\s*{HOUR_WORDS}", t) or word == "ساعتين" and word in t:
+            return _from_minutes(count * 60)
+
+    for pattern, target in BARE_UNIT_PATTERNS:
+        if re.search(pattern, t):
+            return FRAMES[target]
 
     # "15m", "4h", "1d", "1wk", "1mo" and the M15/H4/D1 broker spellings.
     # Longest suffix first: "1mo" must not be read as "1m" + stray "o".

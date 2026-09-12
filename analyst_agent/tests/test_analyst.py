@@ -83,6 +83,47 @@ def test_unknown_symbol_asks_for_one(offline):
     assert "ما عرفت الرمز" in answer.text
 
 
+def test_non_chart_photo_is_dropped_silently(offline, monkeypatch):
+    """A meme or a random screenshot in a group must not get a reply."""
+    monkeypatch.setattr(config, "GROQ_API_KEY", "k")
+    monkeypatch.setattr(analyst, "vision_read", lambda image: vision.ChartRead(is_chart=False))
+    answer = analyst.analyze("شوفوا هذي", image=b"\x89PNG", addressed=False)
+    assert answer.silent is True
+    assert answer.text == ""
+
+
+def test_non_chart_photo_still_answers_when_asked_directly(offline, monkeypatch):
+    """If the user says "حلل", answer even if the vision read disagrees."""
+    monkeypatch.setattr(config, "GROQ_API_KEY", "k")
+    monkeypatch.setattr(analyst, "vision_read", lambda image: vision.ChartRead(is_chart=False))
+    answer = analyst.analyze("حلل TSLA يومي", image=b"\x89PNG", addressed=True)
+    assert answer.silent is False
+    assert answer.ok is True
+
+
+def test_chart_photo_with_free_caption_is_analysed(offline, monkeypatch):
+    """Any wording works: the caption is passed through as the question."""
+    monkeypatch.setattr(config, "GROQ_API_KEY", "k")
+    monkeypatch.setattr(analyst, "vision_read", lambda image: vision.ChartRead(
+        is_chart=True, symbol="TSLA", frame_key="15m"))
+    answer = analyst.analyze("ادخل ولا أنتظر؟", image=b"\x89PNG", addressed=False)
+    assert answer.ok is True and answer.silent is False
+    assert answer.symbol == "TSLA" and answer.frame_key == "15m"
+
+
+def test_photo_with_a_named_symbol_is_analysed_without_vision(offline, monkeypatch):
+    """No Groq key: a caption naming the symbol is enough to act on the photo."""
+    monkeypatch.setattr(config, "GROQ_API_KEY", "")
+    answer = analyst.analyze("وش رايك في TSLA يومي", image=b"\x89PNG", addressed=False)
+    assert answer.ok is True and answer.symbol == "TSLA"
+
+
+def test_photo_without_vision_or_symbol_stays_silent(offline, monkeypatch):
+    monkeypatch.setattr(config, "GROQ_API_KEY", "")
+    answer = analyst.analyze("وش رايكم", image=b"\x89PNG", addressed=False)
+    assert answer.silent is True
+
+
 def test_saudi_request_says_it_is_out_of_market(offline):
     """US-only deployment: name the reason instead of "I found no symbol"."""
     answer = analyst.analyze("حلل أرامكو يومي")

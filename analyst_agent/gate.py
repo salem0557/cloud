@@ -10,7 +10,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from . import config, frames
+from . import config, frames, symbols
 
 CAPTION_LIMIT = 1024      # Telegram's cap on a photo caption
 MESSAGE_LIMIT = 4000      # under Telegram's 4096-char message cap
@@ -84,14 +84,15 @@ def decide(msg: Incoming) -> tuple[bool, str]:
         return False, "chat not allowed"
     # A userbot runs as its owner's account, so his ordinary chatter arrives
     # here as an outgoing message: act on it only when he asks explicitly.
-    if msg.is_own and not has_trigger(msg.text):
+    if msg.is_own and not (has_trigger(msg.text)
+                           or (msg.has_photo and config.ANSWER_ALL_PHOTOS)):
         return False, "own message without trigger"
     if is_command(msg.text):
         return True, "command"
 
     if msg.is_private and config.DM_ALWAYS_ANSWER:
         if (msg.has_photo or msg.replied_has_photo or has_trigger(msg.text)
-                or frames.parse(msg.text)):
+                or frames.parse(msg.text) or symbols.resolve(msg.text)):
             return True, "private chat"
         return False, "private but nothing to analyse"
 
@@ -99,9 +100,23 @@ def decide(msg: Incoming) -> tuple[bool, str]:
         return True, "trigger word"
     if msg.mentioned or msg.reply_to_me:
         return True, "mention/reply"
-    if msg.has_photo and config.ANSWER_BARE_PHOTOS and not msg.text:
-        return True, "bare photo"
+    # A photo is a request on its own: the caption can be anything, or nothing.
+    # Whether it is actually a chart is settled later by the vision read, which
+    # drops non-charts without a reply.
+    if msg.has_photo and config.ANSWER_ALL_PHOTOS:
+        return True, "photo"
     return False, "not addressed"
+
+
+def addressed_explicitly(msg: Incoming) -> bool:
+    """Did the user clearly ask *the agent*?
+
+    This decides what happens when the picture is not a chart: an explicit ask
+    deserves an answer even if the vision read disagrees, while a photo dropped
+    into a group does not deserve a reply at all.
+    """
+    return bool(has_trigger(msg.text) or msg.mentioned or msg.reply_to_me
+                or msg.is_private)
 
 
 def chunks(text: str, limit: int = MESSAGE_LIMIT) -> list[str]:

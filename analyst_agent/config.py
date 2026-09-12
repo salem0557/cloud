@@ -93,8 +93,12 @@ TRIGGERS = _list("ANALYST_TRIGGERS", [
 ])
 # In a private chat every photo is analysed without needing a trigger word.
 DM_ALWAYS_ANSWER = _bool("ANALYST_DM_ALWAYS", True)
-# A photo posted in a group with no caption at all: answer or ignore.
-ANSWER_BARE_PHOTOS = _bool("ANALYST_ANSWER_BARE_PHOTOS", False)
+# Any photo in an allowed chat is treated as a request, whatever is written
+# with it ("وش رايك؟", "ادخل ولا أنتظر؟", or nothing at all). Images that turn
+# out not to be charts are dropped silently, so the group is never spammed.
+# ANALYST_ANSWER_BARE_PHOTOS is the old name for this switch.
+ANSWER_ALL_PHOTOS = _bool("ANALYST_ANSWER_ALL_PHOTOS",
+                          _bool("ANALYST_ANSWER_BARE_PHOTOS", True))
 MAX_CONCURRENT = _int("ANALYST_MAX_CONCURRENT", 2)
 USER_COOLDOWN = _int("ANALYST_USER_COOLDOWN", 20)  # seconds between requests
 SEND_TYPING = _bool("ANALYST_SEND_TYPING", True)

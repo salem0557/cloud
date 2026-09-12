@@ -44,8 +44,12 @@ def test_trigger_word_in_a_group():
     assert _gate(FakeEvent(FakeMessage("حلل هذا", photo=True))) == (True, "trigger word")
 
 
-def test_plain_group_photo_is_ignored():
-    assert _gate(FakeEvent(FakeMessage("شوفوا", photo=True)))[0] is False
+def test_free_caption_on_a_photo_is_enough():
+    assert _gate(FakeEvent(FakeMessage("وش رايك فيه؟", photo=True))) == (True, "photo")
+
+
+def test_group_text_without_addressing_is_ignored():
+    assert _gate(FakeEvent(FakeMessage("نفيديا طالعة")))[0] is False
 
 
 def test_reply_to_the_agent_is_recognised():

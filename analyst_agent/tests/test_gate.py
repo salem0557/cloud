@@ -11,7 +11,7 @@ def _open_config(monkeypatch):
     monkeypatch.setattr(config, "BLOCKED_CHATS", set())
     monkeypatch.setattr(config, "OWNER_IDS", set())
     monkeypatch.setattr(config, "DM_ALWAYS_ANSWER", True)
-    monkeypatch.setattr(config, "ANSWER_BARE_PHOTOS", False)
+    monkeypatch.setattr(config, "ANSWER_ALL_PHOTOS", True)
     monkeypatch.setattr(gate, "_last_request", {})
 
 
@@ -19,12 +19,21 @@ def group(**kwargs):
     return gate.Incoming(chat_id=-1001, user_id=777, **kwargs)
 
 
-def test_group_photo_without_addressing_is_ignored():
+def test_any_photo_is_a_request_whatever_the_caption():
+    """Salem writes freely: "وش رايك؟", "ادخل ولا أنتظر؟", or nothing."""
+    for caption in ("وش رايك فيه؟", "هذا ينفع للدخول", "شكله كاسر المقاومة", ""):
+        answer, why = gate.decide(group(text=caption, has_photo=True))
+        assert answer is True and why == "photo", caption
+
+
+def test_photos_can_be_switched_off(monkeypatch):
+    monkeypatch.setattr(config, "ANSWER_ALL_PHOTOS", False)
     assert gate.decide(group(text="شوفوا هذا", has_photo=True))[0] is False
+    assert gate.decide(group(text="حلل هذا", has_photo=True))[0] is True
 
 
 def test_trigger_word_answers():
-    answer, why = gate.decide(group(text="حلل هذا الشارت", has_photo=True))
+    answer, why = gate.decide(group(text="حلل هذا الشارت"))
     assert answer is True and why == "trigger word"
 
 
@@ -33,7 +42,7 @@ def test_trigger_word_without_a_photo_still_answers():
 
 
 def test_mention_answers():
-    answer, why = gate.decide(group(text="وش رايك؟", has_photo=True, mentioned=True))
+    answer, why = gate.decide(group(text="وش رايك؟", mentioned=True))
     assert answer is True and why == "mention/reply"
 
 
@@ -42,11 +51,22 @@ def test_reply_to_the_agent_answers():
     assert answer is True and why == "mention/reply"
 
 
-def test_bare_photo_only_when_enabled(monkeypatch):
-    assert gate.decide(group(has_photo=True))[0] is False
-    monkeypatch.setattr(config, "ANSWER_BARE_PHOTOS", True)
-    answer, why = gate.decide(group(has_photo=True))
-    assert answer is True and why == "bare photo"
+def test_text_without_a_photo_still_needs_addressing():
+    """A group full of tickers must not trigger an answer per message."""
+    assert gate.decide(group(text="نفيديا طالعة اليوم"))[0] is False
+    assert gate.decide(group(text="حلل نفيديا"))[0] is True
+
+
+def test_private_free_text_naming_a_symbol_is_enough():
+    answer, why = gate.decide(gate.Incoming(chat_id=5, text="نفيديا؟", is_private=True))
+    assert answer is True and why == "private chat"
+
+
+def test_addressed_explicitly():
+    assert gate.addressed_explicitly(group(text="حلل", has_photo=True)) is True
+    assert gate.addressed_explicitly(group(text="وش رايك", has_photo=True)) is False
+    assert gate.addressed_explicitly(group(text="وش رايك", mentioned=True)) is True
+    assert gate.addressed_explicitly(gate.Incoming(text="", is_private=True)) is True
 
 
 def test_private_chat_analyses_any_chart():
@@ -58,9 +78,10 @@ def test_private_small_talk_is_ignored():
     assert gate.decide(gate.Incoming(chat_id=5, text="مرحبا", is_private=True))[0] is False
 
 
-def test_own_outgoing_message_needs_a_trigger():
+def test_own_outgoing_message_needs_a_trigger_or_a_photo():
     assert gate.decide(group(text="خلاص شريت", is_own=True))[0] is False
     assert gate.decide(group(text="حلل تسلا يومي", is_own=True))[0] is True
+    assert gate.decide(group(text="وش رايك", has_photo=True, is_own=True))[0] is True
 
 
 def test_blocked_and_allowed_chats(monkeypatch):
