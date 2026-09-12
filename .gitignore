@@ -8,3 +8,4 @@ universe.json
 *.session
 *.session-journal
 chart.png
+analyst_state.json

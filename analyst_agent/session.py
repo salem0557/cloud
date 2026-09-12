@@ -30,7 +30,63 @@ LABELS = {
     "closed": "السوق مغلق",
     "weekend": "نهاية الأسبوع — السوق مغلق",
     "holiday": "عطلة رسمية في السوق الأمريكي",
+    "crypto_24h": "سوق الكريبتو — يعمل 24 ساعة طوال الأسبوع",
+    "fx_open": "سوق العملات مفتوح (24 ساعة حتى إغلاق الجمعة)",
+    "fx_closed": "سوق العملات مغلق (يفتح مساء الأحد بتوقيت نيويورك)",
+    "futures_open": "سوق العقود الآجلة مفتوح (شبه 24 ساعة)",
+    "futures_closed": "سوق العقود الآجلة في فترة التوقف اليومية",
 }
+
+
+def asset_class(symbol: str | None) -> str:
+    """crypto / fx / futures / us_equity — each keeps different hours."""
+    if not symbol:
+        return "us_equity"
+    upper = symbol.upper()
+    if upper.endswith("-USD") or upper.endswith("-USDT"):
+        return "crypto"
+    if upper.endswith("=X"):
+        return "fx"
+    if upper.endswith("=F"):
+        return "futures"
+    return "us_equity"
+
+
+def state_for(symbol: str | None, now: dt.datetime | None = None) -> dict:
+    """Session state for the asset actually being analysed.
+
+    Saying "market closed" about Bitcoin at 2am would be wrong and would make
+    the whole read look careless — crypto never closes, FX closes only for the
+    weekend, and futures only for the daily break.
+    """
+    kind = asset_class(symbol)
+    if kind == "us_equity":
+        return state(now)
+
+    moment = (now or dt.datetime.now(dt.timezone.utc)).astimezone(NY)
+    weekday, clock = moment.weekday(), moment.time()
+    if kind == "crypto":
+        phase = "crypto_24h"
+    elif kind == "fx":
+        # Opens Sunday 17:00 ET, closes Friday 17:00 ET.
+        closed = (weekday == 5
+                  or (weekday == 6 and clock < dt.time(17, 0))
+                  or (weekday == 4 and clock >= dt.time(17, 0)))
+        phase = "fx_closed" if closed else "fx_open"
+    else:
+        # Futures: Sunday 18:00 ET to Friday 17:00 ET, with a daily 17:00-18:00 break.
+        closed = (weekday == 5
+                  or (weekday == 6 and clock < dt.time(18, 0))
+                  or (weekday == 4 and clock >= dt.time(17, 0))
+                  or (dt.time(17, 0) <= clock < dt.time(18, 0)))
+        phase = "futures_closed" if closed else "futures_open"
+    return {
+        "phase": phase,
+        "phase_ar": LABELS[phase],
+        "now_et": moment.strftime("%Y-%m-%d %H:%M ET"),
+        "is_open": phase in ("crypto_24h", "fx_open", "futures_open"),
+        "asset_class": kind,
+    }
 
 
 def state(now: dt.datetime | None = None) -> dict:
@@ -57,6 +113,7 @@ def state(now: dt.datetime | None = None) -> dict:
         "phase_ar": LABELS[phase],
         "now_et": now.strftime("%Y-%m-%d %H:%M ET"),
         "is_open": phase == "regular",
+        "asset_class": "us_equity",
     }
     if phase == "regular":
         close_at = dt.datetime.combine(today, CLOSE, tzinfo=NY)

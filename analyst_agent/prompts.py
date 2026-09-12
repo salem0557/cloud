@@ -25,9 +25,10 @@ SYSTEM = """أنت محلل فني محترف بخبرة عشرين سنة في 
 7) اكتب بالعربية الفصحى المبسطة، أرقام إنجليزية، بلا رموز ماركداون معقّدة (لا جداول ولا عناوين #)، ومناسب
    لقراءته في تيليجرام.
 8) لا تكتب إخلاء مسؤولية طويلاً؛ سطر واحد في النهاية يكفي.
-9) تخصصك السوق الأمريكي. انظر إلى technicals.session: إن كان السوق مغلقاً أو في البري ماركت/الأفتر
-   أورز، أو كانت آخر شمعة متأخرة (stale_note)، فقل ذلك بسطر واحد قبل الخطة — الخطة تُنفَّذ عند
-   الافتتاح وليس الآن.
+9) تخصصك السوق الأمريكي والكريبتو. انظر إلى technicals.session: إن كان السوق مغلقاً أو في
+   البري ماركت/الأفتر أورز، أو كانت آخر شمعة متأخرة (stale_note)، فقل ذلك بسطر واحد قبل الخطة —
+   الخطة تُنفَّذ عند الافتتاح وليس الآن. أما الكريبتو (asset_class = crypto) فسوقه مفتوح 24 ساعة:
+   لا تتحدث عن افتتاح أو إغلاق، وراعِ أن السبريد والسيولة يضعفان في عطلة نهاية الأسبوع.
 
 اكتب الإجابة بهذا الهيكل بالضبط وبهذا الترتيب:
 
@@ -166,4 +167,63 @@ def fallback_text(*, symbol: str, frame_label: str, facts: dict, verdict: dict,
         lines.append("⚠️ " + events["warning"])
     lines.append("")
     lines.append("هذا تحليل فني آلي وليس توصية استثمارية.")
+    return "\n".join(lines)
+
+
+def alert_text(*, symbol: str, name: str | None, frame_label: str, facts: dict,
+               verdict: dict, events: dict | None = None) -> str:
+    """The recommendation card posted automatically to the alerts topic.
+
+    Template-only on purpose: a scan looks at dozens of symbols, and a model
+    call per symbol would be slow, rate-limited and — worse — able to reword
+    the numbers. The interactive answer is where the model earns its place.
+    """
+    trend = facts["trend"]
+    mom = facts["momentum"]
+    vol = facts["volume"]
+    lv = facts["levels"]
+    side_ar = "شراء" if verdict["side"] == "long" else "بيع"
+    arrow = "🟢" if verdict["side"] == "long" else "🔴"
+    title = f"{arrow} توصية {side_ar} — {symbol}"
+    if name:
+        title += f" ({name})"
+
+    reasons = [f"{trend['structure_ar']} وترتيب المتوسطات {trend['ema_stack']}"]
+    if trend.get("adx"):
+        reasons.append(f"ADX {trend['adx']:.0f} يدل على اتجاه فعّال")
+    reasons.append(f"RSI {mom['rsi']} و MACD {'إيجابي' if (mom.get('macd_hist') or 0) > 0 else 'سلبي'}")
+    if vol.get("relative"):
+        reasons.append(f"فوليوم {vol['relative']}× المعدل")
+    if mom.get("rsi_divergence"):
+        reasons.append(f"دايفرجنس {mom['rsi_divergence']}")
+    if facts.get("patterns_ar"):
+        reasons.append(facts["patterns_ar"][0])
+
+    lines = [
+        title,
+        f"الفريم: {frame_label} | السعر الحالي: {facts['price']}",
+        f"الثقة: {verdict['conviction']}% ({verdict['conviction_ar']})",
+        "",
+        "الأسباب:",
+        *[f"• {r}" for r in reasons[:4]],
+        "",
+        f"الدخول: {verdict['entry']}",
+        f"الستوب: {verdict['stop']} (مخاطرة {verdict['risk_pct']}%)",
+        f"الأهداف: {'، '.join(str(t) for t in verdict['targets'][:3])}",
+        f"العائد/المخاطرة: {verdict['rr']} | نسبة التعادل المطلوبة: {verdict['breakeven_rate']}%",
+        f"⚠️ {verdict['invalidation']}",
+    ]
+    if lv.get("nearest_resistance") and verdict["side"] == "long":
+        lines.append(f"أقرب مقاومة: {lv['nearest_resistance']}")
+    if lv.get("nearest_support") and verdict["side"] == "short":
+        lines.append(f"أقرب دعم: {lv['nearest_support']}")
+    for conflict in (verdict.get("conflicts") or [])[:2]:
+        lines.append("⚠️ " + conflict)
+    if (events or {}).get("warning"):
+        lines.append("⚠️ " + events["warning"])
+    session_state = facts.get("session") or {}
+    if session_state.get("phase_ar"):
+        lines.append(f"🕒 {session_state['phase_ar']}")
+    lines.append("")
+    lines.append("تحليل فني آلي — ليس توصية استثمارية. لا تكبّر المخاطرة.")
     return "\n".join(lines)

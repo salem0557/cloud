@@ -81,3 +81,17 @@ def test_saudi_helpers():
     assert symbols.is_saudi("2222.SR")
     assert not symbols.is_saudi("AAPL")
     assert symbols.currency_of("2222.SR") == "ريال"
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("btc 15m", "BTC-USD"),
+    ("eth يومي", "ETH-USD"),
+    ("سولانا 4 ساعات", "SOL-USD"),
+    ("حلل شيبا", "SHIB-USD"),
+    ("SUI", "SUI-USD"),
+    ("ethusdt", "ETH-USD"),
+    ("كريبتو", "BTC-USD"),
+])
+def test_crypto_is_covered(text, expected):
+    found = symbols.resolve(text)
+    assert found and found[0].symbol == expected

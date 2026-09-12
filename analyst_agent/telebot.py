@@ -24,7 +24,7 @@ from telegram.constants import ChatAction, ChatType
 from telegram.ext import (Application, ApplicationBuilder, ContextTypes,
                           MessageHandler, filters)
 
-from . import analyst, config, gate
+from . import analyst, config, doctor, gate, watcher
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s",
                     level=logging.INFO)
@@ -55,6 +55,8 @@ def _incoming(update: Update, bot_id: int) -> gate.Incoming:
     return gate.Incoming(
         text=text,
         chat_id=update.effective_chat.id,
+        topic_id=getattr(message, "message_thread_id", None),
+        is_forum=bool(getattr(update.effective_chat, "is_forum", False)),
         user_id=update.effective_user.id if update.effective_user else None,
         has_photo=bool(message.photo),
         replied_has_photo=bool(replied and replied.photo),
@@ -92,6 +94,85 @@ async def _send(update: Update, answer: analyst.Answer) -> None:
             await message.reply_text(chunk)
 
 
+async def _publish(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                   incoming: gate.Incoming) -> None:
+    """/post as a reply: copy that message into the recommendations topic.
+
+    Copying (rather than forwarding) keeps the recommendations topic clean —
+    no "forwarded from" header, just the call itself.
+    """
+    message = update.effective_message
+    if not gate.diag_allowed(incoming.user_id, incoming.is_private):
+        return
+    if not config.ALERTS_TOPIC:
+        await message.reply_text("قسم التوصيات غير مضبوط: أضف ANALYST_ALERTS_TOPIC "
+                                 "(خذ رقمه بأمر /here داخل ذلك القسم).")
+        return
+    target = message.reply_to_message
+    if not target:
+        await message.reply_text("استخدم /post كـ«رد» على التحليل الذي تبي تنشره.")
+        return
+    try:
+        await context.bot.copy_message(
+            chat_id=incoming.chat_id, from_chat_id=incoming.chat_id,
+            message_id=target.message_id, message_thread_id=config.ALERTS_TOPIC)
+        if target.caption or target.photo:
+            for extra in _following_text(target):
+                await context.bot.send_message(incoming.chat_id, extra,
+                                               message_thread_id=config.ALERTS_TOPIC)
+        await message.reply_text("تم النشر في قسم التوصيات ✅")
+    except Exception as exc:
+        log.warning("publish failed: %s", exc)
+        await message.reply_text(f"تعذّر النشر: {exc}"[:200])
+
+
+def _following_text(_target) -> list[str]:
+    """Hook for future use: extra lines to publish beside a copied chart."""
+    return []
+
+
+async def post_alert(bot, alert: watcher.Alert) -> bool:
+    """Send one automatic recommendation into the alerts topic."""
+    target = watcher.destination()
+    if not target:
+        return False
+    chat_id, topic_id = target
+    caption = alert.text if len(alert.text) <= gate.CAPTION_LIMIT else alert.text[:1000] + "…"
+    try:
+        if alert.chart_png:
+            image = BytesIO(alert.chart_png)
+            image.name = f"{alert.symbol}_{alert.frame_key}.png"
+            await bot.send_photo(chat_id, photo=image, caption=caption,
+                                 message_thread_id=topic_id)
+        else:
+            await bot.send_message(chat_id, alert.text, message_thread_id=topic_id)
+        return True
+    except Exception:
+        log.exception("failed to post alert for %s", alert.symbol)
+        return False
+
+
+async def run_watch(context: ContextTypes.DEFAULT_TYPE, force: bool = False) -> list[watcher.Alert]:
+    """One scan pass, posting whatever cleared the bar."""
+    alerts = await asyncio.to_thread(watcher.scan, None, None, force)
+    sent = []
+    for alert in alerts:
+        if await post_alert(context.bot, alert):
+            sent.append(alert)
+    if sent:
+        await asyncio.to_thread(watcher.mark_posted, sent)
+        log.info("posted %d recommendation(s): %s", len(sent),
+                 ", ".join(a.symbol for a in sent))
+    return sent
+
+
+async def watch_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        await run_watch(context)
+    except Exception:
+        log.exception("watch job failed")
+
+
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_message or not update.effective_chat:
         return
@@ -100,6 +181,35 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not answer_it:
         return
 
+    if gate.is_here(incoming.text):
+        await update.effective_message.reply_text(gate.here_report(incoming))
+        return
+    if gate.is_post(incoming.text):
+        await _publish(update, context, incoming)
+        return
+    if gate.is_watchlist(incoming.text):
+        if gate.diag_allowed(incoming.user_id, incoming.is_private):
+            await update.effective_message.reply_text(watcher.status())
+        return
+    if gate.is_scan(incoming.text):
+        if not gate.diag_allowed(incoming.user_id, incoming.is_private):
+            return
+        if not watcher.destination():
+            await update.effective_message.reply_text(watcher.status())
+            return
+        await update.effective_message.reply_text("جاري مسح المراقبة… ⏳")
+        sent = await run_watch(context, force=True)
+        await update.effective_message.reply_text(
+            f"تم نشر {len(sent)} توصية" if sent else
+            "لا يوجد سهم يحقق الشروط الآن — لا توصية.")
+        return
+    if gate.is_diag(incoming.text):
+        if not gate.diag_allowed(incoming.user_id, incoming.is_private):
+            return
+        await update.effective_message.reply_text("جاري الفحص… ⏳")
+        checks = await asyncio.to_thread(doctor.run_all)
+        await update.effective_message.reply_text(doctor.report(checks))
+        return
     canned = gate.command_reply(incoming.text)
     if canned:
         await update.effective_message.reply_text(canned)
@@ -135,6 +245,15 @@ def build() -> Application:
            .concurrent_updates(True)
            .build())
     app.bot_data["semaphore"] = asyncio.Semaphore(config.MAX_CONCURRENT)
+    if watcher.enabled() and app.job_queue:
+        # The recommendations topic fills itself: one pass every
+        # ANALYST_WATCH_INTERVAL minutes, first one a minute after boot.
+        app.job_queue.run_repeating(watch_job, interval=config.WATCH_INTERVAL_MIN * 60,
+                                    first=60, name="watch")
+        log.info("automatic recommendations on: every %s min -> %s",
+                 config.WATCH_INTERVAL_MIN, watcher.destination())
+    elif config.WATCH_ENABLED:
+        log.info("automatic recommendations idle: no ANALYST_ALERTS_CHAT configured")
     # One handler: photos, captions and plain text all go through the same gate.
     app.add_handler(MessageHandler(
         (filters.PHOTO | filters.TEXT | filters.CAPTION) & ~filters.StatusUpdate.ALL,
@@ -144,6 +263,11 @@ def build() -> Application:
 
 def main() -> None:
     app = build()
+    if config.STARTUP_CHECK:
+        # The deploy logs alone should say whether this instance can work.
+        for line in doctor.report(doctor.run_all(quick=True)).splitlines():
+            if line.strip():
+                log.info("%s", line)
     log.info("analyst bot is running — waiting for charts")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
