@@ -200,10 +200,11 @@ def check_watcher() -> Check:
                  f"| ثقة ≥ {config.WATCH_MIN_CONVICTION}%")
 
 
-QUICK = [check_packages, check_groq_key, check_telegram, check_config, check_session,
-         check_watcher]
-FULL = QUICK + [check_groq_models, check_groq_call, check_market_data, check_chart,
-                check_pipeline]
+# check_groq_models is in QUICK on purpose: which models a key carries is the
+# single most useful line in a deploy log, and it costs one GET.
+QUICK = [check_packages, check_groq_key, check_groq_models, check_telegram,
+         check_config, check_session, check_watcher]
+FULL = QUICK + [check_groq_call, check_market_data, check_chart, check_pipeline]
 
 
 def run_all(quick: bool = False) -> list[Check]:

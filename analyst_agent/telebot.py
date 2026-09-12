@@ -95,6 +95,26 @@ async def _send(update: Update, answer: analyst.Answer) -> None:
             await message.reply_text(chunk)
 
 
+async def _may_manage(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                      incoming: gate.Incoming) -> bool:
+    """Owner commands: an ANALYST_OWNER_IDS entry, a private chat, or — when no
+    owner is configured — an admin of this group.
+
+    Without the admin fallback the first thing a new install needs (/diag) is
+    unreachable from the only place the bot lives: the group.
+    """
+    if gate.diag_allowed(incoming.user_id, incoming.is_private):
+        return True
+    if config.OWNER_IDS or not incoming.user_id:
+        return False
+    try:
+        member = await context.bot.get_chat_member(incoming.chat_id, incoming.user_id)
+    except Exception:
+        log.warning("could not read chat member status", exc_info=True)
+        return False
+    return member.status in ("creator", "administrator")
+
+
 async def _publish(update: Update, context: ContextTypes.DEFAULT_TYPE,
                    incoming: gate.Incoming) -> None:
     """/post as a reply: copy that message into the recommendations topic.
@@ -103,7 +123,7 @@ async def _publish(update: Update, context: ContextTypes.DEFAULT_TYPE,
     no "forwarded from" header, just the call itself.
     """
     message = update.effective_message
-    if not gate.diag_allowed(incoming.user_id, incoming.is_private):
+    if not await _may_manage(update, context, incoming):
         return
     if not config.ALERTS_TOPIC:
         await message.reply_text("قسم التوصيات غير مضبوط: أضف ANALYST_ALERTS_TOPIC "
@@ -189,11 +209,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await _publish(update, context, incoming)
         return
     if gate.is_watchlist(incoming.text):
-        if gate.diag_allowed(incoming.user_id, incoming.is_private):
+        if await _may_manage(update, context, incoming):
             await update.effective_message.reply_text(watcher.status())
         return
     if gate.is_scan(incoming.text):
-        if not gate.diag_allowed(incoming.user_id, incoming.is_private):
+        if not await _may_manage(update, context, incoming):
             return
         if not watcher.destination():
             await update.effective_message.reply_text(watcher.status())
@@ -205,7 +225,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             "لا يوجد سهم يحقق الشروط الآن — لا توصية.")
         return
     if gate.is_diag(incoming.text):
-        if not gate.diag_allowed(incoming.user_id, incoming.is_private):
+        if not await _may_manage(update, context, incoming):
             return
         await update.effective_message.reply_text("جاري الفحص… ⏳")
         checks = await asyncio.to_thread(doctor.run_all)

@@ -143,3 +143,49 @@ def test_error_handler_is_registered(monkeypatch):
     monkeypatch.setenv("ANALYST_BOT_TOKEN", "123:abc")
     app = telebot.build()
     assert app.error_handlers
+
+
+class _Bot:
+    def __init__(self, status="member"):
+        self._status = status
+
+    async def get_chat_member(self, chat_id, user_id):
+        return types.SimpleNamespace(status=self._status)
+
+
+def _ctx(bot):
+    return types.SimpleNamespace(bot=bot)
+
+
+def _run(coro):
+    import asyncio
+
+    return asyncio.run(coro)
+
+
+def test_group_admin_may_run_owner_commands_when_no_owner_is_set(monkeypatch):
+    from analyst_agent import config, gate
+
+    monkeypatch.setattr(config, "OWNER_IDS", set())
+    incoming = gate.Incoming(text="/diag", chat_id=-1001, user_id=777)
+    assert _run(telebot._may_manage(None, _ctx(_Bot("administrator")), incoming)) is True
+    assert _run(telebot._may_manage(None, _ctx(_Bot("member")), incoming)) is False
+
+
+def test_configured_owner_wins_over_admin_status(monkeypatch):
+    from analyst_agent import config, gate
+
+    monkeypatch.setattr(config, "OWNER_IDS", {42})
+    owner = gate.Incoming(text="/diag", chat_id=-1001, user_id=42)
+    stranger = gate.Incoming(text="/diag", chat_id=-1001, user_id=777)
+    assert _run(telebot._may_manage(None, _ctx(_Bot("administrator")), owner)) is True
+    # an admin who is not the configured owner is not trusted with settings
+    assert _run(telebot._may_manage(None, _ctx(_Bot("administrator")), stranger)) is False
+
+
+def test_private_chat_is_always_allowed_without_owners(monkeypatch):
+    from analyst_agent import config, gate
+
+    monkeypatch.setattr(config, "OWNER_IDS", set())
+    incoming = gate.Incoming(text="/diag", chat_id=5, user_id=777, is_private=True)
+    assert _run(telebot._may_manage(None, _ctx(_Bot("member")), incoming)) is True
