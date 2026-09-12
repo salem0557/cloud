@@ -133,7 +133,7 @@ WATCH_INTERVAL_MIN = _int("ANALYST_WATCH_INTERVAL", 30)
 # The bar a setup has to clear to be posted. These are the "conditions".
 WATCH_MIN_CONVICTION = _int("ANALYST_WATCH_MIN_CONVICTION", 65)
 WATCH_MIN_SCORE = _float("ANALYST_WATCH_MIN_SCORE", 40.0)
-WATCH_MIN_RR = _float("ANALYST_WATCH_MIN_RR", 1.5)
+WATCH_MIN_RR = _float("ANALYST_WATCH_MIN_RR", 1.2)
 WATCH_MIN_ADX = _float("ANALYST_WATCH_MIN_ADX", 18.0)
 WATCH_MIN_REL_VOLUME = _float("ANALYST_WATCH_MIN_REL_VOLUME", 0.9)
 # long | short | both — shorts are off by default: harder to time, and a

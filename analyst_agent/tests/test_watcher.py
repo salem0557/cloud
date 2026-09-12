@@ -142,6 +142,8 @@ def offline_market(monkeypatch):
     """Two symbols: one in a strong uptrend, one going nowhere."""
     def fake_load(candidates, frame, with_meta=True):
         symbol = getattr(candidates[0], "symbol", candidates[0])
+        if symbol not in ("STRONG", "FLAT"):
+            return None                      # anything else is an unknown ticker
         # seed 41 is a clean uptrend, seed 13 goes nowhere (see test_verdict)
         trend, seed = (0.9, 41) if symbol == "STRONG" else (0.0, 13)
         data = MarketData(symbol=symbol, frame=frame,
@@ -194,3 +196,35 @@ def test_scan_survives_a_broken_symbol(offline_market, monkeypatch):
 def test_alert_text_has_no_leftover_internals(offline_market):
     alert = watcher.scan(["STRONG"])[0]
     assert "_df" not in alert.text and "_symbol" not in alert.text
+
+
+def test_evaluate_watchlist_reports_every_symbol(offline_market):
+    rows = watcher.evaluate_watchlist(["STRONG", "FLAT", "MISSING"])
+    by_symbol = {row.symbol: row for row in rows}
+    assert by_symbol["STRONG"].ok is True
+    assert by_symbol["FLAT"].ok is False and by_symbol["FLAT"].reason
+    assert by_symbol["MISSING"].reason == "no data"
+    assert by_symbol["STRONG"].conviction > 0
+
+
+def test_dry_run_table_shows_reasons(offline_market, capsys):
+    assert watcher.main(["STRONG", "FLAT"]) == 0
+    out = capsys.readouterr().out
+    assert "SYMBOL" in out and "STRONG" in out
+    assert "✅ POST" in out
+    assert "يحقق الشروط" in out
+
+
+def test_dry_run_posts_nothing(offline_market, monkeypatch):
+    """The console command must never send or record anything."""
+    def fail(*a, **k):
+        raise AssertionError("dry run must not mark state")
+
+    monkeypatch.setattr(watcher, "mark_posted", fail)
+    watcher.main(["STRONG"])
+    assert watcher.load_state().get("count", 0) == 0
+
+
+def test_dry_run_cards_print_the_alert_text(offline_market, capsys):
+    watcher.main(["STRONG", "--cards"])
+    assert "توصية شراء" in capsys.readouterr().out

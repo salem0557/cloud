@@ -29,6 +29,23 @@ log = logging.getLogger(__name__)
 
 
 @dataclass
+class Row:
+    """One symbol's verdict plus whether it clears the bar, and why not."""
+    symbol: str
+    ok: bool
+    reason: str = ""
+    side: str = "none"
+    conviction: int = 0
+    score: float = 0.0
+    rr: float | None = None
+    adx: float | None = None
+    rel_volume: float | None = None
+    price: float | None = None
+    facts: dict = field(default_factory=dict)
+    verdict: dict = field(default_factory=dict)
+
+
+@dataclass
 class Alert:
     symbol: str
     side: str
@@ -123,32 +140,48 @@ def _evaluate(symbol: str, frame) -> tuple[dict, dict] | None:
     return facts, call
 
 
+def evaluate_watchlist(symbols: list[str] | None = None, frame_key: str | None = None,
+                       state: dict | None = None) -> list[Row]:
+    """Every symbol's verdict and gate result — the shared body of the scan
+    and of the console dry run, so what you inspect is what would be posted."""
+    frame = frames.get(frame_key or config.WATCH_FRAME)
+    state = state if state is not None else _roll_day(load_state())
+    rows: list[Row] = []
+    for symbol in (symbols or config.WATCHLIST):
+        try:
+            evaluated = _evaluate(symbol, frame)
+        except Exception as exc:
+            log.warning("evaluate failed for %s", symbol, exc_info=True)
+            rows.append(Row(symbol, False, f"error: {exc}"[:60]))
+            continue
+        if not evaluated:
+            rows.append(Row(symbol, False, "no data"))
+            continue
+        facts, call = evaluated
+        ok, why = eligible(facts, call, state, symbol)
+        rows.append(Row(
+            symbol=symbol, ok=ok, reason=why, side=call["side"],
+            conviction=call["conviction"], score=call["score"], rr=call.get("rr"),
+            adx=facts["trend"].get("adx"), rel_volume=facts["volume"].get("relative"),
+            price=facts.get("price"), facts=facts, verdict=call,
+        ))
+    return rows
+
+
 def scan(symbols: list[str] | None = None, frame_key: str | None = None,
          force: bool = False) -> list[Alert]:
     """One pass over the watchlist. Returns the alerts worth posting."""
     frame = frames.get(frame_key or config.WATCH_FRAME)
-    watchlist = symbols or config.WATCHLIST
     state = _roll_day(load_state())
     if not force and state["count"] >= config.WATCH_MAX_PER_DAY:
         log.info("daily alert cap reached (%s)", state["count"])
         return []
 
-    passed: list[tuple[dict, dict]] = []
-    for symbol in watchlist:
-        try:
-            evaluated = _evaluate(symbol, frame)
-        except Exception:
-            log.warning("evaluate failed for %s", symbol, exc_info=True)
-            continue
-        if not evaluated:
-            continue
-        facts, call = evaluated
-        ok, why = eligible(facts, call, state, symbol)
-        if not ok:
-            log.debug("%s skipped: %s", symbol, why)
-            continue
-        passed.append((facts, call))
-
+    rows = evaluate_watchlist(symbols, frame.key, state)
+    for row in rows:
+        if not row.ok:
+            log.debug("%s skipped: %s", row.symbol, row.reason)
+    passed = [(row.facts, row.verdict) for row in rows if row.ok]
     passed.sort(key=lambda pair: -pair[1]["conviction"])
     alerts: list[Alert] = []
     for facts, call in passed:
@@ -227,3 +260,62 @@ def status() -> str:
         f"المراقَبة ({len(config.WATCHLIST)}): " + " ".join(config.WATCHLIST[:18])
         + (" …" if len(config.WATCHLIST) > 18 else ""),
     ])
+
+
+# --- console dry run --------------------------------------------------------
+def _table(rows: list[Row]) -> str:
+    """ASCII table (English, for alignment) of every symbol and its gate result."""
+    header = f"{'SYMBOL':<10}{'SIDE':<7}{'CONV':>5}{'SCORE':>7}{'R:R':>6}{'ADX':>6}{'VOL':>6}  RESULT"
+    lines = [header, "-" * len(header)]
+    for row in sorted(rows, key=lambda r: (not r.ok, -r.conviction)):
+        result = "✅ POST" if row.ok else row.reason
+        lines.append(
+            f"{row.symbol:<10}{row.side:<7}{row.conviction:>5}{row.score:>7.1f}"
+            f"{(row.rr if row.rr is not None else 0):>6.2f}"
+            f"{(row.adx if row.adx is not None else 0):>6.1f}"
+            f"{(row.rel_volume if row.rel_volume is not None else 0):>6.2f}  {result}"
+        )
+    passing = sum(1 for row in rows if row.ok)
+    lines.append("-" * len(header))
+    lines.append(f"{len(rows)} رمزاً مفحوصاً | {passing} يحقق الشروط")
+    return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Dry run: print what WOULD be posted, without posting anything.
+
+        python -m analyst_agent.watcher                 # the whole watchlist
+        python -m analyst_agent.watcher NVDA TSLA BTC-USD
+        python -m analyst_agent.watcher --frame 1d --cards
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description="فحص شروط التوصيات التلقائية (بلا نشر)")
+    parser.add_argument("symbols", nargs="*", help="رموز محددة (الافتراضي: قائمة المراقبة)")
+    parser.add_argument("--frame", help="فريم المسح (الافتراضي من ANALYST_WATCH_FRAME)")
+    parser.add_argument("--cards", action="store_true", help="اطبع نص التوصية لكل رمز ناجح")
+    parser.add_argument("--ignore-cooldown", action="store_true",
+                        help="تجاهل فترة الانتظار والحد اليومي")
+    parser.add_argument("--verbose", "-v", action="store_true")
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(level=logging.INFO if args.verbose else logging.ERROR,
+                        format="%(levelname)s %(name)s: %(message)s")
+    print(status())
+    print()
+    state = {"posted": {}, "day": _today(), "count": 0} if args.ignore_cooldown else None
+    rows = evaluate_watchlist(args.symbols or None, args.frame, state)
+    print(_table(rows))
+    if args.cards:
+        for row in rows:
+            if not row.ok:
+                continue
+            print("\n" + "=" * 60)
+            print(prompts.alert_text(symbol=row.symbol, name=None,
+                                     frame_label=(row.facts.get("frame_label") or ""),
+                                     facts=row.facts, verdict=row.verdict))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

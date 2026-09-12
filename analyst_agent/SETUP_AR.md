@@ -197,11 +197,18 @@ python -m analyst_agent.telebot          # تشغيل البوت (إيقاف: Ct
 | `ANALYST_ALERTS_CHAT` | `-1001234567890` (من `/here`) |
 | `ANALYST_ALERTS_TOPIC` | `1` |
 
-الشروط الافتراضية: ثقة ≥ 65% · R:R ≥ 1.5 · ADX ≥ 18 · فوليوم ≥ 0.9× · شراء فقط ·
+الشروط الافتراضية: ثقة ≥ 65% · R:R ≥ 1.2 · ADX ≥ 18 · فوليوم ≥ 0.9× · شراء فقط ·
 والسوق مفتوح · ولا نتائج مالية خلال 3 أيام · ولا تكرار لنفس السهم قبل 12 ساعة ·
 بحد أقصى 3 لكل دورة و10 يومياً.
 
 للتأكد أو التعديل: أرسل `/watchlist` (يعرض الشروط والقائمة)، و `/scan` لمسح فوري.
+
+ولتجربة الشروط من الكونسل **بلا نشر أي شيء** (يعرض جدولاً بكل رمز وسبب رفضه):
+
+```bash
+python -m analyst_agent.watcher
+python -m analyst_agent.watcher NVDA TSLA BTC-USD --cards
+```
 ولتغيير أي شرط استخدم متغيّراته من `.env.example` (مثل
 `ANALYST_WATCH_MIN_CONVICTION=70` أو `ANALYST_WATCH_SIDES=both`).
 
