@@ -7,3 +7,5 @@ python-dotenv>=1.0
 matplotlib>=3.7
 mplfinance
 tabulate>=0.9
+telethon>=1.36        # analyst_agent: Telegram userbot
+pillow>=10.0          # analyst_agent: chart screenshot resizing

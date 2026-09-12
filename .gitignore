@@ -5,3 +5,6 @@ state.json
 universe.json
 *.csv
 .venv/
+*.session
+*.session-journal
+chart.png
