@@ -18,8 +18,11 @@ MESSAGE_LIMIT = 4000      # under Telegram's 4096-char message cap
 DIAG_COMMANDS = {"/diag", ".diag", "/فحص", "فحص"}
 HERE_COMMANDS = {"/here", ".here", "/وين", "/id"}
 POST_COMMANDS = {"/post", ".post", "/نشر"}
+SCAN_COMMANDS = {"/scan", ".scan", "/مسح"}
+WATCH_COMMANDS = {"/watchlist", ".watchlist", "/watch", "/المراقبة"}
 COMMANDS = ({"/help", ".help", "/start", "مساعدة", "/frames", "/ping", ".ping"}
-            | DIAG_COMMANDS | HERE_COMMANDS | POST_COMMANDS)
+            | DIAG_COMMANDS | HERE_COMMANDS | POST_COMMANDS | SCAN_COMMANDS
+            | WATCH_COMMANDS)
 GENERAL_TOPIC = 1      # Telegram reports the General topic as thread id 1/None
 
 HELP = """أنا محلل فني آلي للسوق الأمريكي 📈
@@ -36,7 +39,9 @@ HELP = """أنا محلل فني آلي للسوق الأمريكي 📈
 الدعوم والمقاومات، فيبوناتشي، VWAP) + قراءة فنية مع خطة دخول وستوب وأهداف،
 وحالة جلسة السوق الأمريكي.
 
-الأوامر: /help | /frames | /ping | /diag (فحص شامل — للمالك)"""
+الأوامر: /help | /frames | /ping | /here
+للمالك: /diag (فحص شامل) | /post (نشر تحليل في قسم التوصيات) |
+/scan (مسح فوري للمراقبة) | /watchlist (شروط التوصيات التلقائية)"""
 
 _last_request: dict[int, float] = {}
 
@@ -88,6 +93,14 @@ def is_here(text: str | None) -> bool:
 
 def is_post(text: str | None) -> bool:
     return _command(text) in POST_COMMANDS
+
+
+def is_scan(text: str | None) -> bool:
+    return _command(text) in SCAN_COMMANDS
+
+
+def is_watchlist(text: str | None) -> bool:
+    return _command(text) in WATCH_COMMANDS
 
 
 def here_report(msg: Incoming) -> str:
@@ -206,6 +219,7 @@ def command_reply(text: str) -> str | None:
         return "الفريمات المدعومة: " + " | ".join(frames.all_keys())
     if command in ("/ping", ".ping"):
         return "شغّال ✅"
-    if command in HERE_COMMANDS or command in POST_COMMANDS:
-        return None      # both need the message itself, handled by the backend
+    if (command in HERE_COMMANDS or command in POST_COMMANDS
+            or command in SCAN_COMMANDS or command in WATCH_COMMANDS):
+        return None      # these need the message or the bot, handled by the backend
     return None

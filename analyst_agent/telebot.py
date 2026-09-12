@@ -24,7 +24,7 @@ from telegram.constants import ChatAction, ChatType
 from telegram.ext import (Application, ApplicationBuilder, ContextTypes,
                           MessageHandler, filters)
 
-from . import analyst, config, doctor, gate
+from . import analyst, config, doctor, gate, watcher
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s",
                     level=logging.INFO)
@@ -131,6 +131,48 @@ def _following_text(_target) -> list[str]:
     return []
 
 
+async def post_alert(bot, alert: watcher.Alert) -> bool:
+    """Send one automatic recommendation into the alerts topic."""
+    target = watcher.destination()
+    if not target:
+        return False
+    chat_id, topic_id = target
+    caption = alert.text if len(alert.text) <= gate.CAPTION_LIMIT else alert.text[:1000] + "…"
+    try:
+        if alert.chart_png:
+            image = BytesIO(alert.chart_png)
+            image.name = f"{alert.symbol}_{alert.frame_key}.png"
+            await bot.send_photo(chat_id, photo=image, caption=caption,
+                                 message_thread_id=topic_id)
+        else:
+            await bot.send_message(chat_id, alert.text, message_thread_id=topic_id)
+        return True
+    except Exception:
+        log.exception("failed to post alert for %s", alert.symbol)
+        return False
+
+
+async def run_watch(context: ContextTypes.DEFAULT_TYPE, force: bool = False) -> list[watcher.Alert]:
+    """One scan pass, posting whatever cleared the bar."""
+    alerts = await asyncio.to_thread(watcher.scan, None, None, force)
+    sent = []
+    for alert in alerts:
+        if await post_alert(context.bot, alert):
+            sent.append(alert)
+    if sent:
+        await asyncio.to_thread(watcher.mark_posted, sent)
+        log.info("posted %d recommendation(s): %s", len(sent),
+                 ", ".join(a.symbol for a in sent))
+    return sent
+
+
+async def watch_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        await run_watch(context)
+    except Exception:
+        log.exception("watch job failed")
+
+
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_message or not update.effective_chat:
         return
@@ -144,6 +186,22 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     if gate.is_post(incoming.text):
         await _publish(update, context, incoming)
+        return
+    if gate.is_watchlist(incoming.text):
+        if gate.diag_allowed(incoming.user_id, incoming.is_private):
+            await update.effective_message.reply_text(watcher.status())
+        return
+    if gate.is_scan(incoming.text):
+        if not gate.diag_allowed(incoming.user_id, incoming.is_private):
+            return
+        if not watcher.destination():
+            await update.effective_message.reply_text(watcher.status())
+            return
+        await update.effective_message.reply_text("جاري مسح المراقبة… ⏳")
+        sent = await run_watch(context, force=True)
+        await update.effective_message.reply_text(
+            f"تم نشر {len(sent)} توصية" if sent else
+            "لا يوجد سهم يحقق الشروط الآن — لا توصية.")
         return
     if gate.is_diag(incoming.text):
         if not gate.diag_allowed(incoming.user_id, incoming.is_private):
@@ -187,6 +245,15 @@ def build() -> Application:
            .concurrent_updates(True)
            .build())
     app.bot_data["semaphore"] = asyncio.Semaphore(config.MAX_CONCURRENT)
+    if watcher.enabled() and app.job_queue:
+        # The recommendations topic fills itself: one pass every
+        # ANALYST_WATCH_INTERVAL minutes, first one a minute after boot.
+        app.job_queue.run_repeating(watch_job, interval=config.WATCH_INTERVAL_MIN * 60,
+                                    first=60, name="watch")
+        log.info("automatic recommendations on: every %s min -> %s",
+                 config.WATCH_INTERVAL_MIN, watcher.destination())
+    elif config.WATCH_ENABLED:
+        log.info("automatic recommendations idle: no ANALYST_ALERTS_CHAT configured")
     # One handler: photos, captions and plain text all go through the same gate.
     app.add_handler(MessageHandler(
         (filters.PHOTO | filters.TEXT | filters.CAPTION) & ~filters.StatusUpdate.ALL,

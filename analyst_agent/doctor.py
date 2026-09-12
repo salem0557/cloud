@@ -178,7 +178,23 @@ def check_config() -> Check:
     return Check("الإعدادات", True, " | ".join(bits))
 
 
-QUICK = [check_packages, check_groq_key, check_telegram, check_config, check_session]
+def check_watcher() -> Check:
+    from . import watcher
+
+    if not config.WATCH_ENABLED:
+        return Check("التوصيات التلقائية", True, "موقوفة بالإعدادات (ANALYST_WATCH=false)")
+    if not watcher.destination():
+        return Check("التوصيات التلقائية", False,
+                     "لا وجهة للنشر: أضف ANALYST_ALERTS_CHAT (و ANALYST_ALERTS_TOPIC)")
+    chat, topic = watcher.destination()
+    return Check("التوصيات التلقائية", True,
+                 f"مفعّلة → {chat}" + (f" / قسم {topic}" if topic else "")
+                 + f" | كل {config.WATCH_INTERVAL_MIN} دقيقة | {len(config.WATCHLIST)} رمز "
+                 f"| ثقة ≥ {config.WATCH_MIN_CONVICTION}%")
+
+
+QUICK = [check_packages, check_groq_key, check_telegram, check_config, check_session,
+         check_watcher]
 FULL = QUICK + [check_groq_models, check_groq_call, check_market_data, check_chart,
                 check_pipeline]
 

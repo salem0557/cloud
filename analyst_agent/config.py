@@ -112,6 +112,40 @@ SEND_TYPING = _bool("ANALYST_SEND_TYPING", True)
 STARTUP_CHECK = _bool("ANALYST_STARTUP_CHECK", True)
 REPLY_LANG = os.getenv("ANALYST_LANG", "ar").strip().lower()
 
+# --- Automatic recommendations (watcher) ------------------------------------
+# Where alerts are posted. In a forum group this is the group's chat id, with
+# ALERTS_TOPIC choosing the topic. Empty and a single ALLOWED_CHATS entry is
+# used instead.
+ALERTS_CHAT = _int("ANALYST_ALERTS_CHAT", 0)
+WATCH_ENABLED = _bool("ANALYST_WATCH", True)
+# The symbols scanned on a schedule. Kept deliberately short and liquid: a
+# recommendation on an illiquid name cannot be executed at the quoted stop.
+WATCHLIST = _list("ANALYST_WATCHLIST", [
+    "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "AMD", "AVGO",
+    "MU", "SMCI", "PLTR", "COIN", "MSTR", "SOFI", "UBER", "INTC", "QCOM",
+    "NFLX", "DIS", "BA", "JPM", "V", "XOM", "WMT", "COST", "LLY", "NOW",
+    "CRM", "ORCL", "ADBE", "SHOP", "ARM", "RIVN", "LCID", "NIO", "BABA",
+    "SPY", "QQQ", "IWM",
+    "BTC-USD", "ETH-USD", "SOL-USD",
+])
+WATCH_FRAME = os.getenv("ANALYST_WATCH_FRAME", "1h").strip()
+WATCH_INTERVAL_MIN = _int("ANALYST_WATCH_INTERVAL", 30)
+# The bar a setup has to clear to be posted. These are the "conditions".
+WATCH_MIN_CONVICTION = _int("ANALYST_WATCH_MIN_CONVICTION", 65)
+WATCH_MIN_SCORE = _float("ANALYST_WATCH_MIN_SCORE", 40.0)
+WATCH_MIN_RR = _float("ANALYST_WATCH_MIN_RR", 1.5)
+WATCH_MIN_ADX = _float("ANALYST_WATCH_MIN_ADX", 18.0)
+WATCH_MIN_REL_VOLUME = _float("ANALYST_WATCH_MIN_REL_VOLUME", 0.9)
+# long | short | both — shorts are off by default: harder to time, and a
+# squeeze breaks the small stop this project insists on.
+WATCH_SIDES = os.getenv("ANALYST_WATCH_SIDES", "long").strip().lower()
+WATCH_COOLDOWN_HOURS = _int("ANALYST_WATCH_COOLDOWN_HOURS", 12)
+WATCH_MAX_PER_RUN = _int("ANALYST_WATCH_MAX_PER_RUN", 3)
+WATCH_MAX_PER_DAY = _int("ANALYST_WATCH_MAX_PER_DAY", 10)
+WATCH_SKIP_EARNINGS_DAYS = _int("ANALYST_WATCH_SKIP_EARNINGS_DAYS", 3)
+WATCH_ONLY_WHEN_OPEN = _bool("ANALYST_WATCH_ONLY_WHEN_OPEN", True)
+STATE_FILE = os.getenv("ANALYST_STATE_FILE", "analyst_state.json").strip()
+
 # --- Market data ------------------------------------------------------------
 DEFAULT_FRAME = os.getenv("ANALYST_DEFAULT_FRAME", "1d").strip()
 CHART_BARS = _int("ANALYST_CHART_BARS", 140)

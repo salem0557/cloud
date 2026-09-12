@@ -15,7 +15,7 @@ import logging
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
-from . import analyst, config, doctor, gate
+from . import analyst, config, doctor, gate, watcher
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s",
                     level=logging.INFO)
@@ -100,6 +100,47 @@ async def _publish(event, me) -> None:
         await event.reply(f"تعذّر النشر: {exc}"[:200])
 
 
+async def _post_alert(client, alert: watcher.Alert) -> bool:
+    """Send one automatic recommendation into the alerts topic."""
+    target = watcher.destination()
+    if not target:
+        return False
+    chat_id, topic_id = target
+    try:
+        from io import BytesIO
+
+        file = None
+        if alert.chart_png:
+            file = BytesIO(alert.chart_png)
+            file.name = f"{alert.symbol}_{alert.frame_key}.png"
+        await client.send_message(chat_id, alert.text, file=file, reply_to=topic_id)
+        return True
+    except Exception:
+        log.exception("failed to post alert for %s", alert.symbol)
+        return False
+
+
+async def run_watch(client, force: bool = False) -> list[watcher.Alert]:
+    alerts = await asyncio.to_thread(watcher.scan, None, None, force)
+    sent = [alert for alert in alerts if await _post_alert(client, alert)]
+    if sent:
+        await asyncio.to_thread(watcher.mark_posted, sent)
+        log.info("posted %d recommendation(s): %s", len(sent),
+                 ", ".join(a.symbol for a in sent))
+    return sent
+
+
+async def _watch_loop(client) -> None:
+    """The recommendations topic fills itself while the userbot runs."""
+    await asyncio.sleep(60)
+    while True:
+        try:
+            await run_watch(client)
+        except Exception:
+            log.exception("watch loop failed")
+        await asyncio.sleep(max(60, config.WATCH_INTERVAL_MIN * 60))
+
+
 async def _send_answer(event, answer: analyst.Answer) -> None:
     text = answer.text.strip()
     if answer.chart_png:
@@ -145,6 +186,21 @@ async def main() -> None:
                 return
             if gate.is_post(text):
                 await _publish(event, me)
+                return
+            if gate.is_watchlist(text):
+                if gate.diag_allowed(event.sender_id, bool(event.is_private)):
+                    await event.reply(watcher.status())
+                return
+            if gate.is_scan(text):
+                if not gate.diag_allowed(event.sender_id, bool(event.is_private)):
+                    return
+                if not watcher.destination():
+                    await event.reply(watcher.status())
+                    return
+                await event.reply("جاري مسح المراقبة… ⏳")
+                sent = await run_watch(event.client, force=True)
+                await event.reply(f"تم نشر {len(sent)} توصية" if sent else
+                                  "لا يوجد سهم يحقق الشروط الآن — لا توصية.")
                 return
             if gate.is_diag(text):
                 if not gate.diag_allowed(event.sender_id, bool(event.is_private)):
@@ -197,6 +253,10 @@ async def main() -> None:
         for line in doctor.report(doctor.run_all(quick=True)).splitlines():
             if line.strip():
                 log.info("%s", line)
+    if watcher.enabled():
+        asyncio.create_task(_watch_loop(client))
+        log.info("automatic recommendations on: every %s min -> %s",
+                 config.WATCH_INTERVAL_MIN, watcher.destination())
     log.info("analyst userbot is running — waiting for charts")
     await client.run_until_disconnected()
 
