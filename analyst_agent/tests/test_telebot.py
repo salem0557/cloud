@@ -93,3 +93,53 @@ def test_missing_token_exits(monkeypatch):
 def test_token_is_read_from_the_environment(monkeypatch):
     monkeypatch.setenv("ANALYST_BOT_TOKEN", " 123:abc ")
     assert telebot.token() == "123:abc"
+
+
+def _context(error):
+    return types.SimpleNamespace(error=error)
+
+
+def test_token_conflict_is_one_readable_line(caplog):
+    import asyncio
+
+    from telegram.error import Conflict
+
+    with caplog.at_level("ERROR"):
+        asyncio.run(telebot.on_error(None, _context(Conflict("terminated by other getUpdates"))))
+    assert "تعارض توكن" in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+def test_network_hiccup_is_a_warning_not_an_error(caplog):
+    import asyncio
+
+    from telegram.error import TimedOut
+
+    with caplog.at_level("WARNING"):
+        asyncio.run(telebot.on_error(None, _context(TimedOut())))
+    assert "انقطاع شبكة" in caplog.text
+    assert "ERROR" not in caplog.text
+
+
+def test_rate_limit_says_how_long(caplog):
+    import asyncio
+
+    from telegram.error import RetryAfter
+
+    with caplog.at_level("WARNING"):
+        asyncio.run(telebot.on_error(None, _context(RetryAfter(12))))
+    assert "12" in caplog.text
+
+
+def test_unexpected_errors_still_get_a_traceback(caplog):
+    import asyncio
+
+    with caplog.at_level("ERROR"):
+        asyncio.run(telebot.on_error(None, _context(ValueError("boom"))))
+    assert "خطأ غير متوقع" in caplog.text
+
+
+def test_error_handler_is_registered(monkeypatch):
+    monkeypatch.setenv("ANALYST_BOT_TOKEN", "123:abc")
+    app = telebot.build()
+    assert app.error_handlers

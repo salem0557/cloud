@@ -21,6 +21,7 @@ from io import BytesIO
 
 from telegram import Update
 from telegram.constants import ChatAction, ChatType
+from telegram.error import Conflict, NetworkError, RetryAfter, TimedOut
 from telegram.ext import (Application, ApplicationBuilder, ContextTypes,
                           MessageHandler, filters)
 
@@ -239,6 +240,28 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             pass
 
 
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """One readable line instead of a page of traceback.
+
+    Polling errors are mostly operational, not bugs: the same token running in
+    two places, or a network hiccup the library already retries. Saying which
+    one it is beats dumping a stack the reader cannot act on.
+    """
+    error = context.error
+    if isinstance(error, Conflict):
+        log.error("تعارض توكن: نفس ANALYST_BOT_TOKEN يعمل في مكان آخر. "
+                  "أوقف النسخة الأخرى أو أنشئ بوتاً جديداً من @BotFather. "
+                  "(إن كان هذا بعد إعادة نشر مباشرة فهو مؤقت ويزول خلال دقيقة.)")
+        return
+    if isinstance(error, RetryAfter):
+        log.warning("تلقرام يطلب تهدئة: إعادة المحاولة بعد %s ثانية", error.retry_after)
+        return
+    if isinstance(error, (TimedOut, NetworkError)):
+        log.warning("انقطاع شبكة مؤقت مع تلقرام (تُعاد المحاولة تلقائياً): %s", error)
+        return
+    log.exception("خطأ غير متوقع", exc_info=error)
+
+
 def build() -> Application:
     app = (ApplicationBuilder()
            .token(token())
@@ -258,6 +281,7 @@ def build() -> Application:
     app.add_handler(MessageHandler(
         (filters.PHOTO | filters.TEXT | filters.CAPTION) & ~filters.StatusUpdate.ALL,
         on_message))
+    app.add_error_handler(on_error)
     return app
 
 
