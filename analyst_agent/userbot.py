@@ -34,9 +34,24 @@ async def _should_answer(event, me) -> tuple[bool, str]:
             replied = await message.get_reply_message()
         except Exception:
             log.debug("could not fetch replied message", exc_info=True)
-    return gate.decide(gate.Incoming(
+    return gate.decide(_incoming(event, me, replied))
+
+
+def _incoming(event, me, replied=None) -> gate.Incoming:
+    """Telethon message -> the shared gate's view of it."""
+    message = event.message
+    reply_to = getattr(message, "reply_to", None)
+    topic_id = None
+    is_forum = bool(getattr(reply_to, "forum_topic", False))
+    if is_forum:
+        # In a topic, Telegram threads every message under the topic's root id.
+        topic_id = (getattr(reply_to, "reply_to_top_id", None)
+                    or getattr(reply_to, "reply_to_msg_id", None))
+    return gate.Incoming(
         text=message.message or "",
         chat_id=event.chat_id,
+        topic_id=topic_id,
+        is_forum=is_forum,
         user_id=event.sender_id,
         has_photo=bool(message.photo),
         replied_has_photo=bool(replied and replied.photo),
@@ -44,7 +59,7 @@ async def _should_answer(event, me) -> tuple[bool, str]:
         is_own=bool(message.out),
         mentioned=bool(getattr(event, "mentioned", False)),
         reply_to_me=bool(replied and replied.sender_id == me.id),
-    ))
+    )
 
 
 async def _image_bytes(event) -> bytes | None:
@@ -60,6 +75,29 @@ async def _image_bytes(event) -> bytes | None:
         except Exception:
             log.warning("could not download replied photo", exc_info=True)
     return None
+
+
+async def _publish(event, me) -> None:
+    """/post as a reply: re-send that message into the recommendations topic."""
+    incoming = _incoming(event, me)
+    if not gate.diag_allowed(event.sender_id, bool(event.is_private)):
+        return
+    if not config.ALERTS_TOPIC:
+        await event.reply("قسم التوصيات غير مضبوط: أضف ANALYST_ALERTS_TOPIC "
+                          "(خذ رقمه بأمر /here داخل ذلك القسم).")
+        return
+    target = await event.message.get_reply_message() if event.message.is_reply else None
+    if not target:
+        await event.reply("استخدم /post كـ«رد» على التحليل الذي تبي تنشره.")
+        return
+    try:
+        await event.client.send_message(incoming.chat_id, target.text or "",
+                                        file=target.media,
+                                        reply_to=config.ALERTS_TOPIC)
+        await event.reply("تم النشر في قسم التوصيات ✅")
+    except Exception as exc:
+        log.warning("publish failed: %s", exc)
+        await event.reply(f"تعذّر النشر: {exc}"[:200])
 
 
 async def _send_answer(event, answer: analyst.Answer) -> None:
@@ -102,6 +140,12 @@ async def main() -> None:
             if not answer_it:
                 return
             text = (event.message.message or "").strip()
+            if gate.is_here(text):
+                await event.reply(gate.here_report(_incoming(event, me)))
+                return
+            if gate.is_post(text):
+                await _publish(event, me)
+                return
             if gate.is_diag(text):
                 if not gate.diag_allowed(event.sender_id, bool(event.is_private)):
                     return

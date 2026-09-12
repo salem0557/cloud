@@ -109,6 +109,23 @@ CRYPTO: dict[str, str] = {
     "bnb": "BNB-USD", "ton": "TON11419-USD", "avax": "AVAX-USD",
     "link": "LINK-USD", "matic": "MATIC-USD", "shib": "SHIB-USD",
     "trx": "TRX-USD", "dot": "DOT-USD", "ltc": "LTC-USD",
+    "bch": "BCH-USD", "xlm": "XLM-USD", "atom": "ATOM-USD", "uni": "UNI-USD",
+    "etc": "ETC-USD", "near": "NEAR-USD", "apt": "APT-USD", "arb": "ARB-USD",
+    "op": "OP-USD", "sui": "SUI-USD", "fil": "FIL-USD", "icp": "ICP-USD",
+    "algo": "ALGO-USD", "vet": "VET-USD", "aave": "AAVE-USD", "mkr": "MKR-USD",
+    "inj": "INJ-USD", "tia": "TIA-USD", "sei": "SEI-USD", "stx": "STX-USD",
+    "imx": "IMX-USD", "rune": "RUNE-USD", "egld": "EGLD-USD", "ftm": "FTM-USD",
+    "sand": "SAND-USD", "mana": "MANA-USD", "axs": "AXS-USD", "gala": "GALA-USD",
+    "chz": "CHZ-USD", "crv": "CRV-USD", "ldo": "LDO-USD", "grt": "GRT-USD",
+    "snx": "SNX-USD", "hbar": "HBAR-USD", "kas": "KAS-USD", "tao": "TAO-USD",
+    "rndr": "RNDR-USD", "fet": "FET-USD", "wld": "WLD-USD", "jup": "JUP-USD",
+    "pyth": "PYTH-USD", "pepe": "PEPE24478-USD", "bonk": "BONK-USD",
+    # Arabic spellings people actually type
+    "ايثر": "ETH-USD", "ايثيريم": "ETH-USD", "سولانا": "SOL-USD",
+    "كاردانو": "ADA-USD", "بولكادوت": "DOT-USD", "تشين لينك": "LINK-USD",
+    "لايتكوين": "LTC-USD", "بينانس كوين": "BNB-USD", "شيبا": "SHIB-USD",
+    "دوجكوين": "DOGE-USD", "ترون": "TRX-USD", "افالانش": "AVAX-USD",
+    "بيبي": "PEPE24478-USD", "كريبتو": "BTC-USD",
 }
 
 FX_CODES = {"usd", "eur", "gbp", "jpy", "chf", "aud", "nzd", "cad", "sar",

@@ -16,7 +16,11 @@ CAPTION_LIMIT = 1024      # Telegram's cap on a photo caption
 MESSAGE_LIMIT = 4000      # under Telegram's 4096-char message cap
 
 DIAG_COMMANDS = {"/diag", ".diag", "/فحص", "فحص"}
-COMMANDS = {"/help", ".help", "/start", "مساعدة", "/frames", "/ping", ".ping"} | DIAG_COMMANDS
+HERE_COMMANDS = {"/here", ".here", "/وين", "/id"}
+POST_COMMANDS = {"/post", ".post", "/نشر"}
+COMMANDS = ({"/help", ".help", "/start", "مساعدة", "/frames", "/ping", ".ping"}
+            | DIAG_COMMANDS | HERE_COMMANDS | POST_COMMANDS)
+GENERAL_TOPIC = 1      # Telegram reports the General topic as thread id 1/None
 
 HELP = """أنا محلل فني آلي للسوق الأمريكي 📈
 
@@ -45,6 +49,8 @@ class Incoming:
     user_id: int | None = None
     has_photo: bool = False
     replied_has_photo: bool = False
+    topic_id: int | None = None   # forum topic (None outside forum groups)
+    is_forum: bool = False
     is_private: bool = False
     is_own: bool = False        # sent by the agent's own account (userbot only)
     mentioned: bool = False
@@ -68,8 +74,37 @@ def is_command(text: str | None) -> bool:
     return bool(text) and text.strip().lower().split("@")[0] in COMMANDS
 
 
+def _command(text: str | None) -> str:
+    return (text or "").strip().lower().split("@")[0]
+
+
 def is_diag(text: str | None) -> bool:
-    return bool(text) and text.strip().lower().split("@")[0] in DIAG_COMMANDS
+    return _command(text) in DIAG_COMMANDS
+
+
+def is_here(text: str | None) -> bool:
+    return _command(text) in HERE_COMMANDS
+
+
+def is_post(text: str | None) -> bool:
+    return _command(text) in POST_COMMANDS
+
+
+def here_report(msg: Incoming) -> str:
+    """Answer to /here: the ids needed to fill in the topic variables."""
+    lines = [f"chat_id: `{msg.chat_id}`"]
+    if msg.is_forum:
+        lines.append(f"topic_id: `{topic_of(msg)}`" + (" (General)" if topic_of(msg) == GENERAL_TOPIC else ""))
+    else:
+        lines.append("هذه المحادثة ليست قروب توبيكات")
+    if config.QA_TOPIC:
+        lines.append("قسم الأسئلة المضبوط: " + str(config.QA_TOPIC)
+                     + (" ✅ (هذا هو)" if topic_of(msg) == config.QA_TOPIC else " ⚠️ (لست فيه)"))
+    else:
+        lines.append("قسم الأسئلة غير مضبوط: أضف ANALYST_QA_TOPIC ليجاوب هنا فقط")
+    if config.ALERTS_TOPIC:
+        lines.append("قسم التوصيات المضبوط: " + str(config.ALERTS_TOPIC))
+    return "\n".join(lines)
 
 
 def diag_allowed(user_id: int | None, is_private: bool) -> bool:
@@ -94,10 +129,22 @@ def cooldown_ok(user_id: int | None) -> bool:
     return True
 
 
+def topic_of(msg: Incoming) -> int | None:
+    """The topic a message sits in, with General normalised to 1."""
+    if not msg.is_forum:
+        return None
+    return msg.topic_id or GENERAL_TOPIC
+
+
 def decide(msg: Incoming) -> tuple[bool, str]:
     """(answer?, why) — the single gate both backends go through."""
     if not chat_allowed(msg.chat_id):
         return False, "chat not allowed"
+    # In a forum group with a configured Q&A topic, every other topic is
+    # somebody else's conversation: stay out of it entirely.
+    if config.QA_TOPIC and msg.is_forum and not msg.is_private:
+        if topic_of(msg) != config.QA_TOPIC:
+            return False, f"wrong topic ({topic_of(msg)})"
     # A userbot runs as its owner's account, so his ordinary chatter arrives
     # here as an outgoing message: act on it only when he asks explicitly.
     if msg.is_own and not (has_trigger(msg.text)
@@ -159,4 +206,6 @@ def command_reply(text: str) -> str | None:
         return "الفريمات المدعومة: " + " | ".join(frames.all_keys())
     if command in ("/ping", ".ping"):
         return "شغّال ✅"
+    if command in HERE_COMMANDS or command in POST_COMMANDS:
+        return None      # both need the message itself, handled by the backend
     return None

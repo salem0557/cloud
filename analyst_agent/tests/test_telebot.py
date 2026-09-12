@@ -10,8 +10,9 @@ from analyst_agent import telebot  # noqa: E402
 
 def _update(text="", photo=False, chat_type="supergroup", reply_from=None,
             reply_photo=False, entities=(), user_id=777, chat_id=-1001,
-            caption=False):
+            caption=False, topic_id=None, is_forum=False):
     message = types.SimpleNamespace(
+        message_thread_id=topic_id,
         text=None if caption else text,
         caption=text if caption else None,
         photo=[types.SimpleNamespace(file_id="x")] if photo else [],
@@ -23,7 +24,8 @@ def _update(text="", photo=False, chat_type="supergroup", reply_from=None,
     )
     return types.SimpleNamespace(
         effective_message=message,
-        effective_chat=types.SimpleNamespace(id=chat_id, type=chat_type),
+        effective_chat=types.SimpleNamespace(id=chat_id, type=chat_type,
+                                             is_forum=is_forum),
         effective_user=types.SimpleNamespace(id=user_id),
     )
 
@@ -55,6 +57,31 @@ def test_replied_photo_is_detected():
 def test_mention_entity_is_detected():
     mention = types.SimpleNamespace(type="mention")
     assert telebot._incoming(_update(text="@bot وش رايك", entities=[mention]), BOT_ID).mentioned
+
+
+def test_forum_topic_is_carried_through():
+    incoming = telebot._incoming(
+        _update(text="حلل", photo=True, topic_id=1773, is_forum=True), BOT_ID)
+    assert incoming.topic_id == 1773 and incoming.is_forum is True
+
+
+def test_general_topic_reads_as_topic_one():
+    from analyst_agent import gate
+
+    incoming = telebot._incoming(_update(text="حلل", is_forum=True), BOT_ID)
+    assert gate.topic_of(incoming) == gate.GENERAL_TOPIC
+
+
+def test_only_the_configured_topic_is_answered(monkeypatch):
+    from analyst_agent import config, gate
+
+    monkeypatch.setattr(config, "QA_TOPIC", 1773)
+    inside = telebot._incoming(_update(text="وش رايك", photo=True, topic_id=1773,
+                                       is_forum=True), BOT_ID)
+    outside = telebot._incoming(_update(text="وش رايك", photo=True, topic_id=1,
+                                        is_forum=True), BOT_ID)
+    assert gate.decide(inside)[0] is True
+    assert gate.decide(outside)[0] is False
 
 
 def test_missing_token_exits(monkeypatch):

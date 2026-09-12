@@ -55,6 +55,8 @@ def _incoming(update: Update, bot_id: int) -> gate.Incoming:
     return gate.Incoming(
         text=text,
         chat_id=update.effective_chat.id,
+        topic_id=getattr(message, "message_thread_id", None),
+        is_forum=bool(getattr(update.effective_chat, "is_forum", False)),
         user_id=update.effective_user.id if update.effective_user else None,
         has_photo=bool(message.photo),
         replied_has_photo=bool(replied and replied.photo),
@@ -92,6 +94,43 @@ async def _send(update: Update, answer: analyst.Answer) -> None:
             await message.reply_text(chunk)
 
 
+async def _publish(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                   incoming: gate.Incoming) -> None:
+    """/post as a reply: copy that message into the recommendations topic.
+
+    Copying (rather than forwarding) keeps the recommendations topic clean —
+    no "forwarded from" header, just the call itself.
+    """
+    message = update.effective_message
+    if not gate.diag_allowed(incoming.user_id, incoming.is_private):
+        return
+    if not config.ALERTS_TOPIC:
+        await message.reply_text("قسم التوصيات غير مضبوط: أضف ANALYST_ALERTS_TOPIC "
+                                 "(خذ رقمه بأمر /here داخل ذلك القسم).")
+        return
+    target = message.reply_to_message
+    if not target:
+        await message.reply_text("استخدم /post كـ«رد» على التحليل الذي تبي تنشره.")
+        return
+    try:
+        await context.bot.copy_message(
+            chat_id=incoming.chat_id, from_chat_id=incoming.chat_id,
+            message_id=target.message_id, message_thread_id=config.ALERTS_TOPIC)
+        if target.caption or target.photo:
+            for extra in _following_text(target):
+                await context.bot.send_message(incoming.chat_id, extra,
+                                               message_thread_id=config.ALERTS_TOPIC)
+        await message.reply_text("تم النشر في قسم التوصيات ✅")
+    except Exception as exc:
+        log.warning("publish failed: %s", exc)
+        await message.reply_text(f"تعذّر النشر: {exc}"[:200])
+
+
+def _following_text(_target) -> list[str]:
+    """Hook for future use: extra lines to publish beside a copied chart."""
+    return []
+
+
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_message or not update.effective_chat:
         return
@@ -100,6 +139,12 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not answer_it:
         return
 
+    if gate.is_here(incoming.text):
+        await update.effective_message.reply_text(gate.here_report(incoming))
+        return
+    if gate.is_post(incoming.text):
+        await _publish(update, context, incoming)
+        return
     if gate.is_diag(incoming.text):
         if not gate.diag_allowed(incoming.user_id, incoming.is_private):
             return

@@ -138,9 +138,9 @@ def analyze(caption: str | None = None, image: bytes | None = None,
     facts = indicators.analyze(data.df, used.key, daily_df=data.daily_df)
     facts["frame_label"] = used.label_ar
     facts["frame_source"] = frame_source
-    # A US read has to state which session it is looking at, and how old the
-    # last candle is in its own bar units.
-    facts["session"] = session_mod.state()
+    # The read has to state which session it is looking at, per asset class
+    # (crypto never closes), and how old the last candle is in bar units.
+    facts["session"] = session_mod.state_for(data.symbol)
     facts["session"].update(session_mod.bar_freshness(data.last_time.to_pydatetime(),
                                                       used.minutes))
     context_facts = None

@@ -83,6 +83,11 @@ TELEGRAM_SESSION = os.getenv("TELEGRAM_SESSION", "").strip()  # StringSession
 TELEGRAM_SESSION_NAME = os.getenv("TELEGRAM_SESSION_NAME", "analyst_userbot").strip()
 # Empty = answer in every chat the account is in. Non-empty = only these ids.
 ALLOWED_CHATS = _ids("ANALYST_ALLOWED_CHATS")
+# Forum groups (Telegram "topics"): the topic the agent answers in, and the
+# topic it publishes recommendations to. 0 = no restriction / not configured.
+# The General topic is 1. Get both ids by sending /here in the topic.
+QA_TOPIC = _int("ANALYST_QA_TOPIC", 0)
+ALERTS_TOPIC = _int("ANALYST_ALERTS_TOPIC", 0)
 BLOCKED_CHATS = _ids("ANALYST_BLOCKED_CHATS")
 OWNER_IDS = _ids("ANALYST_OWNER_IDS")
 # In a group the agent stays silent unless one of these words is in the
