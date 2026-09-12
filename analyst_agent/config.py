@@ -72,7 +72,11 @@ GROQ_TEMPERATURE = _float("GROQ_TEMPERATURE", 0.25)
 GROQ_MAX_TOKENS = _int("GROQ_MAX_TOKENS", 2200)
 MODEL_CACHE_TTL = _int("GROQ_MODEL_CACHE_TTL", 3600)
 
-# --- Telegram userbot -------------------------------------------------------
+# --- Telegram ---------------------------------------------------------------
+# Backend 1 (no login needed): a BotFather token. Must be its own bot — two
+# pollers on one token fight over getUpdates.
+ANALYST_BOT_TOKEN = os.getenv("ANALYST_BOT_TOKEN", "").strip()
+# Backend 2: a userbot (a real account). Needs a one-time interactive login.
 TELEGRAM_API_ID = _int("TELEGRAM_API_ID", 0)
 TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH", "").strip()
 TELEGRAM_SESSION = os.getenv("TELEGRAM_SESSION", "").strip()  # StringSession

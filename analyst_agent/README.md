@@ -1,6 +1,6 @@
 # محلل التشارت — وكيل تلقرام (analyst_agent)
 
-وكيل يعيش في قروب تلقرام كحساب مستخدم (userbot). ترسل له صورة تشارت مع طلبك،
+وكيل يعيش في قروب تلقرام. ترسل له صورة تشارت مع طلبك،
 فيتعرّف على الرمز والفريم، يجيب البيانات الحقيقية بنفسه، يرسم تشارت جديد
 بالمؤشرات المهمة، ويرد بقراءة فنية حاسمة فيها خطة دخول وستوب وأهداف.
 
@@ -68,15 +68,32 @@
 
 ## التشغيل
 
-> 📄 **جديد على هذا؟** افتح [`SETUP_AR.md`](SETUP_AR.md) — خطوات مفصّلة تشرح
-> وين تضع كل مفتاح وكل أمر، من تثبيت بايثون إلى النشر على Railway.
+> 📄 **ابدأ من هنا:** [`SETUP_AR.md`](SETUP_AR.md) — خطوة بخطوة، وين تضع كل مفتاح.
+
+### طريقتان للتشغيل
+
+| | بوت من BotFather (`telebot.py`) | يوزر بوت (`userbot.py`) |
+|---|---|---|
+| الإعداد | توكن واحد، بلا تسجيل دخول ولا جهاز | api_id + api_hash + session |
+| الأمر | `python -m analyst_agent.telebot` | `python -m analyst_agent.userbot` |
+| في القروب | بوت باسمه | حساب عادي |
+| ملاحظة | لازم `/setprivacy` ← Disable في BotFather | الأفضل حساب منفصل |
+
+التحليل نفسه في الطريقتين — كلتاهما تستخدم نفس `analyst.py` ونفس `gate.py`.
 
 ### 1) مفتاح Groq
 من [console.groq.com/keys](https://console.groq.com/keys) — مجاني.
 لا تحتاج تحديد الموديل: الوكيل يسأل Groq عن الموديلات المتاحة ويختار الأفضل،
 فإن تعطّل موديل انتقل للذي بعده تلقائياً.
 
-### 2) حساب اليوزر بوت
+### 2-أ) بوت من BotFather (الأسهل)
+
+`/newbot` في @BotFather ← انسخ التوكن ← ثم `/setprivacy` ← Disable (ليقرأ كلمة
+«حلل» في القروب). ضع التوكن في `ANALYST_BOT_TOKEN` وشغّل
+`python -m analyst_agent.telebot`. لا تستخدم توكن بوت الماسح: توكن واحد لبوتين
+يتعارض.
+
+### 2-ب) حساب اليوزر بوت (بديل)
 من [my.telegram.org](https://my.telegram.org) → API development tools → خذ
 `api_id` و `api_hash`، وضعهما في `.env`، ثم سجّل الدخول مرة واحدة:
 
@@ -92,18 +109,22 @@ python -m analyst_agent.login
 ### 3) `.env`
 
 ```env
+# الطريقة الأسهل
 GROQ_API_KEY=gsk_xxx
-TELEGRAM_API_ID=1234567
-TELEGRAM_API_HASH=xxxxxxxx
-TELEGRAM_SESSION=1BQANOTEuMTA4...
+ANALYST_BOT_TOKEN=7712345678:AAH8s-xxxx
 ANALYST_OWNER_IDS=<معرّفك في تلقرام>
+
+# أو بدلاً من التوكن، لليوزر بوت:
+# TELEGRAM_API_ID=1234567
+# TELEGRAM_API_HASH=xxxxxxxx
+# TELEGRAM_SESSION=1BQANOTEuMTA4...
 ```
 
 ### 4) التشغيل
 
 ```bash
 pip install -r requirements.txt
-python -m analyst_agent.userbot
+python -m analyst_agent.telebot        # أو userbot لو اخترت الطريقة (ب)
 ```
 
 ثم أضف حساب الوكيل إلى القروب، وجرّب:
@@ -125,9 +146,9 @@ python -m analyst_agent.cli 2222.SR 1d --no-news
 ```
 
 ### النشر على Railway
-`Procfile` فيه صفّان: `worker` للماسح القديم و `analyst` لهذا الوكيل.
-أنشئ خدمة ثانية على نفس المستودع واجعل أمر التشغيل:
-`python -m analyst_agent.userbot`، وضع متغيرات البيئة أعلاه فيها.
+`Procfile` فيه: `worker` للماسح القديم، `analyst` لهذا الوكيل (بوت)، و
+`analyst-userbot` للطريقة (ب). أنشئ خدمة ثانية على نفس المستودع وأمر التشغيل
+`python -m analyst_agent.telebot`، وضع المتغيرات في **Variables**.
 
 ---
 
@@ -181,7 +202,9 @@ python -m analyst_agent.cli 2222.SR 1d --no-news
 | `session.py` | جلسة السوق الأمريكي وعمر آخر شمعة |
 | `prompts.py` | شخصية المحلل + قالب بديل يعمل بدون إنترنت AI |
 | `analyst.py` | يربط الكل: رسالة → تشارت + تحليل |
-| `userbot.py` | تلقرام (Telethon) |
+| `gate.py` | متى يتكلم ومتى يسكت + تقسيم الرسائل (مشترك) |
+| `telebot.py` | تلقرام عبر توكن BotFather |
+| `userbot.py` | تلقرام عبر حساب مستخدم (Telethon) |
 | `cli.py` | تشغيل من الطرفية للتجربة |
 
 ## الاختبارات

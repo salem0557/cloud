@@ -11,102 +11,40 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
-from . import analyst, config, frames
+from . import analyst, config, gate
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s",
                     level=logging.INFO)
 logging.getLogger("telethon").setLevel(logging.WARNING)
 log = logging.getLogger("analyst.userbot")
 
-CAPTION_LIMIT = 1024
-MESSAGE_LIMIT = 4000
-
-HELP = """أنا محلل فني آلي 📈
-
-كيف تستخدمني:
-• أرسل صورة التشارت واكتب معها الرمز والفريم: «حلل TSLA 15 دقيقة»
-• أو بدون صورة: «حلل أرامكو يومي» / «BTC 4 ساعات»
-• أو رد على صورة قديمة بكلمة «حلل»
-
-الفريم هو الأساس: أكتبه أو خلّه ظاهر في الصورة، وإلا سأستخدم اليومي.
-الفريمات المدعومة: 1m 5m 15m 30m 1h 2h 4h يومي أسبوعي شهري
-
-ماذا ترجع لك: تشارت جديد بالمؤشرات (EMA 20/50/200، بولنجر، RSI، MACD، فوليوم،
-الدعوم والمقاومات، فيبوناتشي، VWAP) + قراءة فنية مع خطة دخول وستوب وأهداف.
-
-الأوامر: ‎.تحليل‎ | ‎/help‎ | ‎/frames‎ | ‎/ping"""
-
-COMMANDS = {"/help", ".help", "/start", "مساعدة", "/frames", "/ping", ".ping"}
-
-_last_request: dict[int, float] = {}
 _seen_albums: set[int] = set()
 
 
-def _cooldown_ok(user_id: int | None) -> bool:
-    if not user_id or user_id in config.OWNER_IDS:
-        return True
-    now = time.time()
-    last = _last_request.get(user_id, 0)
-    if now - last < config.USER_COOLDOWN:
-        return False
-    _last_request[user_id] = now
-    return True
-
-
-def _chat_allowed(chat_id: int) -> bool:
-    if chat_id in config.BLOCKED_CHATS:
-        return False
-    return not config.ALLOWED_CHATS or chat_id in config.ALLOWED_CHATS
-
-
-def _has_trigger(text: str | None) -> bool:
-    if not text:
-        return False
-    low = frames.normalize(text)
-    return any(frames.normalize(trigger) in low for trigger in config.TRIGGERS)
-
-
 async def _should_answer(event, me) -> tuple[bool, str]:
-    """(answer?, why) — the gate that keeps the agent quiet in busy groups."""
+    """Ask the shared gate, with the fields only Telethon can supply."""
     message = event.message
-    text = message.message or ""
-
-    if not _chat_allowed(event.chat_id):
-        return False, "chat not allowed"
-    # The userbot runs as the owner's own account, so his normal chatter shows
-    # up here as an outgoing message: only act on it when he asks explicitly.
-    if message.out and not _has_trigger(text):
-        return False, "own message without trigger"
-    if text.strip().lower() in COMMANDS:
-        return True, "command"
-
-    has_photo = bool(message.photo)
     replied = None
     if message.is_reply:
         try:
             replied = await message.get_reply_message()
         except Exception:
             log.debug("could not fetch replied message", exc_info=True)
-    replied_photo = bool(replied and replied.photo)
-    reply_to_me = bool(replied and replied.sender_id == me.id)
-
-    if event.is_private and config.DM_ALWAYS_ANSWER:
-        if has_photo or replied_photo or _has_trigger(text) or frames.parse(text):
-            return True, "private chat"
-        return False, "private but nothing to analyse"
-
-    if _has_trigger(text):
-        return True, "trigger word"
-    if bool(getattr(event, "mentioned", False)) or reply_to_me:
-        return True, "mention/reply"
-    if has_photo and config.ANSWER_BARE_PHOTOS and not text:
-        return True, "bare photo"
-    return False, "not addressed"
+    return gate.decide(gate.Incoming(
+        text=message.message or "",
+        chat_id=event.chat_id,
+        user_id=event.sender_id,
+        has_photo=bool(message.photo),
+        replied_has_photo=bool(replied and replied.photo),
+        is_private=bool(event.is_private),
+        is_own=bool(message.out),
+        mentioned=bool(getattr(event, "mentioned", False)),
+        reply_to_me=bool(replied and replied.sender_id == me.id),
+    ))
 
 
 async def _image_bytes(event) -> bytes | None:
@@ -131,29 +69,14 @@ async def _send_answer(event, answer: analyst.Answer) -> None:
 
         image = BytesIO(answer.chart_png)
         image.name = f"{(answer.symbol or 'chart')}_{answer.frame_key or ''}.png".replace("/", "-")
-        caption = text if len(text) <= CAPTION_LIMIT else answer.headline
+        caption = text if len(text) <= gate.CAPTION_LIMIT else answer.headline
         await event.reply(caption, file=image)
-        if len(text) > CAPTION_LIMIT:
-            for chunk in _chunks(text):
+        if len(text) > gate.CAPTION_LIMIT:
+            for chunk in gate.chunks(text):
                 await event.reply(chunk)
     else:
-        for chunk in _chunks(text):
+        for chunk in gate.chunks(text):
             await event.reply(chunk)
-
-
-def _chunks(text: str, limit: int = MESSAGE_LIMIT) -> list[str]:
-    """Split on blank lines so a section never breaks mid-sentence."""
-    if len(text) <= limit:
-        return [text]
-    out, current = [], ""
-    for block in text.split("\n"):
-        if len(current) + len(block) + 1 > limit:
-            out.append(current.rstrip())
-            current = ""
-        current += block + "\n"
-    if current.strip():
-        out.append(current.rstrip())
-    return out
 
 
 def build_client() -> TelegramClient:
@@ -179,18 +102,11 @@ async def main() -> None:
             if not answer_it:
                 return
             text = (event.message.message or "").strip()
-            low = text.lower()
-            if low in ("/help", ".help", "/start", "مساعدة"):
-                await event.reply(HELP)
+            canned = gate.command_reply(text)
+            if canned:
+                await event.reply(canned)
                 return
-            if low == "/frames":
-                await event.reply("الفريمات المدعومة: " + " | ".join(frames.all_keys()))
-                return
-            if low in ("/ping", ".ping"):
-                await event.reply("شغّال ✅")
-                return
-
-            if not _cooldown_ok(event.sender_id):
+            if not gate.cooldown_ok(event.sender_id):
                 return
             album = getattr(event.message, "grouped_id", None)
             if album:
