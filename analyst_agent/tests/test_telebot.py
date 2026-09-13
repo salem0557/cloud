@@ -189,3 +189,81 @@ def test_private_chat_is_always_allowed_without_owners(monkeypatch):
     monkeypatch.setattr(config, "OWNER_IDS", set())
     incoming = gate.Incoming(text="/diag", chat_id=5, user_id=777, is_private=True)
     assert _run(telebot._may_manage(None, _ctx(_Bot("member")), incoming)) is True
+
+
+class _Message:
+    """Records what was sent, and can be told to fail the photo."""
+
+    def __init__(self, fail_photo=False):
+        self.photos = []
+        self.texts = []
+        self.fail_photo = fail_photo
+
+    async def reply_photo(self, photo=None, caption=None, **kwargs):
+        if self.fail_photo:
+            raise TimeoutError("upload too slow")
+        self.photos.append(caption)
+
+    async def reply_text(self, text, **kwargs):
+        self.texts.append(text)
+
+
+def _answer(text, chart=b"\x89PNG"):
+    from analyst_agent import analyst
+
+    return analyst.Answer(True, text, headline="NVDA • ساعة", chart_png=chart,
+                          symbol="NVDA", frame_key="1h")
+
+
+def test_short_analysis_rides_the_caption(monkeypatch):
+    message = _Message()
+    monkeypatch.setattr(telebot.asyncio, "sleep", lambda *_: _noop())
+    _run(telebot._send(types.SimpleNamespace(effective_message=message),
+                       _answer("تحليل قصير")))
+    assert message.photos == ["تحليل قصير"]
+    assert message.texts == []
+
+
+async def _noop():
+    return None
+
+
+def test_long_analysis_follows_the_chart(monkeypatch):
+    message = _Message()
+    long_text = "سطر تحليل طويل. " * 200
+    _run(telebot._send(types.SimpleNamespace(effective_message=message),
+                       _answer(long_text)))
+    assert message.photos == ["NVDA • ساعة"]          # headline as caption
+    assert message.texts                                # and the analysis followed
+
+
+def test_a_failed_chart_still_delivers_the_analysis(monkeypatch):
+    """The reader must never be left with a picture and no reading."""
+    message = _Message(fail_photo=True)
+    monkeypatch.setattr(telebot.asyncio, "sleep", lambda *_: _noop())
+    _run(telebot._send(types.SimpleNamespace(effective_message=message),
+                       _answer("تحليل قصير يكفي للتعليق")))
+    assert message.photos == []
+    assert message.texts == ["تحليل قصير يكفي للتعليق"]
+
+
+def test_send_retries_once(monkeypatch):
+    calls = {"n": 0}
+
+    async def flaky():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise TimeoutError("first try")
+
+    monkeypatch.setattr(telebot.asyncio, "sleep", lambda *_: _noop())
+    assert _run(telebot._attempt("test", flaky)) is True
+    assert calls["n"] == 2
+
+
+def test_timeouts_are_configured(monkeypatch):
+    from analyst_agent import config
+
+    monkeypatch.setenv("ANALYST_BOT_TOKEN", "123:abc")
+    app = telebot.build()
+    request = app.bot._request[1]          # the non-getUpdates request object
+    assert request._client.timeout.read >= config.TG_READ_TIMEOUT - 0.1

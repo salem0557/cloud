@@ -107,6 +107,13 @@ ANSWER_ALL_PHOTOS = _bool("ANALYST_ANSWER_ALL_PHOTOS",
 MAX_CONCURRENT = _int("ANALYST_MAX_CONCURRENT", 2)
 USER_COOLDOWN = _int("ANALYST_USER_COOLDOWN", 20)  # seconds between requests
 SEND_TYPING = _bool("ANALYST_SEND_TYPING", True)
+# python-telegram-bot defaults to 5s for every HTTP call. Uploading a ~300KB
+# chart over a slow link takes longer than that, and the TimedOut lands after
+# the photo is already on its way — so the analysis text never gets sent.
+TG_CONNECT_TIMEOUT = _float("ANALYST_TG_CONNECT_TIMEOUT", 20.0)
+TG_READ_TIMEOUT = _float("ANALYST_TG_READ_TIMEOUT", 40.0)
+TG_WRITE_TIMEOUT = _float("ANALYST_TG_WRITE_TIMEOUT", 60.0)
+TG_MEDIA_TIMEOUT = _float("ANALYST_TG_MEDIA_TIMEOUT", 120.0)
 # Log a short health report on boot, so the deploy logs say whether this
 # instance can actually answer before anyone tries it.
 STARTUP_CHECK = _bool("ANALYST_STARTUP_CHECK", True)

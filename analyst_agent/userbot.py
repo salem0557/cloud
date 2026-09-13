@@ -141,21 +141,38 @@ async def _watch_loop(client) -> None:
         await asyncio.sleep(max(60, config.WATCH_INTERVAL_MIN * 60))
 
 
+async def _attempt(what: str, send) -> bool:
+    """One send, retried once — a timeout on the chart must not cost the text."""
+    for attempt in (1, 2):
+        try:
+            await send()
+            return True
+        except Exception as exc:
+            log.warning("%s failed (try %d): %s: %s", what, attempt,
+                        type(exc).__name__, exc)
+            if attempt == 1:
+                await asyncio.sleep(2)
+    return False
+
+
 async def _send_answer(event, answer: analyst.Answer) -> None:
+    """Chart then analysis, as independent sends: a slow upload must not cost
+    the reader the reading."""
     text = answer.text.strip()
+    fits_caption = bool(answer.chart_png) and len(text) <= gate.CAPTION_LIMIT
+
     if answer.chart_png:
         from io import BytesIO
 
         image = BytesIO(answer.chart_png)
         image.name = f"{(answer.symbol or 'chart')}_{answer.frame_key or ''}.png".replace("/", "-")
-        caption = text if len(text) <= gate.CAPTION_LIMIT else answer.headline
-        await event.reply(caption, file=image)
-        if len(text) > gate.CAPTION_LIMIT:
-            for chunk in gate.chunks(text):
-                await event.reply(chunk)
-    else:
+        caption = text if fits_caption else answer.headline
+        if not await _attempt("send chart", lambda: event.reply(caption, file=image)):
+            fits_caption = False
+
+    if not fits_caption:
         for chunk in gate.chunks(text):
-            await event.reply(chunk)
+            await _attempt("send analysis", lambda chunk=chunk: event.reply(chunk))
 
 
 def build_client() -> TelegramClient:

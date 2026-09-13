@@ -79,20 +79,42 @@ async def _photo_bytes(update: Update) -> bytes | None:
     return None
 
 
+async def _attempt(what: str, send) -> bool:
+    """One send, retried once — a timeout on the chart must not cost the text."""
+    for attempt in (1, 2):
+        try:
+            await send()
+            return True
+        except Exception as exc:
+            log.warning("%s failed (try %d): %s: %s", what, attempt,
+                        type(exc).__name__, exc)
+            if attempt == 1:
+                await asyncio.sleep(2)
+    return False
+
+
 async def _send(update: Update, answer: analyst.Answer) -> None:
+    """Chart then analysis, as independent sends.
+
+    They are deliberately not chained: a slow upload used to raise before the
+    text was sent, and the reader was left with a picture and no reading.
+    """
     message = update.effective_message
     text = answer.text.strip()
+    fits_caption = bool(answer.chart_png) and len(text) <= gate.CAPTION_LIMIT
+
     if answer.chart_png:
         image = BytesIO(answer.chart_png)
         image.name = f"{(answer.symbol or 'chart')}_{answer.frame_key or ''}.png".replace("/", "-")
-        caption = text if len(text) <= gate.CAPTION_LIMIT else answer.headline
-        await message.reply_photo(photo=image, caption=caption)
-        if len(text) > gate.CAPTION_LIMIT:
-            for chunk in gate.chunks(text):
-                await message.reply_text(chunk)
-    else:
+        caption = text if fits_caption else answer.headline
+        sent = await _attempt("send chart", lambda: message.reply_photo(
+            photo=image, caption=caption))
+        if not sent:
+            fits_caption = False          # the caption never arrived: send it as text
+
+    if not fits_caption:
         for chunk in gate.chunks(text):
-            await message.reply_text(chunk)
+            await _attempt("send analysis", lambda chunk=chunk: message.reply_text(chunk))
 
 
 async def _may_manage(update: Update, context: ContextTypes.DEFAULT_TYPE,
@@ -287,6 +309,11 @@ def build() -> Application:
     app = (ApplicationBuilder()
            .token(token())
            .concurrent_updates(True)
+           .connect_timeout(config.TG_CONNECT_TIMEOUT)
+           .read_timeout(config.TG_READ_TIMEOUT)
+           .write_timeout(config.TG_WRITE_TIMEOUT)
+           .media_write_timeout(config.TG_MEDIA_TIMEOUT)
+           .pool_timeout(config.TG_READ_TIMEOUT)
            .build())
     app.bot_data["semaphore"] = asyncio.Semaphore(config.MAX_CONCURRENT)
     if watcher.enabled() and app.job_queue:
