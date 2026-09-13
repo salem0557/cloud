@@ -76,3 +76,43 @@ def test_invalidation_uses_the_arabic_frame_label():
     call = V.decide(facts)
     if call.entry:
         assert "ساعة" in call.invalidation_ar
+
+
+def test_stop_never_sits_inside_the_noise():
+    """A quiet 5-minute bar gave XRP a 0.09% stop — the tape takes that out."""
+    from analyst_agent import config
+
+    facts = {
+        "price": 1.361, "frame": "5m", "frame_label": "5 دقائق",
+        "trend": {"ema_fast": 1.362, "price_vs_ema_fast_pct": -0.1},
+        "levels": {"nearest_support": 1.35, "nearest_resistance": 1.37,
+                   "supports": [{"price": 1.35}, {"price": 1.32}],
+                   "resistances": [{"price": 1.37}, {"price": 1.39}]},
+    }
+    for side in ("long", "short"):
+        plan = V._plan(facts, side, atr=0.0012)      # ATR is 0.09% of price
+        assert plan["risk_pct"] >= config.MIN_STOP_PCT - 0.01
+        assert (plan["stop"] < plan["entry"]) is (side == "long")
+
+
+def test_a_normal_stop_is_left_alone():
+    """The floor must not widen a stop that is already sane."""
+    facts = _facts(0.9, 91)
+    call = V.decide(facts)
+    if call.entry:
+        atr = facts["volatility"]["atr"]
+        assert abs(call.entry - call.stop) <= 2.6 * atr
+
+
+def test_the_floor_is_configurable(monkeypatch):
+    from analyst_agent import config
+
+    monkeypatch.setattr(config, "MIN_STOP_PCT", 1.0)
+    facts = {
+        "price": 100.0, "frame": "1h", "frame_label": "ساعة",
+        "trend": {"ema_fast": 100.0, "price_vs_ema_fast_pct": 0.0},
+        "levels": {"nearest_support": 99.9, "nearest_resistance": 100.2,
+                   "supports": [{"price": 99.9}], "resistances": [{"price": 100.2}]},
+    }
+    plan = V._plan(facts, "long", atr=0.05)
+    assert plan["risk_pct"] >= 0.99

@@ -142,19 +142,33 @@ def analyze(caption: str | None = None, image: bytes | None = None,
     facts["frame_source"] = frame_source
     # The read has to state which session it is looking at, per asset class
     # (crypto never closes), and how old the last candle is in bar units.
-    facts["session"] = session_mod.state_for(data.symbol)
-    facts["session"].update(session_mod.bar_freshness(data.last_time.to_pydatetime(),
-                                                      used.minutes))
+    try:
+        facts["session"] = session_mod.state_for(data.symbol)
+        facts["session"].update(session_mod.bar_freshness(data.last_time.to_pydatetime(),
+                                                          used.minutes))
+    except Exception:
+        log.warning("session state failed", exc_info=True)
+        facts["session"] = {}
     context_facts = None
     if data.context_df is not None and len(data.context_df) >= 30:
-        ctx_frame = frames.context_frame(used)
-        context_facts = indicators.analyze(data.context_df, ctx_frame.key if ctx_frame else "1d",
-                                           daily_df=data.daily_df)
+        try:
+            ctx_frame = frames.context_frame(used)
+            context_facts = indicators.analyze(
+                data.context_df, ctx_frame.key if ctx_frame else "1d",
+                daily_df=data.daily_df)
+        except Exception:
+            # Context is a bonus: losing it costs alignment, not the answer.
+            log.warning("higher timeframe analysis failed", exc_info=True)
 
     call = verdict_mod.decide(facts, context_facts)
     verdict_dict = call.to_dict()
 
-    news = news_mod.bundle(data.symbol, data.meta) if with_news else {}
+    news = {}
+    if with_news:
+        try:
+            news = news_mod.bundle(data.symbol, data.meta)
+        except Exception:
+            log.warning("news bundle failed", exc_info=True)
     # English label only — the chart image must stay free of Arabic text.
     png = chart_mod.render(data.symbol, data.df, used.label_en, facts, verdict_dict)
 

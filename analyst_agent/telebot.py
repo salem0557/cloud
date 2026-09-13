@@ -252,10 +252,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         if answer.silent:
             return          # the photo was not a chart: no reply at all
         await _send(update, answer)
-    except Exception:
+    except Exception as exc:
         log.exception("handler failed")
         try:
-            await update.effective_message.reply_text("صار خطأ غير متوقع عندي، جرّب مرة ثانية 🙏")
+            await update.effective_message.reply_text(
+                f"صار خطأ غير متوقع ({type(exc).__name__})، جرّب مرة ثانية 🙏")
         except Exception:
             pass
 

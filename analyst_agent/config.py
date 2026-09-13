@@ -175,6 +175,10 @@ MACD_SIGNAL = _int("ANALYST_MACD_SIGNAL", 9)
 PIVOT_WINDOW = _int("ANALYST_PIVOT_WINDOW", 5)   # bars each side of a swing
 LEVEL_TOLERANCE = _float("ANALYST_LEVEL_TOLERANCE", 0.008)  # 0.8% clustering
 STOP_ATR_MULT = _float("ANALYST_STOP_ATR_MULT", 1.2)
+# A stop closer than this to the entry is inside the spread and the noise: on a
+# quiet 5-minute crypto bar 1.2x ATR can be 0.09%, which the tape takes out in
+# seconds. The floor is a percentage of price, so it scales with any asset.
+MIN_STOP_PCT = _float("ANALYST_MIN_STOP_PCT", 0.3)
 
 # --- News / chatter ---------------------------------------------------------
 NEWS_ENABLED = _bool("ANALYST_NEWS", True)

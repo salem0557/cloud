@@ -242,10 +242,11 @@ async def main() -> None:
             if answer.silent:
                 return      # the photo was not a chart: no reply at all
             await _send_answer(event, answer)
-        except Exception:
+        except Exception as exc:
             log.exception("handler failed")
             try:
-                await event.reply("صار خطأ غير متوقع عندي، جرّب مرة ثانية 🙏")
+                await event.reply(
+                    f"صار خطأ غير متوقع ({type(exc).__name__})، جرّب مرة ثانية 🙏")
             except Exception:
                 pass
 

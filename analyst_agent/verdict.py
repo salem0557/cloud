@@ -12,6 +12,8 @@ wide stop chasing a multiple.
 from __future__ import annotations
 
 import math
+
+from . import config
 from dataclasses import dataclass, field
 
 BULL = "صاعد"
@@ -217,6 +219,16 @@ def _collect(facts: dict, context: dict | None) -> list[Signal]:
     return signals
 
 
+def _min_distance(entry: float, distance: float) -> float:
+    """Keep the stop outside spread-and-noise range.
+
+    A percentage floor, not an ATR one: when a bar is unusually quiet the ATR
+    stop collapses to a few ticks and the quote alone triggers it. That is not
+    a small loss, it is a guaranteed one.
+    """
+    return max(distance, entry * config.MIN_STOP_PCT / 100)
+
+
 def _plan(facts: dict, side: str, atr: float) -> dict:
     """Entry / stop / targets from real levels, ATR-bounded."""
     price = facts["price"]
@@ -235,10 +247,11 @@ def _plan(facts: dict, side: str, atr: float) -> dict:
             entry = (price + ema_fast) / 2
             note = "السعر ممتد عن متوسط 20 — الأفضل انتظار ارتداد لمنطقة الدخول"
         struct_stop = (support - 0.25 * atr) if support else None
-        atr_stop = entry - 1.2 * atr
+        atr_stop = entry - config.STOP_ATR_MULT * atr
         stop = max(struct_stop, atr_stop) if struct_stop else atr_stop
         stop = min(stop, entry - 0.6 * atr)          # never inside the noise
         stop = max(stop, entry - 2.5 * atr)          # never a runaway stop
+        stop = entry - _min_distance(entry, entry - stop)
         targets = [t for t in resistances if t > entry + 0.3 * atr][:3]
         while len(targets) < 2:
             targets.append(entry + (1.5 + len(targets)) * atr)
@@ -250,10 +263,11 @@ def _plan(facts: dict, side: str, atr: float) -> dict:
             entry = (price + ema_fast) / 2
             note = "السعر ممتد تحت متوسط 20 — الأفضل انتظار ارتداد لمنطقة الدخول"
         struct_stop = (resistance + 0.25 * atr) if resistance else None
-        atr_stop = entry + 1.2 * atr
+        atr_stop = entry + config.STOP_ATR_MULT * atr
         stop = min(struct_stop, atr_stop) if struct_stop else atr_stop
         stop = max(stop, entry + 0.6 * atr)
         stop = min(stop, entry + 2.5 * atr)
+        stop = entry + _min_distance(entry, stop - entry)
         targets = [t for t in sorted(supports, reverse=True) if t < entry - 0.3 * atr][:3]
         while len(targets) < 2:
             targets.append(entry - (1.5 + len(targets)) * atr)
