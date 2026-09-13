@@ -156,3 +156,27 @@ def test_horizon_scales_the_expected_range():
     short_view = V.decide(facts, horizon_bars=3).expected_range
     long_view = V.decide(facts, horizon_bars=48).expected_range
     assert (long_view[1] - long_view[0]) > (short_view[1] - short_view[0])
+
+
+def test_a_divergence_against_the_trade_is_flagged():
+    """The most common reason a strong trend trade stalls before target one."""
+    facts = _facts(-0.9, 96)
+    facts["momentum"]["rsi_divergence"] = "bullish"
+    call = V.decide(facts)
+    if call.side == "short":
+        assert any("تباعد" in c for c in call.conflicts)
+
+
+def test_chasing_an_oversold_short_is_flagged():
+    facts = _facts(-0.9, 97)
+    facts["momentum"]["rsi"] = 28.0
+    call = V.decide(facts)
+    if call.side == "short":
+        assert any("تشبع بيعي" in c for c in call.conflicts)
+
+
+def test_an_aligned_divergence_is_not_flagged():
+    facts = _facts(0.9, 98)
+    facts["momentum"]["rsi_divergence"] = "bullish"
+    call = V.decide(facts)
+    assert not any("معاكس" in c for c in call.conflicts)

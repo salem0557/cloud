@@ -20,9 +20,10 @@ HERE_COMMANDS = {"/here", ".here", "/وين", "/id"}
 POST_COMMANDS = {"/post", ".post", "/نشر"}
 SCAN_COMMANDS = {"/scan", ".scan", "/مسح"}
 WATCH_COMMANDS = {"/watchlist", ".watchlist", "/watch", "/المراقبة"}
+STATS_COMMANDS = {"/stats", ".stats", "/سجل", "/النتائج"}
 COMMANDS = ({"/help", ".help", "/start", "مساعدة", "/frames", "/ping", ".ping"}
             | DIAG_COMMANDS | HERE_COMMANDS | POST_COMMANDS | SCAN_COMMANDS
-            | WATCH_COMMANDS)
+            | WATCH_COMMANDS | STATS_COMMANDS)
 GENERAL_TOPIC = 1      # Telegram reports the General topic as thread id 1/None
 
 HELP = """أنا محلل فني آلي للسوق الأمريكي 📈
@@ -41,7 +42,8 @@ HELP = """أنا محلل فني آلي للسوق الأمريكي 📈
 
 الأوامر: /help | /frames | /ping | /here
 للمالك: /diag (فحص شامل) | /post (نشر تحليل في قسم التوصيات) |
-/scan (مسح فوري للمراقبة) | /watchlist (شروط التوصيات التلقائية)"""
+/scan (مسح فوري للمراقبة) | /watchlist (شروط التوصيات التلقائية) |
+/stats (سجل التوصيات ونسبة الإصابة الفعلية)"""
 
 _last_request: dict[int, float] = {}
 
@@ -101,6 +103,10 @@ def is_scan(text: str | None) -> bool:
 
 def is_watchlist(text: str | None) -> bool:
     return _command(text) in WATCH_COMMANDS
+
+
+def is_stats(text: str | None) -> bool:
+    return _command(text) in STATS_COMMANDS
 
 
 def here_report(msg: Incoming) -> str:
@@ -235,6 +241,7 @@ def command_reply(text: str) -> str | None:
     if command in ("/ping", ".ping"):
         return "شغّال ✅"
     if (command in HERE_COMMANDS or command in POST_COMMANDS
-            or command in SCAN_COMMANDS or command in WATCH_COMMANDS):
+            or command in SCAN_COMMANDS or command in WATCH_COMMANDS
+            or command in STATS_COMMANDS):
         return None      # these need the message or the bot, handled by the backend
     return None

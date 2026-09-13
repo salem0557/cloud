@@ -25,7 +25,7 @@ from telegram.error import Conflict, NetworkError, RetryAfter, TimedOut
 from telegram.ext import (Application, ApplicationBuilder, ContextTypes,
                           MessageHandler, filters)
 
-from . import analyst, config, doctor, gate, watcher
+from . import analyst, config, doctor, gate, journal, watcher
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s",
                     level=logging.INFO)
@@ -229,6 +229,12 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     if gate.is_post(incoming.text):
         await _publish(update, context, incoming)
+        return
+    if gate.is_stats(incoming.text):
+        if not await _may_manage(update, context, incoming):
+            return
+        await asyncio.to_thread(journal.evaluate)     # resolve what closed since
+        await update.effective_message.reply_text(journal.stats())
         return
     if gate.is_watchlist(incoming.text):
         if await _may_manage(update, context, incoming):

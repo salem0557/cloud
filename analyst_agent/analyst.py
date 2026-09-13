@@ -18,8 +18,8 @@ import re
 from dataclasses import dataclass, field
 
 from . import (chart as chart_mod, config, frames, groq_client, indicators,
-               market, news as news_mod, prompts, session as session_mod, symbols,
-               verdict as verdict_mod)
+               journal, market, news as news_mod, prompts, session as session_mod,
+               symbols, verdict as verdict_mod)
 
 log = logging.getLogger(__name__)
 
@@ -177,6 +177,13 @@ def analyze(caption: str | None = None, image: bytes | None = None,
     horizon_bars = horizon["bars"]
     call = verdict_mod.decide(facts, context_facts, horizon_bars=horizon_bars)
     verdict_dict = call.to_dict()
+
+    # Every call with a real plan goes into the journal, so the hit rate can be
+    # measured later instead of argued about.
+    try:
+        journal.record(symbol=data.symbol, frame=used.key, verdict=verdict_dict)
+    except Exception:
+        log.warning("journal record failed", exc_info=True)
 
     news = {}
     if with_news:

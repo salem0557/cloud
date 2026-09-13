@@ -152,6 +152,18 @@ WATCH_MAX_PER_DAY = _int("ANALYST_WATCH_MAX_PER_DAY", 10)
 WATCH_SKIP_EARNINGS_DAYS = _int("ANALYST_WATCH_SKIP_EARNINGS_DAYS", 3)
 WATCH_ONLY_WHEN_OPEN = _bool("ANALYST_WATCH_ONLY_WHEN_OPEN", True)
 STATE_FILE = os.getenv("ANALYST_STATE_FILE", "analyst_state.json").strip()
+# Where state and the journal live. On Railway the container filesystem is
+# wiped on every deploy: mount a Volume and point this at it to keep history.
+DATA_DIR = os.getenv("ANALYST_DATA_DIR", ".").strip() or "."
+
+# --- journal: what actually happened to each call ---------------------------
+JOURNAL_ENABLED = _bool("ANALYST_JOURNAL", True)
+JOURNAL_FILE = os.getenv("ANALYST_JOURNAL_FILE", "analyst_journal.jsonl").strip()
+# How long a call stays open before it is judged undecided, in bars of its own
+# frame. Three times the usual horizon: long enough to be fair, short enough
+# that a stale call does not sit open forever.
+JOURNAL_MAX_BARS = _int("ANALYST_JOURNAL_MAX_BARS", 60)
+JOURNAL_MAX_RECORDS = _int("ANALYST_JOURNAL_MAX_RECORDS", 2000)
 
 # --- Market data ------------------------------------------------------------
 DEFAULT_FRAME = os.getenv("ANALYST_DEFAULT_FRAME", "1d").strip()

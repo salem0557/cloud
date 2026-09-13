@@ -343,6 +343,25 @@ def decide(facts: dict, context: dict | None = None, horizon_bars: int = 10) -> 
             conflicts.append(f"تعارض: الفريم الأعلى ({context['frame']}) صاعد — الصفقة عكس الاتجاه الأكبر")
     if facts["volume"].get("dry") and side != "none":
         conflicts.append("الفوليوم ضعيف: الحركة تحتاج تأكيد بسيولة أعلى")
+    # A divergence pointing the other way is the single most common reason a
+    # strong-looking trend trade stalls before its first target.
+    divergence = facts["momentum"].get("rsi_divergence")
+    if divergence == "bullish" and side == "short":
+        conviction = int(conviction * 0.85)
+        conflicts.append("تباعد إيجابي معاكس للصفقة: قيعان أدنى مع RSI أعلى — "
+                         "احتمال ارتداد قبل بلوغ الهدف، الأفضل تقليل الحجم أو "
+                         "انتظار كسر بإغلاق")
+    if divergence == "bearish" and side == "long":
+        conviction = int(conviction * 0.85)
+        conflicts.append("تباعد سلبي معاكس للصفقة: قمم أعلى مع RSI أدنى — "
+                         "احتمال انعكاس قبل بلوغ الهدف")
+    rsi_value = facts["momentum"].get("rsi")
+    if side == "short" and rsi_value is not None and rsi_value <= 32:
+        conflicts.append(f"RSI {rsi_value} في منطقة تشبع بيعي: البيع هنا مطاردة "
+                         "لحركة نزلت أصلاً، والارتداد التقني وارد")
+    if side == "long" and rsi_value is not None and rsi_value >= 68:
+        conflicts.append(f"RSI {rsi_value} في منطقة تشبع شرائي: الشراء هنا مطاردة "
+                         "لحركة صعدت أصلاً")
     if facts["volatility"].get("squeeze"):
         conflicts.append("انضغاط تقلب: الحركة القادمة قد تكون عنيفة بالاتجاهين")
 

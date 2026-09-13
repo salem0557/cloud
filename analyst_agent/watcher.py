@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from . import (chart as chart_mod, config, frames, indicators, market,
+from . import (chart as chart_mod, config, frames, indicators, journal, market,
                news as news_mod, prompts, session as session_mod, verdict as verdict_mod)
 
 log = logging.getLogger(__name__)
@@ -221,6 +221,11 @@ def mark_posted(alerts: list[Alert]) -> None:
     for alert in alerts:
         posted[alert.symbol] = {"ts": time.time(), "side": alert.side,
                                 "conviction": alert.conviction}
+        try:
+            journal.record(symbol=alert.symbol, frame=alert.frame_key,
+                           verdict=alert.verdict, source="auto")
+        except Exception:
+            log.warning("journal record failed for %s", alert.symbol, exc_info=True)
     state["count"] = state.get("count", 0) + len(alerts)
     save_state(state)
 

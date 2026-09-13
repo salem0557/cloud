@@ -15,7 +15,7 @@ import logging
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
-from . import analyst, config, doctor, gate, watcher
+from . import analyst, config, doctor, gate, journal, watcher
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s",
                     level=logging.INFO)
@@ -203,6 +203,12 @@ async def main() -> None:
                 return
             if gate.is_post(text):
                 await _publish(event, me)
+                return
+            if gate.is_stats(text):
+                if not gate.diag_allowed(event.sender_id, bool(event.is_private)):
+                    return
+                await asyncio.to_thread(journal.evaluate)
+                await event.reply(journal.stats())
                 return
             if gate.is_watchlist(text):
                 if gate.diag_allowed(event.sender_id, bool(event.is_private)):
