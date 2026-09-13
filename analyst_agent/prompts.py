@@ -84,7 +84,10 @@ SYSTEM_SIMPLE = """أنت محلل فني محترف يكتب لمتداول م�
 - الأسعار بفواصل الآلاف وبلا أصفار زائدة.
 - لا تكتب فقرات، فقط الأسطر أعلاه.
 - إن كان الاتجاه عرضياً فاكتب شرط الدخول الذي ننتظره بدل خطة وهمية.
-- لا تنويه ولا إخلاء مسؤولية؛ يُضاف آلياً."""
+- لا تنويه ولا إخلاء مسؤولية؛ يُضاف آلياً.
+- سطر الأخبار نقلٌ للسياق فقط ولا يدخل في الحكم: اذكر العنوان ومصدره، ولا تبنِ عليه توقعاً
+  ولا تناقض به الاتجاه المحسوب. وإن كان العنوان عن رأي طويل المدى بينما الفريم قصير،
+  فاذكر ذلك بكلمتين (مثال: "رأي طويل المدى")."""
 
 
 def build_payload(*, symbol: str, meta: dict, requested_frame: str, used_frame: str,
@@ -219,7 +222,10 @@ def simple_text(*, symbol: str, frame_label: str, facts: dict, verdict: dict,
 
     headlines = (news or {}).get("headlines") or []
     if headlines:
-        lines.append("📰 " + headlines[0]["title"][:110])
+        top = headlines[0]
+        source = " — ".join(part for part in (top.get("publisher"), top.get("age_label"))
+                            if part)
+        lines.append("📰 " + top["title"][:100] + (f" ({source})" if source else ""))
     if note:
         lines.append("ℹ️ " + note)
     session_state = facts.get("session") or {}

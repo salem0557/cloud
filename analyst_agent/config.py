@@ -206,6 +206,20 @@ MIN_STOP_PCT = _float("ANALYST_MIN_STOP_PCT", 0.3)
 # --- News / chatter ---------------------------------------------------------
 NEWS_ENABLED = _bool("ANALYST_NEWS", True)
 NEWS_LIMIT = _int("ANALYST_NEWS_LIMIT", 8)
+# A headline older than this is history, not news — and on an intraday frame
+# it says nothing about the next hour.
+NEWS_MAX_AGE_HOURS = _int("ANALYST_NEWS_MAX_AGE_HOURS", 48)
+# Outlets whose "top picks" and "should you buy" pieces are marketing, not
+# reporting: shown beside a bearish 2-hour read they only confuse.
+NEWS_SKIP_PUBLISHERS = _list("ANALYST_NEWS_SKIP", [
+    "motley fool", "zacks", "simply wall st", "insider monkey", "invezz",
+    "stocktwits", "benzinga insights", "24/7 wall st", "gurufocus",
+])
+NEWS_PREFER_PUBLISHERS = _list("ANALYST_NEWS_PREFER", [
+    "reuters", "bloomberg", "cnbc", "associated press", "barron", "wsj",
+    "wall street journal", "financial times", "marketwatch", "axios",
+    "investing.com", "yahoo finance", "business insider",
+])
 SOCIAL_ENABLED = _bool("ANALYST_SOCIAL", True)
 SOCIAL_LIMIT = _int("ANALYST_SOCIAL_LIMIT", 15)
 HTTP_TIMEOUT = _int("ANALYST_HTTP_TIMEOUT", 12)

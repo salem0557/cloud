@@ -79,3 +79,12 @@ def test_the_long_form_still_exists():
     text = prompts.fallback_text(symbol="NVDA", frame_label="ساعة", facts=facts,
                                  verdict=call)
     assert "القراءة الفنية" in text and "المستويات" in text
+
+
+def test_the_news_line_names_its_source_and_age():
+    facts, call = _case()
+    text = prompts.simple_text(
+        symbol="COST", frame_label="ساعتين", facts=facts, verdict=call,
+        news={"headlines": [{"title": "Costco beats on revenue",
+                             "publisher": "Reuters", "age_label": "قبل 3 ساعة"}]})
+    assert "Reuters" in text and "قبل 3 ساعة" in text
