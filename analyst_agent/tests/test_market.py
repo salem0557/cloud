@@ -54,3 +54,47 @@ def test_empty_input_is_returned_as_is(df):
 def test_step_up_order():
     assert [f.key for f in market._step_up(frames.get("45m"))][:2] == ["1h", "2h"]
     assert market._step_up(frames.get("1mo")) == []
+
+
+def _series(price, volume, spread=0.01, n=40):
+    idx = pd.date_range("2026-08-01", periods=n, freq="D", tz="UTC")
+    return pd.DataFrame({
+        "Open": price, "High": price * (1 + spread), "Low": price * (1 - spread),
+        "Close": price, "Volume": volume,
+    }, index=idx)
+
+
+def test_a_dead_token_is_rejected():
+    """No volume and flat candles: indicators on it are noise dressed as analysis."""
+    alive, why = market.is_tradable(_series(0.00019, volume=0.0, spread=0.0))
+    assert alive is False and "الفوليوم" in why
+
+
+def test_a_frozen_market_is_rejected():
+    alive, why = market.is_tradable(_series(1.0, volume=1000.0, spread=0.00001))
+    assert alive is False and "جامد" in why
+
+
+def test_a_zero_price_is_rejected():
+    assert market.is_tradable(_series(0.0, volume=1000.0))[0] is False
+
+
+def test_a_real_market_passes():
+    assert market.is_tradable(_series(180.0, volume=5_000_000.0))[0] is True
+
+
+def test_a_penny_asset_with_real_trading_passes():
+    """Cheap is not the same as dead."""
+    assert market.is_tradable(_series(0.00019, volume=9_000_000.0, spread=0.02))[0] is True
+
+
+def test_load_skips_a_dead_symbol_for_the_next_candidate(monkeypatch):
+    from analyst_agent import frames
+
+    served = {"DEAD": _series(0.0002, volume=0.0, spread=0.0),
+              "LIVE": _series(180.0, volume=5_000_000.0)}
+    monkeypatch.setattr(market, "fetch", lambda symbol, frame: served.get(symbol))
+    monkeypatch.setattr(market, "_download", lambda *a, **k: served["LIVE"])
+    monkeypatch.setattr(market, "_meta", lambda symbol: {"symbol": symbol})
+    data = market.load(["DEAD", "LIVE"], frames.get("1d"))
+    assert data is not None and data.symbol == "LIVE"

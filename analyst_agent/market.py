@@ -113,6 +113,26 @@ def split_forming(df: pd.DataFrame, frame: Frame):
     return df.iloc[:-1], float(df["Close"].iloc[-1]), last
 
 
+def is_tradable(df: pd.DataFrame) -> tuple[bool, str]:
+    """Is there an actual market here, or a delisted ticker still serving rows?
+
+    A dead token prints flat candles and no volume, and every indicator built
+    on it is noise dressed as analysis — which is how a question about Aptos
+    came back as a confident read on a $0.0002 ghost.
+    """
+    tail = df.tail(30)
+    closes = tail["Close"].astype(float)
+    if closes.empty or float(closes.iloc[-1]) <= 0:
+        return False, "لا يوجد سعر"
+    volume = tail["Volume"].fillna(0).astype(float)
+    if float(volume.tail(10).sum()) <= 0:
+        return False, "بلا تداول: الفوليوم صفر"
+    moves = (tail["High"].astype(float) - tail["Low"].astype(float)) / closes.replace(0, float("nan"))
+    if float(moves.fillna(0).mean()) < 0.0005:      # under 0.05% average range
+        return False, "سوق جامد: الشموع بلا حركة تُذكر"
+    return True, ""
+
+
 def _meta(symbol: str) -> dict:
     """Name, currency, exchange, valuation, next earnings — all best effort."""
     out: dict = {"symbol": symbol}
@@ -178,6 +198,10 @@ def load(candidates: list[Candidate] | list[str], frame: Frame,
                     used = bigger
                     break
         if df is None or len(df) < 20:
+            continue
+        alive, why = is_tradable(df)
+        if not alive:
+            log.info("skipping %s: %s", symbol, why)
             continue
 
         ctx = context_frame(used)
