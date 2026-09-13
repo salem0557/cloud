@@ -104,12 +104,17 @@ def analyze(caption: str | None = None, image: bytes | None = None,
 
     caption_candidates = symbols.resolve(caption) if caption else []
     if image and not addressed and not caption_candidates:
-        # Nothing points at a chart: either vision says it is not one, or there
-        # was no vision read to go on. Either way, say nothing.
-        if read is None or not read.is_chart:
+        # Stay silent only when the picture is confidently not a chart. A failed
+        # vision call is not the same answer: silence there means a member asks
+        # a question and gets nothing, with no way to tell the difference.
+        confident_not_chart = read is not None and not read.is_chart and not read.error
+        blind = read is None                  # no key, so nothing was even looked at
+        if confident_not_chart or blind:
             reason = "vision says not a chart" if read else "no vision read"
             log.info("ignoring photo silently (%s)", reason)
             return Answer(False, "", silent=True, debug={"skipped": reason})
+        if read is not None and read.error:
+            log.warning("vision failed on a group photo, answering anyway: %s", read.error)
 
     candidates, symbol_source = _pick_symbol(caption, read)
     if not candidates:

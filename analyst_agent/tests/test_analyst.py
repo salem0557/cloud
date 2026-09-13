@@ -263,3 +263,25 @@ def test_horizon_reaches_the_answer(offline, monkeypatch):
     assert answer.ok
     assert "النطاق المتوقع" in answer.text
     assert "ساعة" in answer.text
+
+
+def test_a_failed_vision_read_still_gets_an_answer(offline, monkeypatch):
+    """A Groq hiccup must not look like "that picture is not a chart"."""
+    monkeypatch.setattr(config, "GROQ_API_KEY", "k")
+    monkeypatch.setattr(analyst, "vision_read",
+                        lambda image: vision.ChartRead(error="rate limited"))
+    answer = analyst.analyze("متى يمكنني الدخول", image=b"\x89PNG", addressed=False)
+    assert answer.silent is False
+    assert "ما عرفت الرمز" in answer.text
+
+
+def test_a_confident_non_chart_is_still_silent(offline, monkeypatch):
+    monkeypatch.setattr(config, "GROQ_API_KEY", "k")
+    monkeypatch.setattr(analyst, "vision_read",
+                        lambda image: vision.ChartRead(is_chart=False))
+    assert analyst.analyze("شوفوا", image=b"\x89PNG", addressed=False).silent is True
+
+
+def test_without_a_key_group_photos_stay_silent(offline, monkeypatch):
+    monkeypatch.setattr(config, "GROQ_API_KEY", "")
+    assert analyst.analyze("شوفوا", image=b"\x89PNG", addressed=False).silent is True
