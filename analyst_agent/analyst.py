@@ -143,6 +143,15 @@ def analyze(caption: str | None = None, image: bytes | None = None,
 
     used = data.frame
     facts = indicators.analyze(data.df, used.key, daily_df=data.daily_df)
+    # Indicators come from closed candles; the price you would actually trade at
+    # is inside the bar still forming, so both are reported.
+    if data.live_price:
+        facts["last_closed_price"] = facts["price"]
+        facts["price"] = data.live_price
+        facts["forming_bar"] = True
+        facts["price_note"] = (f"المؤشرات محسوبة على الشموع المغلقة (آخر إغلاق "
+                               f"{facts['last_closed_price']})، والسعر المعروض لحظي "
+                               f"داخل الشمعة الجارية")
     facts["frame_label"] = used.label_ar
     facts["frame_source"] = frame_source
     # The read has to state which session it is looking at, per asset class
@@ -197,7 +206,10 @@ def analyze(caption: str | None = None, image: bytes | None = None,
         except Exception:
             log.warning("news bundle failed", exc_info=True)
     # English label only — the chart image must stay free of Arabic text.
-    png = chart_mod.render(data.symbol, data.df, used.label_en, facts, verdict_dict)
+    # The chart draws the forming bar too: hiding it would make the picture
+    # disagree with the reader's own screen.
+    png = chart_mod.render(data.symbol, data.full_df if data.full_df is not None else data.df,
+                           used.label_en, facts, verdict_dict)
 
     note = data.fallback_note
     text, model_used = _write_analysis(

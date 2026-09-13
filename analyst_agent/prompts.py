@@ -32,6 +32,8 @@ SYSTEM = """أنت محلل فني محترف بخبرة عشرين سنة في 
    technicals.horizon.label، واذكر أنه نطاق احتمالي من ATR لا رقم مؤكد. لا تعطِ رقماً واحداً
    قاطعاً، ولا تخترع نطاقاً غير الموجود في البيانات. وإن وُجد technicals.horizon.session_note
    فاذكره: النطاق لا يشمل ما بعد إغلاق السوق ولا الفتحة السعرية في الافتتاح.
+8-ج) المؤشرات كلها محسوبة على شموع مغلقة. إن وُجد technicals.last_closed_price فالسعر المعروض
+   لحظي داخل شمعة لم تُغلق: اذكر الاثنين ولا تبنِ نموذج شمعة على الشمعة الجارية.
 9) تخصصك السوق الأمريكي والكريبتو. انظر إلى technicals.session: إن كان السوق مغلقاً أو في
    البري ماركت/الأفتر أورز، أو كانت آخر شمعة متأخرة (stale_note)، فقل ذلك بسطر واحد قبل الخطة —
    الخطة تُنفَّذ عند الافتتاح وليس الآن. أما الكريبتو (asset_class = crypto) فسوقه مفتوح 24 ساعة:
@@ -115,7 +117,9 @@ def fallback_text(*, symbol: str, frame_label: str, facts: dict, verdict: dict,
     lv = facts["levels"]
     lines = [
         f"🎯 الخلاصة: {verdict['direction']} — ثقة {verdict['conviction']}% ({verdict['conviction_ar']})",
-        f"📐 {symbol} | الفريم: {frame_label} | السعر: {facts['price']} | آخر شمعة: {facts['last_bar_time']}",
+        f"📐 {symbol} | الفريم: {frame_label} | السعر: {facts['price']}"
+        + (f" (آخر إغلاق {facts['last_closed_price']})" if facts.get("last_closed_price") else "")
+        + f" | آخر شمعة مغلقة: {facts['last_bar_time']}",
         "",
         "🔍 القراءة الفنية:",
         f"• ترتيب المتوسطات: {trend['ema_stack']} (20: {trend['ema_fast']} / 50: {trend['ema_mid']} / 200: {trend['ema_slow']})",

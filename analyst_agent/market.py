@@ -34,11 +34,14 @@ def _step_up(frame: Frame) -> list[Frame]:
 class MarketData:
     symbol: str
     frame: Frame
-    df: pd.DataFrame                     # bars on the requested frame
+    df: pd.DataFrame                     # CLOSED bars on the requested frame
     context_df: pd.DataFrame | None = None   # one frame higher, for alignment
     daily_df: pd.DataFrame | None = None     # always daily, for 52w context
     meta: dict = field(default_factory=dict)
     fallback_note: str | None = None
+    full_df: pd.DataFrame | None = None      # closed bars plus the forming one
+    live_price: float | None = None          # price inside the unclosed bar
+    forming_bar_time: pd.Timestamp | None = None
 
     @property
     def last_close(self) -> float:
@@ -86,6 +89,28 @@ def fetch(symbol: str, frame: Frame) -> pd.DataFrame | None:
     if frame.resample:
         df = _resample(df, frame.resample)
     return df if len(df) >= 5 else None
+
+
+def split_forming(df: pd.DataFrame, frame: Frame):
+    """(closed bars, live price, forming bar's timestamp).
+
+    The last row of an intraday download is the bar being built right now: its
+    volume is a fraction of a full bar's, its close is just the current price,
+    and its shape is not a candle yet. Reading indicators off it is how a
+    normal bar came back as "volume 0.02x average". Signals belong to closed
+    candles; the forming bar is only good for the live price.
+    """
+    if df is None or df.empty:
+        return df, None, None
+    last = df.index[-1]
+    try:
+        ends = last + pd.Timedelta(minutes=frame.minutes)
+        now = pd.Timestamp.now(tz=last.tz) if getattr(last, "tz", None) else pd.Timestamp.utcnow()
+    except Exception:
+        return df, None, None
+    if now >= ends or len(df) < 6:
+        return df, None, None
+    return df.iloc[:-1], float(df["Close"].iloc[-1]), last
 
 
 def _meta(symbol: str) -> dict:
@@ -158,9 +183,13 @@ def load(candidates: list[Candidate] | list[str], frame: Frame,
         ctx = context_frame(used)
         ctx_df = fetch(symbol, ctx) if ctx else None
         daily_df = df if used.key == "1d" else _download(symbol, "1d", "3y")
+        closed, live_price, forming_at = split_forming(df, used)
+        if ctx_df is not None:
+            ctx_df = split_forming(ctx_df, ctx)[0] if ctx else ctx_df
         data = MarketData(
-            symbol=symbol, frame=used, df=df, context_df=ctx_df,
-            daily_df=daily_df, fallback_note=note,
+            symbol=symbol, frame=used, df=closed, context_df=ctx_df,
+            daily_df=daily_df, fallback_note=note, full_df=df,
+            live_price=live_price, forming_bar_time=forming_at,
         )
         data.meta = _meta(symbol) if with_meta else {"symbol": symbol}
         data.meta["fetched_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
