@@ -25,6 +25,9 @@ SYSTEM = """أنت محلل فني محترف بخبرة عشرين سنة في 
 7) اكتب بالعربية الفصحى المبسطة، أرقام إنجليزية، بلا رموز ماركداون معقّدة (لا جداول ولا عناوين #)، ومناسب
    لقراءته في تيليجرام.
 8) لا تكتب إخلاء مسؤولية طويلاً؛ سطر واحد في النهاية يكفي.
+8-أ) انظر verdict.target_eta_bars مقابل verdict.horizon_bars: إن كان الهدف الأول يحتاج شموعاً
+   أكثر من مدة السؤال، قل ذلك صراحة قبل الخطة، واذكر verdict.horizon_target كهدف واقعي ضمن
+   المدة. لا تعد بهدف لا يبلغه السعر في الوقت المسؤول عنه.
 8-ب) إن سأل المستخدم "كم يصل السعر بعد كذا؟" فأجب بالنطاق من verdict.expected_range مع مدة
    technicals.horizon.label، واذكر أنه نطاق احتمالي من ATR لا رقم مؤكد. لا تعطِ رقماً واحداً
    قاطعاً، ولا تخترع نطاقاً غير الموجود في البيانات. وإن وُجد technicals.horizon.session_note
@@ -143,6 +146,10 @@ def fallback_text(*, symbol: str, frame_label: str, facts: dict, verdict: dict,
                   "• مشتق من مدى التذبذب الفعلي (ATR)، احتمالي وليس رقماً مؤكداً."]
         if horizon.get("session_note"):
             lines.append("• " + horizon["session_note"])
+        eta = verdict.get("target_eta_bars")
+        if eta and verdict.get("horizon_bars") and eta > verdict["horizon_bars"]:
+            lines.append(f"• الهدف الأول يحتاج ~{eta} شمعة على الأقل، أي أبعد من هذه المدة — "
+                         f"الواقعي خلالها {verdict.get('horizon_target')}")
     lines.append("")
     if verdict.get("entry"):
         lines += [

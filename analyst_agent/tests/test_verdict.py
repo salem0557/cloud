@@ -180,3 +180,59 @@ def test_an_aligned_divergence_is_not_flagged():
     facts["momentum"]["rsi_divergence"] = "bullish"
     call = V.decide(facts)
     assert not any("معاكس" in c for c in call.conflicts)
+
+
+def _xrp_like(horizon_label="ساعة"):
+    return {
+        "price": 1.341, "frame": "5m", "frame_label": "5 دقائق", "change_pct": -0.1,
+        "horizon": {"label": horizon_label, "bars": 12, "minutes": 60},
+        "trend": {"ema_fast": 1.342, "ema_mid": 1.346, "ema_slow": 1.357,
+                  "ema_stack": "bearish", "price_vs_ema_slow_pct": -1.15,
+                  "price_vs_ema_fast_pct": -0.07, "adx": 38.1, "di_plus": 15.1,
+                  "di_minus": 27.8, "structure": "downtrend", "structure_ar": "هيكل هابط",
+                  "higher_high": False, "higher_low": False, "lower_high": True,
+                  "lower_low": True},
+        "momentum": {"rsi": 43.1, "rsi_prev": 42.1, "macd_hist": -0.0005,
+                     "macd_cross": "none", "rsi_divergence": None},
+        "volatility": {"atr": 0.0012, "percent_b": 20.0, "squeeze": False},
+        "volume": {"relative": 1.0, "obv_direction": "down"},
+        "levels": {"nearest_support": 1.324, "nearest_resistance": 1.348,
+                   "supports": [{"price": 1.324}, {"price": 1.302}],
+                   "resistances": [{"price": 1.348}]},
+        "patterns": [],
+    }
+
+
+def test_a_target_beyond_the_window_is_called_out():
+    """The first target was 14 ATR away while the hour allowed ~2."""
+    call = V.decide(_xrp_like(), horizon_bars=12)
+    assert call.target_eta_bars and call.target_eta_bars > 12
+    assert any("أبعد من ساعة" in c for c in call.conflicts)
+    assert call.horizon_target is not None
+
+
+def test_a_target_inside_the_window_raises_no_warning():
+    facts = _xrp_like()
+    facts["levels"]["supports"] = [{"price": 1.338}]      # one ATR away
+    facts["levels"]["nearest_support"] = 1.338
+    call = V.decide(facts, horizon_bars=12)
+    assert not any("أبعد من" in c for c in call.conflicts)
+
+
+def test_eta_estimates_are_ordered():
+    """Best case is a clean run; the typical case is a random walk, so slower."""
+    call = V.decide(_xrp_like(), horizon_bars=12)
+    assert call.target_eta_typical >= call.target_eta_bars
+
+
+def test_horizon_target_follows_the_side():
+    long_facts = _xrp_like()
+    long_facts["trend"].update(ema_stack="bullish", structure="uptrend",
+                               di_plus=30.0, di_minus=10.0, price_vs_ema_slow_pct=1.2)
+    long_facts["momentum"]["macd_hist"] = 0.0005
+    long_call = V.decide(long_facts, horizon_bars=12)
+    if long_call.side == "long" and long_call.expected_range:
+        assert long_call.horizon_target == long_call.expected_range[1]
+    short_call = V.decide(_xrp_like(), horizon_bars=12)
+    if short_call.side == "short" and short_call.expected_range:
+        assert short_call.horizon_target == short_call.expected_range[0]

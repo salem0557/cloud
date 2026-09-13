@@ -107,3 +107,29 @@ def test_fib_levels_inside_the_swing():
 def test_rsi_survives_a_flat_series():
     flat = pd.Series([5.0] * 60)
     assert I.rsi(flat).notna().all()
+
+
+def test_level_tolerance_scales_with_volatility():
+    """A flat 0.8% band on a quiet $1.34 coin merged every swing into one level."""
+    quiet = I.level_tolerance(price=1.341, atr_value=0.0012)
+    wild = I.level_tolerance(price=1.341, atr_value=0.05)
+    assert quiet < wild
+    assert 0.0015 <= quiet <= 0.01 and 0.0015 <= wild <= 0.01
+
+
+def test_level_tolerance_falls_back_without_atr():
+    from analyst_agent import config
+
+    assert I.level_tolerance(1.0, None) == config.LEVEL_TOLERANCE
+    assert I.level_tolerance(0.0, 0.1) == config.LEVEL_TOLERANCE
+
+
+def test_tighter_tolerance_gives_more_distinct_levels():
+    df = make_df(trend=0.0, seed=41)
+    price = float(df["Close"].iloc[-1])
+    atr_value = float(I.atr(df).iloc[-1])
+    tight = I.levels(df, price, atr_value=atr_value * 0.05)
+    loose = I.levels(df, price, atr_value=atr_value * 20)
+    tight_touches = max((s["touches"] for s in tight["supports"]), default=0)
+    loose_touches = max((s["touches"] for s in loose["supports"]), default=0)
+    assert loose_touches >= tight_touches

@@ -51,6 +51,10 @@ class Verdict:
     reward_pct: float | None = None
     invalidation_ar: str = ""
     expected_range: tuple[float, float] | None = None
+    horizon_bars: int = 10
+    target_eta_bars: int | None = None      # best case: a clean trending run
+    target_eta_typical: int | None = None   # random-walk estimate
+    horizon_target: float | None = None     # what is reachable inside the window
     conflicts: list[str] = field(default_factory=list)
     plan_valid: bool = True
 
@@ -65,6 +69,10 @@ class Verdict:
             "rr": self.rr, "breakeven_rate": self.breakeven_rate,
             "invalidation": self.invalidation_ar,
             "expected_range": list(self.expected_range) if self.expected_range else None,
+            "horizon_bars": self.horizon_bars,
+            "target_eta_bars": self.target_eta_bars,
+            "target_eta_typical": self.target_eta_typical,
+            "horizon_target": self.horizon_target,
             "conflicts": self.conflicts,
             "signals": [{"name": s.name, "points": s.points, "weight": s.weight,
                          "note": s.note_ar} for s in self.signals],
@@ -378,6 +386,23 @@ def decide(facts: dict, context: dict | None = None, horizon_bars: int = 10) -> 
     spread = atr * math.sqrt(horizon_bars)
     expected = (_r(price + drift - spread / 2, price), _r(price + drift + spread / 2, price))
 
+    # Can the first target even be reached inside the window that was asked
+    # about? A plan whose target needs sixteen hours answers a different
+    # question than "كم يوصل بعد ساعة؟", and saying so is the difference
+    # between a miss and a target that was never in reach.
+    eta_bars = eta_typical = horizon_target = None
+    if plan["targets"] and plan["entry"] and atr > 0:
+        distance = abs(plan["targets"][0] - plan["entry"])
+        eta_bars = max(1, math.ceil(distance / atr))
+        eta_typical = max(1, int(round((distance / atr) ** 2)))
+        horizon_target = expected[1] if side == "long" else expected[0]
+        if eta_bars > horizon_bars:
+            label = (facts.get("horizon") or {}).get("label") or f"{horizon_bars} شمعة"
+            conflicts.append(
+                f"الهدف الأول يبعد {distance / atr:.0f}× ATR ويحتاج {eta_bars} شمعة على "
+                f"الأقل (غالباً أكثر) — أبعد من {label}. الواقعي خلال هذه المدة هو "
+                f"{_r(horizon_target, price)} تقريباً، والهدف الكامل يحتاج وقتاً أطول")
+
     return Verdict(
         direction=direction, side=side, score=score, conviction=conviction,
         conviction_ar=_conviction_label(conviction), signals=signals,
@@ -385,6 +410,8 @@ def decide(facts: dict, context: dict | None = None, horizon_bars: int = 10) -> 
         targets=plan["targets"], rr=plan["rr"], breakeven_rate=plan["breakeven"],
         risk_pct=plan["risk_pct"], reward_pct=plan["reward_pct"],
         invalidation_ar=plan["invalidation"], expected_range=expected,
+        horizon_bars=horizon_bars, target_eta_bars=eta_bars,
+        target_eta_typical=eta_typical, horizon_target=horizon_target,
         conflicts=conflicts, plan_valid=side != "none",
     )
 

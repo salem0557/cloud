@@ -119,10 +119,24 @@ def cluster_levels(values: list[float], tolerance: float | None = None) -> list[
     return sorted(out, key=lambda d: (-d["touches"], -d["price"]))
 
 
-def levels(df: pd.DataFrame, price: float) -> dict:
+def level_tolerance(price: float, atr_value: float | None) -> float:
+    """How close two swings must be to count as the same level.
+
+    A flat percentage misreads quiet assets: 0.8% of a $1.34 coin is a band
+    wider than its whole week's range, so every swing merged into one "level"
+    touched 150 times — a number that says nothing. Half an ATR scales with
+    whatever the asset actually does, bounded so it stays sane either way.
+    """
+    if not atr_value or price <= 0:
+        return config.LEVEL_TOLERANCE
+    return min(0.01, max(0.0015, 0.5 * atr_value / price))
+
+
+def levels(df: pd.DataFrame, price: float, atr_value: float | None = None) -> dict:
     """Support/resistance around the current price, from swing clusters."""
     highs, lows = swing_points(df)
-    all_levels = cluster_levels([float(v) for v in list(highs) + list(lows)])
+    all_levels = cluster_levels([float(v) for v in list(highs) + list(lows)],
+                                tolerance=level_tolerance(price, atr_value))
     supports = sorted([lv for lv in all_levels if lv["price"] < price * 0.999],
                       key=lambda lv: -lv["price"])
     resistances = sorted([lv for lv in all_levels if lv["price"] > price * 1.001],
@@ -320,7 +334,7 @@ def analyze(df: pd.DataFrame, frame_key: str = "1d",
                  max(float(bb_up.iloc[-1] - bb_low.iloc[-1]), 1e-12)) * 100 \
         if pd.notna(bb_up.iloc[-1]) else None
 
-    lvl = levels(df, price)
+    lvl = levels(df, price, atr_val)
     struct = trend_structure(df)
     fib = fib_levels(df) if config.SHOW_FIB else None
     piv = pivot_points(df)
