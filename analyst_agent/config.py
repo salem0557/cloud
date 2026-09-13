@@ -118,6 +118,10 @@ TG_MEDIA_TIMEOUT = _float("ANALYST_TG_MEDIA_TIMEOUT", 120.0)
 # instance can actually answer before anyone tries it.
 STARTUP_CHECK = _bool("ANALYST_STARTUP_CHECK", True)
 REPLY_LANG = os.getenv("ANALYST_LANG", "ar").strip().lower()
+# simple: a decision in a few lines, short enough to ride under the chart as a
+# caption. full: every indicator spelled out. A message asking for "تفصيلي"
+# gets the long form whatever the default is.
+ANSWER_STYLE = os.getenv("ANALYST_STYLE", "simple").strip().lower()
 
 # --- Automatic recommendations (watcher) ------------------------------------
 # Where alerts are posted. In a forum group this is the group's chat id, with

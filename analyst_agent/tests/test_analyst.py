@@ -39,7 +39,7 @@ def test_text_request_produces_chart_and_analysis(offline):
     assert answer.symbol == "TSLA"
     assert answer.frame_key == "15m"
     assert answer.chart_png[:4] == b"\x89PNG"
-    assert "الخلاصة" in answer.text and "الخطة" in answer.text
+    assert "TSLA" in answer.text and "ثقة" in answer.text
     assert answer.debug["frame_source"] == "مكتوب في الرسالة"
 
 
@@ -133,7 +133,7 @@ def test_saudi_request_says_it_is_out_of_market(offline):
 
 
 def test_session_state_reaches_the_answer(offline):
-    answer = analyst.analyze("حلل TSLA يومي")
+    answer = analyst.analyze("حلل TSLA يومي بالتفصيل")
     assert answer.ok
     assert "حالة السوق" in answer.text
 
@@ -157,7 +157,7 @@ def test_groq_failure_falls_back_to_the_template(offline, monkeypatch):
     answer = analyst.analyze("حلل TSLA يومي")
     assert answer.ok
     assert answer.used_model is None
-    assert "الخلاصة" in answer.text
+    assert "ثقة" in answer.text and "📋" in answer.text
 
 
 def test_groq_text_is_used_when_it_answers(offline, monkeypatch):
@@ -261,7 +261,7 @@ def test_daily_frames_are_not_clipped():
 def test_horizon_reaches_the_answer(offline, monkeypatch):
     answer = analyst.analyze("NVDA على فريم 5 دقايق كم يوصل بعد ساعة؟")
     assert answer.ok
-    assert "النطاق المتوقع" in answer.text
+    assert "🔮" in answer.text          # the projection line
     assert "ساعة" in answer.text
 
 
@@ -285,3 +285,30 @@ def test_a_confident_non_chart_is_still_silent(offline, monkeypatch):
 def test_without_a_key_group_photos_stay_silent(offline, monkeypatch):
     monkeypatch.setattr(config, "GROQ_API_KEY", "")
     assert analyst.analyze("شوفوا", image=b"\x89PNG", addressed=False).silent is True
+
+
+def test_the_default_answer_is_short_enough_for_a_caption(offline):
+    """The whole read should ride under the chart as one message."""
+    answer = analyst.analyze("BTC-USD على فريم 30 دقيقة")
+    assert answer.ok
+    assert len(answer.text) <= 1024
+    assert "EMA fast" not in answer.text and "lower_low" not in answer.text
+
+
+def test_the_short_answer_leads_with_the_decision(offline):
+    answer = analyst.analyze("NVDA يومي")
+    first = answer.text.splitlines()[0]
+    assert "ثقة" in first
+    assert any(mark in answer.text for mark in ("✅", "⚠️", "⛔", "⏸️"))
+
+
+def test_asking_for_detail_returns_the_long_form(offline):
+    short = analyst.analyze("NVDA يومي")
+    detailed = analyst.analyze("NVDA يومي بالتفصيل")
+    assert len(detailed.text) > len(short.text)
+    assert "القراءة الفنية" in detailed.text
+
+
+def test_full_style_can_be_the_default(offline, monkeypatch):
+    monkeypatch.setattr(config, "ANSWER_STYLE", "full")
+    assert "القراءة الفنية" in analyst.analyze("NVDA يومي").text

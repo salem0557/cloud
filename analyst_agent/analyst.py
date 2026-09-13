@@ -275,12 +275,15 @@ def _write_analysis(*, symbol, meta, requested, used, facts, context_facts,
         verdict=verdict, news=news, chart_read=read.to_dict() if read else None,
         fallback_note=note,
     )
+    detailed = config.ANSWER_STYLE == "full" or prompts.wants_detail(question)
     if config.GROQ_API_KEY:
         try:
             model = groq_client.resolve_model("text")
-            text = groq_client.chat(prompts.build_messages(payload, question), kind="text",
-                                    model=model)
-            if text and len(text) > 120:
+            text = groq_client.chat(
+                prompts.build_messages(payload, question,
+                                       style="full" if detailed else "simple"),
+                kind="text", model=model)
+            if text and len(text) > (60 if not detailed else 120):
                 if note and note not in text:
                     text += f"\n\nℹ️ {note}"
                 return text, model
@@ -289,5 +292,6 @@ def _write_analysis(*, symbol, meta, requested, used, facts, context_facts,
             log.warning("Groq analysis failed: %s", exc)
         except Exception:
             log.exception("Groq analysis crashed")
-    return prompts.fallback_text(symbol=symbol, frame_label=used.label_ar, facts=facts,
-                                 verdict=verdict, news=news, note=note), None
+    writer = prompts.fallback_text if detailed else prompts.simple_text
+    return writer(symbol=symbol, frame_label=used.label_ar, facts=facts,
+                  verdict=verdict, news=news, note=note), None

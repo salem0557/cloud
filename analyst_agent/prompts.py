@@ -62,6 +62,31 @@ QUESTION_HINT = """سؤال المستخدم المحدد: "{question}"
 أجب عليه في أول سطرين بشكل مباشر، ثم أكمل الهيكل المطلوب."""
 
 
+SYSTEM_SIMPLE = """أنت محلل فني محترف يكتب لمتداول مشغول في قروب تيليجرام.
+مهمتك: قرار واضح في أقل عدد كلمات. الأرقام كلها من JSON المرفق — يمنع اختراع أي رقم،
+والحكم في verdict محسوب مسبقاً فلا تغيّره.
+
+اكتب بهذا الشكل بالضبط، بلا أي إضافة ولا مقدمة ولا خاتمة، وبحد أقصى 12 سطراً:
+
+<🔴 أو 🟢 أو ⚪> <الاتجاه> — ثقة <conviction>%
+<الرمز> · <الفريم> · <السعر>
+
+<سطر القرار: ✅ إشارة قوية | ⚠️ إشارة متوسطة، حجم صغير | ⛔ الأفضل الانتظار | ⏸️ عرضي بلا صفقة>
+<إن وُجدت conflicts: نقطة أو نقطتان بأقصر عبارة ممكنة، كل واحدة في سطر يبدأ بـ •>
+
+📋 الخطة: دخول <entry> · ستوب <stop> (<risk_pct>%) · هدف <أول هدف> (<reward_pct>%)
+🔮 خلال <horizon.label>: <expected_range من — إلى>
+📊 لماذا: أربع إشارات بأقصر صياغة، مفصولة بـ ·  (مثال: متوسطات هابطة · ADX 44 · RSI 39 · فوليوم ضعيف)
+<📰 سطر واحد فقط إن وُجد خبر مؤثر، وإلا احذف السطر>
+
+قواعد صارمة:
+- لا تشرح المؤشرات ولا تذكر أسماء الحقول الإنجليزية (EMA fast، DI-minus، lower_low…).
+- الأسعار بفواصل الآلاف وبلا أصفار زائدة.
+- لا تكتب فقرات، فقط الأسطر أعلاه.
+- إن كان الاتجاه عرضياً فاكتب شرط الدخول الذي ننتظره بدل خطة وهمية.
+- لا تنويه ولا إخلاء مسؤولية؛ يُضاف آلياً."""
+
+
 def build_payload(*, symbol: str, meta: dict, requested_frame: str, used_frame: str,
                   facts: dict, context_facts: dict | None, verdict: dict,
                   news: dict | None, chart_read: dict | None,
@@ -93,17 +118,117 @@ def build_payload(*, symbol: str, meta: dict, requested_frame: str, used_frame: 
     return json.dumps(payload, ensure_ascii=False, default=str)
 
 
-def build_messages(payload: str, question: str | None) -> list[dict]:
+DETAIL_WORDS = ("تفصيلي", "بالتفصيل", "تفاصيل", "مفصل", "مطول", "detail", "full")
+
+
+def wants_detail(question: str | None) -> bool:
+    """The long form on request, whatever the configured default is."""
+    if not question:
+        return False
+    low = question.lower()
+    return any(word in low for word in DETAIL_WORDS)
+
+
+def build_messages(payload: str, question: str | None,
+                   style: str | None = None) -> list[dict]:
+    from . import config
+
+    style = style or config.ANSWER_STYLE
+    system = SYSTEM if (style == "full" or wants_detail(question)) else SYSTEM_SIMPLE
     user = ["هذه بيانات السهم/الأصل بالكامل. حلّلها والتزم بالهيكل والقواعد:", payload]
     if question:
         user.insert(0, QUESTION_HINT.format(question=question.strip()[:400]))
     return [
-        {"role": "system", "content": SYSTEM},
+        {"role": "system", "content": system},
         {"role": "user", "content": "\n\n".join(user)},
     ]
 
 
 # --- template fallback ------------------------------------------------------
+def _fmt(value, price: float | None = None) -> str:
+    """A price a human reads: thousands separated, no trailing zeros."""
+    if value is None:
+        return "-"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    reference = abs(price if price is not None else number)
+    digits = 4 if reference < 10 else 2 if reference < 1000 else 0
+    return f"{number:,.{digits}f}"
+
+
+def _action_line(verdict: dict) -> str:
+    """The one line that says what to do, before any number."""
+    if verdict.get("side") == "none" or not verdict.get("entry"):
+        return "⏸️ عرضي — لا صفقة واضحة، انتظر كسر المستوى بإغلاق"
+    conflicts = verdict.get("conflicts") or []
+    weak_rr = (verdict.get("rr") or 0) < 1
+    if len(conflicts) >= 2 or weak_rr:
+        return "⛔ الأفضل الانتظار"
+    if verdict.get("conviction", 0) >= 65 and not conflicts:
+        return "✅ إشارة قوية"
+    return "⚠️ إشارة متوسطة — بحجم صغير"
+
+
+def simple_text(*, symbol: str, frame_label: str, facts: dict, verdict: dict,
+                news: dict | None = None, note: str | None = None) -> str:
+    """The short answer: a decision, a plan, a projection, and why — no essay.
+
+    Kept under Telegram's caption limit on purpose, so the whole read rides
+    under the chart as one message instead of a picture plus a wall of text.
+    """
+    price = facts["price"]
+    arrow = {"long": "🟢", "short": "🔴"}.get(verdict.get("side"), "⚪")
+    lines = [
+        f"{arrow} {verdict['direction']} — ثقة {verdict['conviction']}%",
+        f"{symbol} · {frame_label} · {_fmt(price, price)}",
+        "",
+        _action_line(verdict),
+    ]
+    for conflict in (verdict.get("conflicts") or [])[:2]:
+        short = conflict.split("—")[0].split(":")[0].strip()
+        if len(short) > 58:                       # one line, not a paragraph
+            short = short[:58].rsplit(" ", 1)[0] + "…"
+        lines.append(f"• {short}")
+
+    if verdict.get("entry"):
+        target = (verdict.get("targets") or [None])[0]
+        plan = (f"📋 دخول {_fmt(verdict['entry'], price)} · "
+                f"ستوب {_fmt(verdict['stop'], price)} ({verdict['risk_pct']}%)")
+        if target is not None:
+            plan += f" · هدف {_fmt(target, price)} ({verdict.get('reward_pct')}%)"
+        lines += ["", plan]
+
+    horizon = facts.get("horizon") or {}
+    expected = verdict.get("expected_range")
+    if expected and horizon.get("label"):
+        lines.append(f"🔮 خلال {horizon['label']}: {_fmt(expected[0], price)} – "
+                     f"{_fmt(expected[1], price)}")
+
+    trend = facts["trend"]
+    mom = facts["momentum"]
+    why = [
+        "متوسطات " + {"bullish": "صاعدة", "bearish": "هابطة"}.get(trend["ema_stack"], "متشابكة"),
+        f"ADX {trend['adx']:.0f}" if trend.get("adx") else None,
+        f"RSI {mom['rsi']:.0f}",
+        "فوليوم ضعيف" if facts["volume"].get("dry") else
+        (f"فوليوم {facts['volume']['relative']}×" if facts["volume"].get("relative") else None),
+    ]
+    lines.append("📊 " + " · ".join(w for w in why if w))
+
+    headlines = (news or {}).get("headlines") or []
+    if headlines:
+        lines.append("📰 " + headlines[0]["title"][:110])
+    if note:
+        lines.append("ℹ️ " + note)
+    session_state = facts.get("session") or {}
+    if session_state.get("stale_note"):
+        lines.append("⚠️ البيانات ليست لحظية — تأكد من السعر")
+    return "\n".join(lines)
+
+
+
 def fallback_text(*, symbol: str, frame_label: str, facts: dict, verdict: dict,
                   news: dict | None = None, note: str | None = None) -> str:
     """A full read built from the numbers alone, used when Groq is unavailable.
