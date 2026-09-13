@@ -210,3 +210,56 @@ def test_fallback_template_mentions_every_section():
     for marker in ("الخلاصة", "القراءة الفنية", "المستويات", "ما يلغي السيناريو"):
         assert marker in text
     assert str(facts["price"]) in text
+
+
+def _frame(key="5m"):
+    from analyst_agent import frames
+
+    return frames.get(key)
+
+
+def test_intraday_projection_is_clipped_to_the_close():
+    """At 15:45 ET a stock does not trade for another hour — it trades 15 minutes."""
+    horizon = {"minutes": 60, "bars": 12, "label": "ساعة", "asked": True}
+    limits = analyst._session_limits(
+        horizon, {"asset_class": "us_equity", "phase": "regular",
+                  "minutes_to_close": 15}, _frame())
+    assert limits["bars"] == 3
+    assert limits["minutes"] == 15
+    assert "الإغلاق" in limits["session_note"]
+
+
+def test_a_projection_that_fits_the_session_is_untouched():
+    horizon = {"minutes": 60, "bars": 12, "label": "ساعة", "asked": True}
+    assert analyst._session_limits(
+        horizon, {"asset_class": "us_equity", "phase": "regular",
+                  "minutes_to_close": 180}, _frame()) == {}
+
+
+def test_closed_market_says_the_range_is_for_the_next_session():
+    limits = analyst._session_limits(
+        {"minutes": 60, "bars": 12, "label": "ساعة"},
+        {"asset_class": "us_equity", "phase": "weekend"}, _frame())
+    assert "الجلسة القادمة" in limits["session_note"]
+    assert "bars" not in limits          # nothing to clip, only to explain
+
+
+def test_crypto_is_never_clipped():
+    """Crypto has no close, so the hour asked for is the hour projected."""
+    assert analyst._session_limits(
+        {"minutes": 60, "bars": 12, "label": "ساعة"},
+        {"asset_class": "crypto", "phase": "crypto_24h"}, _frame()) == {}
+
+
+def test_daily_frames_are_not_clipped():
+    assert analyst._session_limits(
+        {"minutes": 4320, "bars": 3, "label": "3 أيام"},
+        {"asset_class": "us_equity", "phase": "regular", "minutes_to_close": 15},
+        _frame("1d")) == {}
+
+
+def test_horizon_reaches_the_answer(offline, monkeypatch):
+    answer = analyst.analyze("NVDA على فريم 5 دقايق كم يوصل بعد ساعة؟")
+    assert answer.ok
+    assert "النطاق المتوقع" in answer.text
+    assert "ساعة" in answer.text

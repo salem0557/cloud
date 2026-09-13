@@ -166,12 +166,15 @@ def analyze(caption: str | None = None, image: bytes | None = None,
     horizon_bars = 10
     if horizon_minutes:
         horizon_bars = max(1, min(200, round(horizon_minutes / used.minutes)))
-    facts["horizon"] = {
+    horizon = {
         "minutes": horizon_minutes or horizon_bars * used.minutes,
         "bars": horizon_bars,
         "label": frames.humanise_minutes(horizon_minutes or horizon_bars * used.minutes),
         "asked": bool(horizon_minutes),
     }
+    horizon.update(_session_limits(horizon, facts.get("session") or {}, used))
+    facts["horizon"] = horizon
+    horizon_bars = horizon["bars"]
     call = verdict_mod.decide(facts, context_facts, horizon_bars=horizon_bars)
     verdict_dict = call.to_dict()
 
@@ -201,6 +204,32 @@ def analyze(caption: str | None = None, image: bytes | None = None,
                "bars": data.bars, "score": round(call.score, 1),
                "vision": read.to_dict() if read else None},
     )
+
+
+def _session_limits(horizon: dict, session: dict, frame) -> dict:
+    """Clip an intraday projection to the trading day.
+
+    A stock does not trade for the next hour at 15:45 ET — it trades for
+    fifteen minutes and then gaps overnight. Projecting ATR across bars that
+    will never print is how a reasonable-looking range becomes wrong. Crypto,
+    which never closes, is left alone.
+    """
+    if session.get("asset_class") != "us_equity" or frame.minutes >= 1440:
+        return {}
+    if session.get("phase") != "regular":
+        return {"session_note": "السوق مغلق الآن — النطاق يخص الجلسة القادمة، "
+                                "ولا يشمل الفتحة السعرية عند الافتتاح"}
+    remaining = session.get("minutes_to_close")
+    if not remaining or remaining >= horizon["minutes"]:
+        return {}
+    capped_bars = max(1, int(remaining // frame.minutes))
+    return {
+        "bars": capped_bars,
+        "minutes": remaining,
+        "label": frames.humanise_minutes(int(remaining)),
+        "session_note": (f"يتبقى {int(remaining)} دقيقة على إغلاق السوق، "
+                         f"فالنطاق محسوب حتى الإغلاق لا لكامل المدة المطلوبة"),
+    }
 
 
 def vision_read(image: bytes):

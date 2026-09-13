@@ -27,7 +27,8 @@ SYSTEM = """أنت محلل فني محترف بخبرة عشرين سنة في 
 8) لا تكتب إخلاء مسؤولية طويلاً؛ سطر واحد في النهاية يكفي.
 8-ب) إن سأل المستخدم "كم يصل السعر بعد كذا؟" فأجب بالنطاق من verdict.expected_range مع مدة
    technicals.horizon.label، واذكر أنه نطاق احتمالي من ATR لا رقم مؤكد. لا تعطِ رقماً واحداً
-   قاطعاً، ولا تخترع نطاقاً غير الموجود في البيانات.
+   قاطعاً، ولا تخترع نطاقاً غير الموجود في البيانات. وإن وُجد technicals.horizon.session_note
+   فاذكره: النطاق لا يشمل ما بعد إغلاق السوق ولا الفتحة السعرية في الافتتاح.
 9) تخصصك السوق الأمريكي والكريبتو. انظر إلى technicals.session: إن كان السوق مغلقاً أو في
    البري ماركت/الأفتر أورز، أو كانت آخر شمعة متأخرة (stale_note)، فقل ذلك بسطر واحد قبل الخطة —
    الخطة تُنفَّذ عند الافتتاح وليس الآن. أما الكريبتو (asset_class = crypto) فسوقه مفتوح 24 ساعة:
@@ -140,6 +141,8 @@ def fallback_text(*, symbol: str, frame_label: str, facts: dict, verdict: dict,
         lines += ["", f"🔮 النطاق المتوقع خلال {horizon['label']} "
                       f"({horizon.get('bars')} شمعة): {expected[0]} – {expected[1]}",
                   "• مشتق من مدى التذبذب الفعلي (ATR)، احتمالي وليس رقماً مؤكداً."]
+        if horizon.get("session_note"):
+            lines.append("• " + horizon["session_note"])
     lines.append("")
     if verdict.get("entry"):
         lines += [
