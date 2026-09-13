@@ -267,3 +267,73 @@ def test_timeouts_are_configured(monkeypatch):
     app = telebot.build()
     request = app.bot._request[1]          # the non-getUpdates request object
     assert request._client.timeout.read >= config.TG_READ_TIMEOUT - 0.1
+
+
+class _Posted:
+    message_id = 999
+
+
+class _LinkingMessage(_Message):
+    async def reply_photo(self, photo=None, caption=None, **kwargs):
+        await super().reply_photo(photo=photo, caption=caption, **kwargs)
+        return _Posted()
+
+    async def reply_text(self, text, **kwargs):
+        await super().reply_text(text, **kwargs)
+        return _Posted()
+
+
+def test_send_returns_the_posted_message_for_linking():
+    message = _LinkingMessage()
+    posted = _run(telebot._send(types.SimpleNamespace(effective_message=message),
+                                _answer("تحليل قصير")))
+    assert posted is not None and posted.message_id == 999
+
+
+class _ReportingBot:
+    def __init__(self):
+        self.sent = []
+
+    async def send_message(self, chat_id, text, **kwargs):
+        self.sent.append((chat_id, text, kwargs))
+
+
+def test_followup_replies_to_the_original_call(monkeypatch):
+    from analyst_agent import journal
+
+    call = journal.Call(id="abc", at="2026-09-13T10:00:00+00:00", symbol="XRP-USD",
+                        frame="5m", side="short", entry=1.341, stop=1.345,
+                        targets=[1.324], conviction=70, outcome=journal.TARGET,
+                        r_multiple=4.25, chat_id=-1001, message_id=555, topic_id=1773)
+    marked = []
+    monkeypatch.setattr(journal, "evaluate", lambda: [])
+    monkeypatch.setattr(journal, "pending_notifications", lambda: [call])
+    monkeypatch.setattr(journal, "mark_notified", marked.extend)
+    bot = _ReportingBot()
+    _run(telebot.followup_job(types.SimpleNamespace(bot=bot)))
+    chat_id, text, kwargs = bot.sent[0]
+    assert chat_id == -1001
+    assert kwargs["reply_to_message_id"] == 555
+    assert kwargs["message_thread_id"] == 1773
+    assert "تحقق الهدف الأول" in text
+    assert marked == ["abc"]
+
+
+def test_a_failed_report_is_not_retried_forever(monkeypatch):
+    from analyst_agent import journal
+
+    call = journal.Call(id="gone", at="2026-09-13T10:00:00+00:00", symbol="X",
+                        frame="5m", side="long", entry=1.0, stop=0.9, targets=[1.2],
+                        conviction=70, outcome=journal.STOP, r_multiple=-1.0,
+                        chat_id=-1, message_id=1)
+    marked = []
+
+    class Failing:
+        async def send_message(self, *a, **k):
+            raise RuntimeError("message deleted")
+
+    monkeypatch.setattr(journal, "evaluate", lambda: [])
+    monkeypatch.setattr(journal, "pending_notifications", lambda: [call])
+    monkeypatch.setattr(journal, "mark_notified", marked.extend)
+    _run(telebot.followup_job(types.SimpleNamespace(bot=Failing())))
+    assert marked == ["gone"]

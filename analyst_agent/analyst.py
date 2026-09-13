@@ -46,6 +46,7 @@ class Answer:
     frame_key: str | None = None
     used_model: str | None = None
     silent: bool = False      # send nothing at all (the photo was not a chart)
+    call_id: str | None = None   # journal entry, so the outcome can quote this
     debug: dict = field(default_factory=dict)
 
 
@@ -194,8 +195,10 @@ def analyze(caption: str | None = None, image: bytes | None = None,
 
     # Every call with a real plan goes into the journal, so the hit rate can be
     # measured later instead of argued about.
+    call_id = None
     try:
-        journal.record(symbol=data.symbol, frame=used.key, verdict=verdict_dict)
+        entry = journal.record(symbol=data.symbol, frame=used.key, verdict=verdict_dict)
+        call_id = entry.id if entry else None
     except Exception:
         log.warning("journal record failed", exc_info=True)
 
@@ -222,7 +225,7 @@ def analyze(caption: str | None = None, image: bytes | None = None,
                 f"{call.direction} (ثقة {call.conviction}%)")
     return Answer(
         ok=True, text=text, headline=headline, chart_png=png, symbol=data.symbol,
-        frame_key=used.key, used_model=model_used,
+        frame_key=used.key, used_model=model_used, call_id=call_id,
         debug={"symbol_source": symbol_source, "frame_source": frame_source,
                "requested_frame": frame.key, "used_frame": used.key,
                "bars": data.bars, "score": round(call.score, 1),

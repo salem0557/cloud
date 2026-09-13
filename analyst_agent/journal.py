@@ -45,6 +45,11 @@ class Call:
     r_multiple: float | None = None
     note: str = ""
     conflicts: list[str] = field(default_factory=list)
+    # Where the call was posted, so the outcome can quote it.
+    chat_id: int | None = None
+    message_id: int | None = None
+    topic_id: int | None = None
+    notified: bool = False
 
 
 def path() -> pathlib.Path:
@@ -118,6 +123,51 @@ def bars_after(call: Call, df):
     elif start.tz is not None:
         start = start.tz_convert("UTC").tz_localize(None)
     return df[df.index > start]
+
+
+def attach_message(call_id: str, chat_id: int, message_id: int,
+                   topic_id: int | None = None) -> None:
+    """Remember where a call was posted — the message its outcome will quote."""
+    calls = _read()
+    for call in calls:
+        if call.id == call_id:
+            call.chat_id, call.message_id, call.topic_id = chat_id, message_id, topic_id
+            _write(calls)
+            return
+
+
+def pending_notifications() -> list[Call]:
+    """Resolved calls that were posted somewhere and not yet reported back."""
+    wanted = {TARGET, STOP} | ({UNDECIDED} if config.FOLLOWUP_UNDECIDED else set())
+    return [c for c in _read()
+            if c.outcome in wanted and c.message_id and not c.notified]
+
+
+def mark_notified(call_ids: list[str]) -> None:
+    calls = _read()
+    ids = set(call_ids)
+    for call in calls:
+        if call.id in ids:
+            call.notified = True
+    _write(calls)
+
+
+def outcome_message(call: Call) -> str:
+    """What to say under the original call when it resolves."""
+    side_ar = "شراء" if call.side == "long" else "بيع"
+    target = call.targets[0] if call.targets else None
+    if call.outcome == TARGET and target is not None:
+        move = abs(target - call.entry) / call.entry * 100
+        return (f"✅ تحقق الهدف الأول — {call.symbol}\n"
+                f"صفقة {side_ar} من {call.entry} إلى {target} (+{move:.2f}%)\n"
+                f"الربح {call.r_multiple}R. أغلق جزءاً وانقل الستوب لنقطة الدخول للباقي.")
+    if call.outcome == STOP:
+        move = abs(call.stop - call.entry) / call.entry * 100
+        return (f"🛑 وصل الستوب — {call.symbol}\n"
+                f"صفقة {side_ar} من {call.entry} إلى {call.stop} (-{move:.2f}%)\n"
+                f"اخرج. الخسارة 1R وهي محسوبة في الخطة من البداية.")
+    return (f"⌛ انتهت المدة — {call.symbol}\n"
+            f"لا الهدف تحقق ولا الستوب ضُرب. النتيجة {call.r_multiple}R.")
 
 
 def _judge(call: Call, df) -> tuple[str, float | None, str]:

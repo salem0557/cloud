@@ -130,6 +130,28 @@ async def run_watch(client, force: bool = False) -> list[watcher.Alert]:
     return sent
 
 
+async def _followup_loop(client) -> None:
+    """Report each call's outcome as a reply to the call itself."""
+    await asyncio.sleep(120)
+    while True:
+        try:
+            await asyncio.to_thread(journal.evaluate)
+            pending = await asyncio.to_thread(journal.pending_notifications)
+            done = []
+            for call in pending:
+                try:
+                    await client.send_message(call.chat_id, journal.outcome_message(call),
+                                              reply_to=call.message_id)
+                except Exception:
+                    log.warning("could not report %s", call.symbol, exc_info=True)
+                done.append(call.id)
+            if done:
+                await asyncio.to_thread(journal.mark_notified, done)
+        except Exception:
+            log.exception("follow-up loop failed")
+        await asyncio.sleep(max(60, config.FOLLOWUP_INTERVAL_MIN * 60))
+
+
 async def _watch_loop(client) -> None:
     """The recommendations topic fills itself while the userbot runs."""
     await asyncio.sleep(60)
@@ -141,12 +163,11 @@ async def _watch_loop(client) -> None:
         await asyncio.sleep(max(60, config.WATCH_INTERVAL_MIN * 60))
 
 
-async def _attempt(what: str, send) -> bool:
-    """One send, retried once — a timeout on the chart must not cost the text."""
+async def _attempt(what: str, send):
+    """One send, retried once. Returns the sent message, True, or False."""
     for attempt in (1, 2):
         try:
-            await send()
-            return True
+            return await send() or True
         except Exception as exc:
             log.warning("%s failed (try %d): %s: %s", what, attempt,
                         type(exc).__name__, exc)
@@ -155,11 +176,20 @@ async def _attempt(what: str, send) -> bool:
     return False
 
 
-async def _send_answer(event, answer: analyst.Answer) -> None:
+def incoming_topic(event) -> int | None:
+    reply_to = getattr(event.message, "reply_to", None)
+    if not getattr(reply_to, "forum_topic", False):
+        return None
+    return (getattr(reply_to, "reply_to_top_id", None)
+            or getattr(reply_to, "reply_to_msg_id", None))
+
+
+async def _send_answer(event, answer: analyst.Answer):
     """Chart then analysis, as independent sends: a slow upload must not cost
-    the reader the reading."""
+    the reader the reading. Returns the posted message when there is one."""
     text = answer.text.strip()
     fits_caption = bool(answer.chart_png) and len(text) <= gate.CAPTION_LIMIT
+    posted = None
 
     if answer.chart_png:
         from io import BytesIO
@@ -167,12 +197,18 @@ async def _send_answer(event, answer: analyst.Answer) -> None:
         image = BytesIO(answer.chart_png)
         image.name = f"{(answer.symbol or 'chart')}_{answer.frame_key or ''}.png".replace("/", "-")
         caption = text if fits_caption else answer.headline
-        if not await _attempt("send chart", lambda: event.reply(caption, file=image)):
+        sent = await _attempt("send chart", lambda: event.reply(caption, file=image))
+        if not sent:
             fits_caption = False
+        elif sent is not True:
+            posted = sent
 
     if not fits_caption:
         for chunk in gate.chunks(text):
-            await _attempt("send analysis", lambda chunk=chunk: event.reply(chunk))
+            sent = await _attempt("send analysis", lambda chunk=chunk: event.reply(chunk))
+            if posted is None and sent is not True:
+                posted = sent
+    return posted
 
 
 def build_client() -> TelegramClient:
@@ -264,7 +300,11 @@ async def main() -> None:
                                                      None, True, addressed)
             if answer.silent:
                 return      # the photo was not a chart: no reply at all
-            await _send_answer(event, answer)
+            posted = await _send_answer(event, answer)
+            if posted is not None and answer.call_id:
+                await asyncio.to_thread(
+                    journal.attach_message, answer.call_id, event.chat_id,
+                    getattr(posted, "id", None), incoming_topic(event))
         except Exception as exc:
             log.exception("handler failed")
             try:
@@ -277,6 +317,9 @@ async def main() -> None:
         for line in doctor.report(doctor.run_all(quick=True)).splitlines():
             if line.strip():
                 log.info("%s", line)
+    if config.FOLLOWUP_ENABLED:
+        asyncio.create_task(_followup_loop(client))
+        log.info("follow-up on: every %s min", config.FOLLOWUP_INTERVAL_MIN)
     if watcher.enabled():
         asyncio.create_task(_watch_loop(client))
         log.info("automatic recommendations on: every %s min -> %s",

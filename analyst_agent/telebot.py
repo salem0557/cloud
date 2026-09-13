@@ -79,12 +79,14 @@ async def _photo_bytes(update: Update) -> bytes | None:
     return None
 
 
-async def _attempt(what: str, send) -> bool:
-    """One send, retried once — a timeout on the chart must not cost the text."""
+async def _attempt(what: str, send):
+    """One send, retried once — a timeout on the chart must not cost the text.
+
+    Returns the sent message (so it can be quoted later) or None.
+    """
     for attempt in (1, 2):
         try:
-            await send()
-            return True
+            return await send() or True
         except Exception as exc:
             log.warning("%s failed (try %d): %s: %s", what, attempt,
                         type(exc).__name__, exc)
@@ -93,7 +95,7 @@ async def _attempt(what: str, send) -> bool:
     return False
 
 
-async def _send(update: Update, answer: analyst.Answer) -> None:
+async def _send(update: Update, answer: analyst.Answer):
     """Chart then analysis, as independent sends.
 
     They are deliberately not chained: a slow upload used to raise before the
@@ -102,6 +104,7 @@ async def _send(update: Update, answer: analyst.Answer) -> None:
     message = update.effective_message
     text = answer.text.strip()
     fits_caption = bool(answer.chart_png) and len(text) <= gate.CAPTION_LIMIT
+    posted = None
 
     if answer.chart_png:
         image = BytesIO(answer.chart_png)
@@ -111,10 +114,16 @@ async def _send(update: Update, answer: analyst.Answer) -> None:
             photo=image, caption=caption))
         if not sent:
             fits_caption = False          # the caption never arrived: send it as text
+        elif sent is not True:
+            posted = sent
 
     if not fits_caption:
         for chunk in gate.chunks(text):
-            await _attempt("send analysis", lambda chunk=chunk: message.reply_text(chunk))
+            sent = await _attempt("send analysis",
+                                  lambda chunk=chunk: message.reply_text(chunk))
+            if posted is None and sent is not True:
+                posted = sent
+    return posted
 
 
 async def _may_manage(update: Update, context: ContextTypes.DEFAULT_TYPE,
@@ -175,20 +184,26 @@ def _following_text(_target) -> list[str]:
 
 
 async def post_alert(bot, alert: watcher.Alert) -> bool:
-    """Send one automatic recommendation into the alerts topic."""
+    """Send one automatic recommendation, and remember where it landed."""
     target = watcher.destination()
     if not target:
         return False
     chat_id, topic_id = target
+    posted = None
     caption = alert.text if len(alert.text) <= gate.CAPTION_LIMIT else alert.text[:1000] + "…"
     try:
         if alert.chart_png:
             image = BytesIO(alert.chart_png)
             image.name = f"{alert.symbol}_{alert.frame_key}.png"
-            await bot.send_photo(chat_id, photo=image, caption=caption,
-                                 message_thread_id=topic_id)
+            posted = await bot.send_photo(chat_id, photo=image, caption=caption,
+                                          message_thread_id=topic_id)
         else:
-            await bot.send_message(chat_id, alert.text, message_thread_id=topic_id)
+            posted = await bot.send_message(chat_id, alert.text,
+                                            message_thread_id=topic_id)
+        call = await asyncio.to_thread(watcher.journal_alert, alert)
+        if posted is not None and call is not None:
+            await asyncio.to_thread(journal.attach_message, call.id, chat_id,
+                                    posted.message_id, topic_id)
         return True
     except Exception:
         log.exception("failed to post alert for %s", alert.symbol)
@@ -200,13 +215,38 @@ async def run_watch(context: ContextTypes.DEFAULT_TYPE, force: bool = False) -> 
     alerts = await asyncio.to_thread(watcher.scan, None, None, force)
     sent = []
     for alert in alerts:
-        if await post_alert(context.bot, alert):
+        posted = await post_alert(context.bot, alert)
+        if posted:
             sent.append(alert)
     if sent:
         await asyncio.to_thread(watcher.mark_posted, sent)
         log.info("posted %d recommendation(s): %s", len(sent),
                  ", ".join(a.symbol for a in sent))
     return sent
+
+
+async def followup_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Tell each call how it ended, as a reply to the call itself."""
+    try:
+        await asyncio.to_thread(journal.evaluate)
+        pending = await asyncio.to_thread(journal.pending_notifications)
+        done = []
+        for call in pending:
+            try:
+                await context.bot.send_message(
+                    call.chat_id, journal.outcome_message(call),
+                    reply_to_message_id=call.message_id,
+                    message_thread_id=call.topic_id,
+                )
+                done.append(call.id)
+            except Exception:
+                log.warning("could not report %s", call.symbol, exc_info=True)
+                done.append(call.id)      # a deleted message must not loop forever
+        if done:
+            await asyncio.to_thread(journal.mark_notified, done)
+            log.info("reported %d outcome(s)", len(done))
+    except Exception:
+        log.exception("follow-up job failed")
 
 
 async def watch_job(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -279,7 +319,12 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 gate.addressed_explicitly(incoming))
         if answer.silent:
             return          # the photo was not a chart: no reply at all
-        await _send(update, answer)
+        posted = await _send(update, answer)
+        # Remember where the call was posted so its outcome can quote it.
+        if posted is not None and answer.call_id:
+            await asyncio.to_thread(
+                journal.attach_message, answer.call_id, incoming.chat_id,
+                posted.message_id, incoming.topic_id)
     except Exception as exc:
         log.exception("handler failed")
         try:
@@ -331,6 +376,11 @@ def build() -> Application:
                  config.WATCH_INTERVAL_MIN, watcher.destination())
     elif config.WATCH_ENABLED:
         log.info("automatic recommendations idle: no ANALYST_ALERTS_CHAT configured")
+    if config.FOLLOWUP_ENABLED and app.job_queue:
+        app.job_queue.run_repeating(
+            followup_job, interval=config.FOLLOWUP_INTERVAL_MIN * 60,
+            first=120, name="followup")
+        log.info("follow-up on: every %s min", config.FOLLOWUP_INTERVAL_MIN)
     # One handler: photos, captions and plain text all go through the same gate.
     app.add_handler(MessageHandler(
         (filters.PHOTO | filters.TEXT | filters.CAPTION) & ~filters.StatusUpdate.ALL,

@@ -214,6 +214,20 @@ def scan(symbols: list[str] | None = None, frame_key: str | None = None,
     return alerts
 
 
+def journal_alert(alert: Alert):
+    """Record a posted alert, returning its journal entry (or None).
+
+    Called after the send succeeds, so an alert that never reached the group
+    does not end up in the hit-rate statistics.
+    """
+    try:
+        return journal.record(symbol=alert.symbol, frame=alert.frame_key,
+                              verdict=alert.verdict, source="auto")
+    except Exception:
+        log.warning("journal record failed for %s", alert.symbol, exc_info=True)
+        return None
+
+
 def mark_posted(alerts: list[Alert]) -> None:
     """Record what went out, so the cooldown and the daily cap mean something."""
     state = _roll_day(load_state())
@@ -221,11 +235,6 @@ def mark_posted(alerts: list[Alert]) -> None:
     for alert in alerts:
         posted[alert.symbol] = {"ts": time.time(), "side": alert.side,
                                 "conviction": alert.conviction}
-        try:
-            journal.record(symbol=alert.symbol, frame=alert.frame_key,
-                           verdict=alert.verdict, source="auto")
-        except Exception:
-            log.warning("journal record failed for %s", alert.symbol, exc_info=True)
     state["count"] = state.get("count", 0) + len(alerts)
     save_state(state)
 

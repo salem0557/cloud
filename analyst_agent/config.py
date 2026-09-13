@@ -169,6 +169,13 @@ JOURNAL_FILE = os.getenv("ANALYST_JOURNAL_FILE", "analyst_journal.jsonl").strip(
 JOURNAL_MAX_BARS = _int("ANALYST_JOURNAL_MAX_BARS", 60)
 JOURNAL_MAX_RECORDS = _int("ANALYST_JOURNAL_MAX_RECORDS", 2000)
 
+# --- follow-up: reply to the original call when it resolves ------------------
+FOLLOWUP_ENABLED = _bool("ANALYST_FOLLOWUP", True)
+FOLLOWUP_INTERVAL_MIN = _int("ANALYST_FOLLOWUP_INTERVAL", 10)
+# An undecided call (neither level reached inside the window) is usually not
+# worth a message; turn this on to hear about those too.
+FOLLOWUP_UNDECIDED = _bool("ANALYST_FOLLOWUP_UNDECIDED", False)
+
 # --- Market data ------------------------------------------------------------
 DEFAULT_FRAME = os.getenv("ANALYST_DEFAULT_FRAME", "1d").strip()
 CHART_BARS = _int("ANALYST_CHART_BARS", 140)

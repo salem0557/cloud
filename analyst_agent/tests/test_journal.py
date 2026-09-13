@@ -146,3 +146,61 @@ def test_a_torn_line_does_not_lose_the_history():
 def test_journal_can_be_switched_off(monkeypatch):
     monkeypatch.setattr(config, "JOURNAL_ENABLED", False)
     assert journal.record(symbol="X", frame="5m", verdict=_plan()) is None
+
+
+def test_a_call_remembers_where_it_was_posted():
+    call = _record("XRP-USD")
+    journal.attach_message(call.id, chat_id=-1001, message_id=555, topic_id=1773)
+    stored = journal._read()[0]
+    assert (stored.chat_id, stored.message_id, stored.topic_id) == (-1001, 555, 1773)
+
+
+def test_only_resolved_and_posted_calls_are_reported(monkeypatch):
+    open_call = _record("OPEN")
+    journal.attach_message(open_call.id, -1, 1)
+    resolved_unposted = _record("UNPOSTED")
+    monkeypatch.setattr(journal.market, "fetch", lambda s, f: _bars(0.99, 1.20))
+    journal.evaluate()
+    pending = journal.pending_notifications()
+    assert {c.symbol for c in pending} == {"OPEN"}      # UNPOSTED has no message
+
+
+def test_a_reported_call_is_not_reported_twice(monkeypatch):
+    call = _record("WIN")
+    journal.attach_message(call.id, -1001, 555)
+    monkeypatch.setattr(journal.market, "fetch", lambda s, f: _bars(0.99, 1.20))
+    journal.evaluate()
+    assert len(journal.pending_notifications()) == 1
+    journal.mark_notified([call.id])
+    assert journal.pending_notifications() == []
+
+
+def test_undecided_is_quiet_unless_asked(monkeypatch):
+    call = _record("FLAT")
+    journal.attach_message(call.id, -1001, 555)
+    monkeypatch.setattr(journal.market, "fetch", lambda s, f: _bars(0.995, 1.005))
+    journal.evaluate()
+    assert journal.pending_notifications() == []
+    monkeypatch.setattr(config, "FOLLOWUP_UNDECIDED", True)
+    assert [c.symbol for c in journal.pending_notifications()] == ["FLAT"]
+
+
+def test_the_target_message_says_what_to_do():
+    call = _record("XRP-USD", side="short", entry=1.341, stop=1.345, targets=(1.324,))
+    call.outcome, call.r_multiple = journal.TARGET, 4.25
+    text = journal.outcome_message(call)
+    assert "تحقق الهدف الأول" in text and "1.324" in text
+    assert "الستوب لنقطة الدخول" in text
+
+
+def test_the_stop_message_says_get_out():
+    call = _record("XRP-USD", side="short", entry=1.341, stop=1.345, targets=(1.324,))
+    call.outcome, call.r_multiple = journal.STOP, -1.0
+    text = journal.outcome_message(call)
+    assert "وصل الستوب" in text and "اخرج" in text
+
+
+def test_outcome_messages_name_the_side():
+    call = _record("NVDA", side="long", entry=100.0, stop=98.0, targets=(110.0,))
+    call.outcome, call.r_multiple = journal.TARGET, 5.0
+    assert "شراء" in journal.outcome_message(call)
