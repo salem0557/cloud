@@ -160,7 +160,19 @@ def analyze(caption: str | None = None, image: bytes | None = None,
             # Context is a bonus: losing it costs alignment, not the answer.
             log.warning("higher timeframe analysis failed", exc_info=True)
 
-    call = verdict_mod.decide(facts, context_facts)
+    # "كم يوصل بعد ساعة؟" — project over exactly that many bars of this frame,
+    # not over a fixed default that answers a different question.
+    horizon_minutes = frames.parse_horizon(caption)
+    horizon_bars = 10
+    if horizon_minutes:
+        horizon_bars = max(1, min(200, round(horizon_minutes / used.minutes)))
+    facts["horizon"] = {
+        "minutes": horizon_minutes or horizon_bars * used.minutes,
+        "bars": horizon_bars,
+        "label": frames.humanise_minutes(horizon_minutes or horizon_bars * used.minutes),
+        "asked": bool(horizon_minutes),
+    }
+    call = verdict_mod.decide(facts, context_facts, horizon_bars=horizon_bars)
     verdict_dict = call.to_dict()
 
     news = {}

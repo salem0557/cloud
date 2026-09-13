@@ -213,6 +213,69 @@ def parse_label(text: str | None) -> Frame | None:
     return parse(text)
 
 
+HORIZON_PATTERNS: list[tuple[str, int]] = [
+    (r"(?:بعد|خلال|في|ل)\s*(\d+)\s*(?:دقيقه|دقيقة|دقائق|دقايق|د)\b", 1),
+    (r"(?:بعد|خلال|في|ل)\s*(\d+)\s*(?:ساعه|ساعة|ساعات|س)\b", 60),
+    (r"(?:بعد|خلال|في|ل)\s*(\d+)\s*(?:يوم|ايام|أيام)\b", 1440),
+    (r"(?:in|after|within)\s*(\d+)\s*(?:min|mins|minutes?)\b", 1),
+    (r"(?:in|after|within)\s*(\d+)\s*(?:h|hr|hrs|hours?)\b", 60),
+    (r"(?:in|after|within)\s*(\d+)\s*(?:d|days?)\b", 1440),
+]
+
+HORIZON_WORDS: list[tuple[str, int]] = [
+    (r"(?:بعد|خلال)\s*(?:ال)?ربع\s*(?:ساعه|ساعة)", 15),
+    (r"(?:بعد|خلال)\s*(?:ال)?نصف?\s*(?:ساعه|ساعة)", 30),
+    (r"(?:بعد|خلال)\s*ساعتين", 120),
+    (r"(?:بعد|خلال)\s*(?:ال)?(?:ساعه|ساعة)", 60),
+    (r"(?:بعد|خلال)\s*يومين", 2880),
+    (r"(?:بعد|خلال)\s*(?:ال)?يوم(?![ي])|بكره|بكرة|غدا", 1440),
+    (r"(?:نهاية|اخر|آخر)\s*(?:ال)?(?:يوم|جلسه|جلسة)", 240),
+    (r"(?:نهاية|اخر|آخر)\s*(?:ال)?اسبوع", 7200),
+    (r"(?:بعد|خلال)\s*(?:ال)?اسبوع\b", 7200),
+    (r"\bnext\s*hour\b|\bin\s*an?\s*hour\b", 60),
+]
+
+
+def humanise_minutes(minutes: int) -> str:
+    """A duration the reader recognises: "45 دقيقة", "ساعتين", "3 أيام"."""
+    if minutes < 60:
+        return f"{minutes} دقيقة"
+    if minutes < 1440:
+        hours = minutes / 60
+        if abs(hours - 1) < 0.01:
+            return "ساعة"
+        if abs(hours - 2) < 0.01:
+            return "ساعتين"
+        return f"{hours:g} ساعات"
+    days = minutes / 1440
+    if abs(days - 1) < 0.01:
+        return "يوم"
+    if abs(days - 2) < 0.01:
+        return "يومين"
+    return f"{days:g} أيام"
+
+
+def parse_horizon(text: str | None) -> int | None:
+    """How far ahead the user is asking, in minutes ("كم يوصل بعد ساعة؟").
+
+    Separate from `parse()` on purpose: "بعد ساعة" is a horizon, "على فريم
+    ساعة" is a timeframe, and reading one as the other answers a question
+    nobody asked.
+    """
+    if not text:
+        return None
+    t = normalize(text)
+    for pattern, unit in HORIZON_PATTERNS:
+        m = re.search(pattern, t)
+        if m:
+            value = int(m.group(1)) * unit
+            return value if 0 < value <= 43200 else None
+    for pattern, minutes in HORIZON_WORDS:
+        if re.search(pattern, t):
+            return minutes
+    return None
+
+
 def context_frame(frame: Frame) -> Frame | None:
     """The higher timeframe whose trend the read must respect."""
     return FRAMES[frame.context] if frame.context else None

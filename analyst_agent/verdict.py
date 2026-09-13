@@ -219,6 +219,20 @@ def _collect(facts: dict, context: dict | None) -> list[Signal]:
     return signals
 
 
+def _ordered(targets: list[float], entry: float) -> list[float]:
+    """Nearest target first, duplicates dropped.
+
+    An ATR-derived target can land closer than a real level when few levels
+    exist, and an out-of-order list makes the first target — the one the whole
+    risk/reward is measured against — the wrong one.
+    """
+    unique: list[float] = []
+    for target in sorted(targets, key=lambda t: abs(t - entry)):
+        if all(abs(target - kept) > 1e-9 for kept in unique):
+            unique.append(target)
+    return unique
+
+
 def _min_distance(entry: float, distance: float) -> float:
     """Keep the stop outside spread-and-noise range.
 
@@ -255,6 +269,7 @@ def _plan(facts: dict, side: str, atr: float) -> dict:
         targets = [t for t in resistances if t > entry + 0.3 * atr][:3]
         while len(targets) < 2:
             targets.append(entry + (1.5 + len(targets)) * atr)
+        targets = _ordered(targets, entry)
         label = facts.get("frame_label") or facts["frame"]
         invalidation = f"إغلاق شمعة {label} تحت {round(stop, _digits(price))} يلغي السيناريو"
     elif side == "short":
@@ -271,6 +286,7 @@ def _plan(facts: dict, side: str, atr: float) -> dict:
         targets = [t for t in sorted(supports, reverse=True) if t < entry - 0.3 * atr][:3]
         while len(targets) < 2:
             targets.append(entry - (1.5 + len(targets)) * atr)
+        targets = _ordered(targets, entry)
         label = facts.get("frame_label") or facts["frame"]
         invalidation = f"إغلاق شمعة {label} فوق {round(stop, _digits(price))} يلغي السيناريو"
     else:

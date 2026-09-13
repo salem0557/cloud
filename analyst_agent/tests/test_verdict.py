@@ -116,3 +116,43 @@ def test_the_floor_is_configurable(monkeypatch):
     }
     plan = V._plan(facts, "long", atr=0.05)
     assert plan["risk_pct"] >= 0.99
+
+
+def test_targets_are_ordered_nearest_first():
+    """R:R is measured against the first target, so the order is not cosmetic."""
+    facts = {
+        "price": 100.44, "frame": "5m", "frame_label": "5 دقائق",
+        "trend": {"ema_fast": 98.0, "price_vs_ema_fast_pct": 2.5},
+        "levels": {"nearest_support": 99.09, "nearest_resistance": 105.7,
+                   "supports": [{"price": 99.09}],
+                   "resistances": [{"price": 105.7}]},   # only one real level
+    }
+    plan = V._plan(facts, "long", atr=0.93)
+    assert plan["targets"] == sorted(plan["targets"])
+    assert plan["targets"][0] < 105.7          # the ATR target comes first
+    rr = round((plan["targets"][0] - plan["entry"]) / (plan["entry"] - plan["stop"]), 2)
+    assert abs(plan["rr"] - rr) < 0.05         # R:R follows the nearest target
+
+
+def test_short_targets_are_ordered_nearest_first():
+    facts = {
+        "price": 100.0, "frame": "1h", "frame_label": "ساعة",
+        "trend": {"ema_fast": 101.0, "price_vs_ema_fast_pct": -1.0},
+        "levels": {"nearest_support": 90.0, "nearest_resistance": 101.0,
+                   "supports": [{"price": 90.0}], "resistances": [{"price": 101.0}]},
+    }
+    plan = V._plan(facts, "short", atr=1.0)
+    assert plan["targets"] == sorted(plan["targets"], reverse=True)
+    assert plan["targets"][0] > 90.0
+
+
+def test_duplicate_targets_are_dropped():
+    assert V._ordered([100.0, 100.0, 102.0], 99.0) == [100.0, 102.0]
+
+
+def test_horizon_scales_the_expected_range():
+    """A one-hour question on a 5-minute chart is 12 bars, not the default 10."""
+    facts = _facts(0.6, 95, frame="5m")
+    short_view = V.decide(facts, horizon_bars=3).expected_range
+    long_view = V.decide(facts, horizon_bars=48).expected_range
+    assert (long_view[1] - long_view[0]) > (short_view[1] - short_view[0])
