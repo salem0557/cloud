@@ -124,3 +124,22 @@ def test_question_marks_do_not_break_parsing():
     """Arabic punctuation shares the letters' Unicode block."""
     assert frames.parse("15 دقيقة؟").key == "15m"
     assert frames.parse_horizon("بعد ساعة؟") == 60
+
+
+@pytest.mark.parametrize("text", [
+    "هل سيرتد سعر spx اليوم؟", "SPX اليوم", "وش يصير اليوم", "today", "هاليوم",
+])
+def test_today_is_a_horizon_not_ten_days(text):
+    """Asking about today used to fall through to the ten-bar default."""
+    assert frames.parse_horizon(text) == frames.REST_OF_DAY
+
+
+def test_the_daily_frame_is_not_a_today_horizon():
+    """"اليومي" names the timeframe; "اليوم" names the window."""
+    assert frames.parse_horizon("حلل SPX اليومي") is None
+    assert frames.parse("حلل SPX اليومي").key == "1d"
+
+
+def test_after_a_day_is_still_a_full_day():
+    assert frames.parse_horizon("بعد يوم") == 1440
+    assert frames.parse_horizon("بكرة") == 1440

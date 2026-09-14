@@ -277,7 +277,8 @@ def fallback_text(*, symbol: str, frame_label: str, facts: dict, verdict: dict,
     expected = verdict.get("expected_range")
     if expected and horizon.get("label"):
         lines += ["", f"🔮 النطاق المتوقع خلال {horizon['label']} "
-                      f"({horizon.get('bars')} شمعة): {expected[0]} – {expected[1]}",
+                      f"({horizon.get('bars_text', horizon.get('bars'))} شمعة): "
+                      f"{expected[0]} – {expected[1]}",
                   "• مشتق من مدى التذبذب الفعلي (ATR)، احتمالي وليس رقماً مؤكداً."]
         if horizon.get("session_note"):
             lines.append("• " + horizon["session_note"])

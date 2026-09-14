@@ -222,6 +222,10 @@ HORIZON_PATTERNS: list[tuple[str, int]] = [
     (r"(?:in|after|within)\s*(\d+)\s*(?:d|days?)\b", 1440),
 ]
 
+# "اليوم" is not a duration, it is whatever is left of today — how much that
+# is depends on the asset's session, so the caller resolves it.
+REST_OF_DAY = -1
+
 HORIZON_WORDS: list[tuple[str, int]] = [
     (r"(?:بعد|خلال)\s*(?:ال)?ربع\s*(?:ساعه|ساعة)", 15),
     (r"(?:بعد|خلال)\s*(?:ال)?نصف?\s*(?:ساعه|ساعة)", 30),
@@ -233,6 +237,8 @@ HORIZON_WORDS: list[tuple[str, int]] = [
     (r"(?:نهاية|اخر|آخر)\s*(?:ال)?اسبوع", 7200),
     (r"(?:بعد|خلال)\s*(?:ال)?اسبوع\b", 7200),
     (r"\bnext\s*hour\b|\bin\s*an?\s*hour\b", 60),
+    # Checked last: "بعد يوم" above is a full day, this one is the rest of today.
+    (r"(?:^|[\s،؟])(?:ال)?يوم\b|هاليوم|\btoday\b|بقية\s*(?:ال)?يوم", REST_OF_DAY),
 ]
 
 

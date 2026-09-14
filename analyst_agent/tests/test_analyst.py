@@ -312,3 +312,33 @@ def test_asking_for_detail_returns_the_long_form(offline):
 def test_full_style_can_be_the_default(offline, monkeypatch):
     monkeypatch.setattr(config, "ANSWER_STYLE", "full")
     assert "القراءة الفنية" in analyst.analyze("NVDA يومي").text
+
+
+def test_today_becomes_the_rest_of_the_session():
+    minutes, label = analyst._rest_of_day(
+        {"asset_class": "us_equity", "phase": "regular", "minutes_to_close": 297})
+    assert minutes == 297 and "بقية جلسة اليوم" in label
+
+
+def test_today_before_the_open_points_at_the_coming_session():
+    minutes, label = analyst._rest_of_day(
+        {"asset_class": "us_equity", "phase": "pre", "minutes_to_open": 45})
+    assert minutes == 390 and "القادمة" in label
+
+
+def test_today_for_crypto_is_the_rest_of_the_calendar_day():
+    minutes, label = analyst._rest_of_day({"asset_class": "crypto", "phase": "crypto_24h"})
+    assert 30 <= minutes <= 1440 and label == "بقية اليوم"
+
+
+def test_asking_about_today_does_not_project_ten_days(offline):
+    answer = analyst.analyze("هل سيرتد سعر SPY اليوم؟")
+    assert answer.ok
+    assert "10 أيام" not in answer.text
+    assert "اليوم" in answer.text or "الجلسة" in answer.text
+
+
+def test_a_fractional_window_keeps_its_bar_count_readable(offline):
+    """Today on a daily chart is a fraction of one candle, not ten."""
+    answer = analyst.analyze("SPY اليوم")
+    assert answer.ok and "10 أيام" not in answer.text

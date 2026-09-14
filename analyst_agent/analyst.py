@@ -178,13 +178,20 @@ def analyze(caption: str | None = None, image: bytes | None = None,
     # "كم يوصل بعد ساعة؟" — project over exactly that many bars of this frame,
     # not over a fixed default that answers a different question.
     horizon_minutes = frames.parse_horizon(caption)
-    horizon_bars = 10
+    label = None
+    if horizon_minutes == frames.REST_OF_DAY:
+        horizon_minutes, label = _rest_of_day(facts.get("session") or {})
+    horizon_bars = 10.0
     if horizon_minutes:
-        horizon_bars = max(1, min(200, round(horizon_minutes / used.minutes)))
+        # Fractional bars are kept: "today" on a daily chart is a fraction of
+        # one candle, and rounding it up to a whole bar overstates the range.
+        horizon_bars = max(0.1, min(200.0, horizon_minutes / used.minutes))
+    minutes = horizon_minutes or horizon_bars * used.minutes
     horizon = {
-        "minutes": horizon_minutes or horizon_bars * used.minutes,
-        "bars": horizon_bars,
-        "label": frames.humanise_minutes(horizon_minutes or horizon_bars * used.minutes),
+        "minutes": int(minutes),
+        "bars": round(horizon_bars, 2),
+        "bars_text": max(1, round(horizon_bars)),
+        "label": label or frames.humanise_minutes(int(minutes)),
         "asked": bool(horizon_minutes),
     }
     horizon.update(_session_limits(horizon, facts.get("session") or {}, used))
@@ -231,6 +238,27 @@ def analyze(caption: str | None = None, image: bytes | None = None,
                "bars": data.bars, "score": round(call.score, 1),
                "vision": read.to_dict() if read else None},
     )
+
+
+def _rest_of_day(session: dict) -> tuple[int, str]:
+    """How much of today is left to trade, and what to call it.
+
+    "هل يرتد اليوم؟" is a question about the hours remaining, not about ten
+    days. For a stock that is the rest of the session; for crypto, the rest of
+    the calendar day; for a market already shut, the session ahead.
+    """
+    from datetime import datetime, timezone
+
+    remaining = session.get("minutes_to_close")
+    if remaining:
+        return int(remaining), f"بقية جلسة اليوم ({int(remaining)} دقيقة)"
+    if session.get("asset_class") == "us_equity":
+        if session.get("minutes_to_open"):
+            return 390, "جلسة اليوم القادمة"
+        return 390, "الجلسة القادمة"
+    now = datetime.now(timezone.utc)
+    minutes_left = int((24 * 60) - (now.hour * 60 + now.minute))
+    return max(30, minutes_left), "بقية اليوم"
 
 
 def _session_limits(horizon: dict, session: dict, frame) -> dict:
