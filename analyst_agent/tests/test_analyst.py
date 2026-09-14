@@ -259,6 +259,11 @@ def test_daily_frames_are_not_clipped():
 
 
 def test_horizon_reaches_the_answer(offline, monkeypatch):
+    # Pin the session: on a live equity clock the hour would be clipped to the
+    # close, which is correct behaviour but makes the assertion time-dependent.
+    monkeypatch.setattr(analyst.session_mod, "state_for",
+                        lambda symbol: {"asset_class": "crypto", "phase": "crypto_24h",
+                                        "phase_ar": "24 ساعة", "is_open": True})
     answer = analyst.analyze("NVDA على فريم 5 دقايق كم يوصل بعد ساعة؟")
     assert answer.ok
     assert "🔮" in answer.text          # the projection line
