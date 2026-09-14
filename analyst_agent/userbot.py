@@ -232,6 +232,10 @@ async def main() -> None:
         try:
             answer_it, why = await _should_answer(event, me)
             if not answer_it:
+                if why == "private disabled":
+                    notice = gate.private_notice(event.sender_id)
+                    if notice:
+                        await _attempt("private notice", lambda: event.reply(notice))
                 return
             text = (event.message.message or "").strip()
             if gate.is_here(text):

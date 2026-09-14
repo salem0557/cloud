@@ -46,6 +46,7 @@ HELP = """أنا محلل فني آلي للسوق الأمريكي 📈
 /stats (سجل التوصيات ونسبة الإصابة الفعلية)"""
 
 _last_request: dict[int, float] = {}
+_told_private: set[int] = set()
 
 
 @dataclass
@@ -161,10 +162,29 @@ def topic_of(msg: Incoming) -> int | None:
     return msg.topic_id or GENERAL_TOPIC
 
 
+def private_allowed(user_id: int | None) -> bool:
+    """Private chats are served unless switched off — owners always are."""
+    return config.ANSWER_PRIVATE or (user_id is not None and user_id in config.OWNER_IDS)
+
+
+def private_notice(user_id: int | None) -> str | None:
+    """The one-time "ask in the group" reply, if one is configured."""
+    if not config.PRIVATE_NOTICE or user_id is None:
+        return None
+    if user_id in _told_private:
+        return None
+    _told_private.add(user_id)
+    if len(_told_private) > 2000:
+        _told_private.clear()
+    return config.PRIVATE_NOTICE
+
+
 def decide(msg: Incoming) -> tuple[bool, str]:
     """(answer?, why) — the single gate both backends go through."""
     if not chat_allowed(msg.chat_id):
         return False, "chat not allowed"
+    if msg.is_private and not private_allowed(msg.user_id):
+        return False, "private disabled"
     # In a forum group with a configured Q&A topic, every other topic is
     # somebody else's conversation: stay out of it entirely. /here is the one
     # exception — it is how you discover a topic's id, including the id of the

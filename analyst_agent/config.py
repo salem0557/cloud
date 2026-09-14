@@ -96,6 +96,12 @@ TRIGGERS = _list("ANALYST_TRIGGERS", [
     "تحليل", "حلل", "حلّل", "شارت", "تشارت", "الشارت", "التشارت",
     "analyze", "analysis", "chart", "ta",
 ])
+# Answer private chats at all. False = group only; owners are still served so
+# /diag and testing keep working in a DM.
+ANSWER_PRIVATE = _bool("ANALYST_ANSWER_PRIVATE", True)
+# Optional one-time reply to someone who messages privately while that is off.
+# Empty = stay silent.
+PRIVATE_NOTICE = os.getenv("ANALYST_PRIVATE_NOTICE", "").strip()
 # In a private chat every photo is analysed without needing a trigger word.
 DM_ALWAYS_ANSWER = _bool("ANALYST_DM_ALWAYS", True)
 # Any photo in an allowed chat is treated as a request, whatever is written

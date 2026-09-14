@@ -210,3 +210,48 @@ def test_analysable():
     assert gate.analysable(gate.Incoming(text="يومي")) is True
     assert gate.analysable(gate.Incoming(has_photo=True)) is True
     assert gate.analysable(gate.Incoming(text="كيف الحال")) is False
+
+
+def dm(user_id=777, text="حلل NVDA", photo=True):
+    return gate.Incoming(text=text, has_photo=photo, chat_id=user_id,
+                         user_id=user_id, is_private=True)
+
+
+def test_private_chats_can_be_switched_off(monkeypatch):
+    """ANALYST_DM_ALWAYS=false was not enough: a trigger word still passed."""
+    monkeypatch.setattr(config, "ANSWER_PRIVATE", False)
+    monkeypatch.setattr(config, "OWNER_IDS", set())
+    assert gate.decide(dm())[1] == "private disabled"
+    assert gate.decide(dm(text="حلل", photo=False))[0] is False
+    assert gate.decide(dm(text="", photo=True))[0] is False
+
+
+def test_the_owner_is_still_served_privately(monkeypatch):
+    monkeypatch.setattr(config, "ANSWER_PRIVATE", False)
+    monkeypatch.setattr(config, "OWNER_IDS", {42})
+    assert gate.decide(dm(user_id=42))[0] is True
+    assert gate.decide(dm(user_id=777))[0] is False
+
+
+def test_the_group_is_unaffected(monkeypatch):
+    monkeypatch.setattr(config, "ANSWER_PRIVATE", False)
+    monkeypatch.setattr(config, "OWNER_IDS", set())
+    assert gate.decide(group(text="حلل NVDA", has_photo=True))[0] is True
+
+
+def test_private_chats_stay_on_by_default():
+    assert gate.decide(dm())[0] is True
+
+
+def test_the_private_notice_is_sent_once(monkeypatch):
+    monkeypatch.setattr(config, "PRIVATE_NOTICE", "أنا أرد داخل القروب فقط")
+    monkeypatch.setattr(gate, "_told_private", set())
+    assert gate.private_notice(777) == "أنا أرد داخل القروب فقط"
+    assert gate.private_notice(777) is None
+    assert gate.private_notice(888) is not None
+
+
+def test_no_notice_means_silence(monkeypatch):
+    monkeypatch.setattr(config, "PRIVATE_NOTICE", "")
+    monkeypatch.setattr(gate, "_told_private", set())
+    assert gate.private_notice(777) is None

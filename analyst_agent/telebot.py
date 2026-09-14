@@ -262,6 +262,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     incoming = _incoming(update, context.bot.id)
     answer_it, why = gate.decide(incoming)
     if not answer_it:
+        if why == "private disabled":
+            notice = gate.private_notice(incoming.user_id)
+            if notice:
+                await _attempt("private notice",
+                               lambda: update.effective_message.reply_text(notice))
         return
 
     if gate.is_here(incoming.text):
