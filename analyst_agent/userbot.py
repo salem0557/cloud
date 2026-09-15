@@ -15,7 +15,7 @@ import logging
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
-from . import analyst, config, doctor, gate, watcher
+from . import analyst, config, doctor, gate, journal, watcher
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s",
                     level=logging.INFO)
@@ -53,6 +53,7 @@ def _incoming(event, me, replied=None) -> gate.Incoming:
         topic_id=topic_id,
         is_forum=is_forum,
         user_id=event.sender_id,
+        username=getattr(getattr(event, "sender", None), "username", None),
         has_photo=bool(message.photo),
         replied_has_photo=bool(replied and replied.photo),
         is_private=bool(event.is_private),
@@ -80,7 +81,7 @@ async def _image_bytes(event) -> bytes | None:
 async def _publish(event, me) -> None:
     """/post as a reply: re-send that message into the recommendations topic."""
     incoming = _incoming(event, me)
-    if not gate.diag_allowed(event.sender_id, bool(event.is_private)):
+    if not gate.diag_allowed(event.sender_id, bool(event.is_private), _username(event)):
         return
     if not config.ALERTS_TOPIC:
         await event.reply("قسم التوصيات غير مضبوط: أضف ANALYST_ALERTS_TOPIC "
@@ -130,6 +131,28 @@ async def run_watch(client, force: bool = False) -> list[watcher.Alert]:
     return sent
 
 
+async def _followup_loop(client) -> None:
+    """Report each call's outcome as a reply to the call itself."""
+    await asyncio.sleep(120)
+    while True:
+        try:
+            await asyncio.to_thread(journal.evaluate)
+            pending = await asyncio.to_thread(journal.pending_notifications)
+            done = []
+            for call in pending:
+                try:
+                    await client.send_message(call.chat_id, journal.outcome_message(call),
+                                              reply_to=call.message_id)
+                except Exception:
+                    log.warning("could not report %s", call.symbol, exc_info=True)
+                done.append(call.id)
+            if done:
+                await asyncio.to_thread(journal.mark_notified, done)
+        except Exception:
+            log.exception("follow-up loop failed")
+        await asyncio.sleep(max(60, config.FOLLOWUP_INTERVAL_MIN * 60))
+
+
 async def _watch_loop(client) -> None:
     """The recommendations topic fills itself while the userbot runs."""
     await asyncio.sleep(60)
@@ -141,21 +164,56 @@ async def _watch_loop(client) -> None:
         await asyncio.sleep(max(60, config.WATCH_INTERVAL_MIN * 60))
 
 
-async def _send_answer(event, answer: analyst.Answer) -> None:
+async def _attempt(what: str, send):
+    """One send, retried once. Returns the sent message, True, or False."""
+    for attempt in (1, 2):
+        try:
+            return await send() or True
+        except Exception as exc:
+            log.warning("%s failed (try %d): %s: %s", what, attempt,
+                        type(exc).__name__, exc)
+            if attempt == 1:
+                await asyncio.sleep(2)
+    return False
+
+
+def _username(event) -> str | None:
+    return getattr(getattr(event, "sender", None), "username", None)
+
+
+def incoming_topic(event) -> int | None:
+    reply_to = getattr(event.message, "reply_to", None)
+    if not getattr(reply_to, "forum_topic", False):
+        return None
+    return (getattr(reply_to, "reply_to_top_id", None)
+            or getattr(reply_to, "reply_to_msg_id", None))
+
+
+async def _send_answer(event, answer: analyst.Answer):
+    """Chart then analysis, as independent sends: a slow upload must not cost
+    the reader the reading. Returns the posted message when there is one."""
     text = answer.text.strip()
+    fits_caption = bool(answer.chart_png) and len(text) <= gate.CAPTION_LIMIT
+    posted = None
+
     if answer.chart_png:
         from io import BytesIO
 
         image = BytesIO(answer.chart_png)
         image.name = f"{(answer.symbol or 'chart')}_{answer.frame_key or ''}.png".replace("/", "-")
-        caption = text if len(text) <= gate.CAPTION_LIMIT else answer.headline
-        await event.reply(caption, file=image)
-        if len(text) > gate.CAPTION_LIMIT:
-            for chunk in gate.chunks(text):
-                await event.reply(chunk)
-    else:
+        caption = text if fits_caption else answer.headline
+        sent = await _attempt("send chart", lambda: event.reply(caption, file=image))
+        if not sent:
+            fits_caption = False
+        elif sent is not True:
+            posted = sent
+
+    if not fits_caption:
         for chunk in gate.chunks(text):
-            await event.reply(chunk)
+            sent = await _attempt("send analysis", lambda chunk=chunk: event.reply(chunk))
+            if posted is None and sent is not True:
+                posted = sent
+    return posted
 
 
 def build_client() -> TelegramClient:
@@ -179,6 +237,10 @@ async def main() -> None:
         try:
             answer_it, why = await _should_answer(event, me)
             if not answer_it:
+                if why == "private disabled":
+                    notice = gate.private_notice(event.sender_id)
+                    if notice:
+                        await _attempt("private notice", lambda: event.reply(notice))
                 return
             text = (event.message.message or "").strip()
             if gate.is_here(text):
@@ -187,12 +249,21 @@ async def main() -> None:
             if gate.is_post(text):
                 await _publish(event, me)
                 return
+            if gate.is_stats(text):
+                if not gate.diag_allowed(event.sender_id, bool(event.is_private),
+                                         _username(event)):
+                    return
+                await asyncio.to_thread(journal.evaluate)
+                await event.reply(journal.stats())
+                return
             if gate.is_watchlist(text):
-                if gate.diag_allowed(event.sender_id, bool(event.is_private)):
+                if gate.diag_allowed(event.sender_id, bool(event.is_private),
+                                     _username(event)):
                     await event.reply(watcher.status())
                 return
             if gate.is_scan(text):
-                if not gate.diag_allowed(event.sender_id, bool(event.is_private)):
+                if not gate.diag_allowed(event.sender_id, bool(event.is_private),
+                                         _username(event)):
                     return
                 if not watcher.destination():
                     await event.reply(watcher.status())
@@ -203,7 +274,8 @@ async def main() -> None:
                                   "لا يوجد سهم يحقق الشروط الآن — لا توصية.")
                 return
             if gate.is_diag(text):
-                if not gate.diag_allowed(event.sender_id, bool(event.is_private)):
+                if not gate.diag_allowed(event.sender_id, bool(event.is_private),
+                                         _username(event)):
                     return
                 await event.reply("جاري الفحص… ⏳")
                 checks = await asyncio.to_thread(doctor.run_all)
@@ -213,7 +285,7 @@ async def main() -> None:
             if canned:
                 await event.reply(canned)
                 return
-            if not gate.cooldown_ok(event.sender_id):
+            if not gate.cooldown_ok(event.sender_id, _username(event)):
                 return
             album = getattr(event.message, "grouped_id", None)
             if album:
@@ -241,11 +313,16 @@ async def main() -> None:
                                                      None, True, addressed)
             if answer.silent:
                 return      # the photo was not a chart: no reply at all
-            await _send_answer(event, answer)
-        except Exception:
+            posted = await _send_answer(event, answer)
+            if posted is not None and answer.call_id:
+                await asyncio.to_thread(
+                    journal.attach_message, answer.call_id, event.chat_id,
+                    getattr(posted, "id", None), incoming_topic(event))
+        except Exception as exc:
             log.exception("handler failed")
             try:
-                await event.reply("صار خطأ غير متوقع عندي، جرّب مرة ثانية 🙏")
+                await event.reply(
+                    f"صار خطأ غير متوقع ({type(exc).__name__})، جرّب مرة ثانية 🙏")
             except Exception:
                 pass
 
@@ -253,6 +330,9 @@ async def main() -> None:
         for line in doctor.report(doctor.run_all(quick=True)).splitlines():
             if line.strip():
                 log.info("%s", line)
+    if config.FOLLOWUP_ENABLED:
+        asyncio.create_task(_followup_loop(client))
+        log.info("follow-up on: every %s min", config.FOLLOWUP_INTERVAL_MIN)
     if watcher.enabled():
         asyncio.create_task(_watch_loop(client))
         log.info("automatic recommendations on: every %s min -> %s",

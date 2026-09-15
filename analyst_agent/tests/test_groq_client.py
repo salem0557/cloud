@@ -150,3 +150,57 @@ def test_vision_chat_sends_image_and_text(monkeypatch):
     assert parts[0]["type"] == "text"
     assert parts[1]["image_url"]["url"].startswith("data:image/")
     assert captured["kwargs"]["kind"] == "vision"
+
+
+def test_vision_capable_filters_the_served_list():
+    served = ["meta-llama/llama-4-scout-17b-16e-instruct", "llama-3.3-70b-versatile",
+              "whisper-large-v3", "some/vision-model"]
+    capable = groq_client.vision_capable(served)
+    assert "meta-llama/llama-4-scout-17b-16e-instruct" in capable
+    assert "some/vision-model" in capable
+    assert "whisper-large-v3" not in capable
+
+
+def test_candidates_skip_a_retired_preference(monkeypatch):
+    monkeypatch.setattr(groq_client, "available_models",
+                        lambda force=False: ["meta-llama/llama-4-scout-17b-16e-instruct"])
+    monkeypatch.setattr(config, "VISION_MODEL_PREFERENCE",
+                        ["gone/model", "meta-llama/llama-4-scout-17b-16e-instruct"])
+    candidates = groq_client.model_candidates("vision")
+    assert candidates[0] == "meta-llama/llama-4-scout-17b-16e-instruct"
+    assert "gone/model" not in candidates
+
+
+def test_candidates_fall_back_to_preference_when_models_is_unreachable(monkeypatch):
+    monkeypatch.setattr(groq_client, "available_models", lambda force=False: [])
+    monkeypatch.setattr(config, "VISION_MODEL_PREFERENCE", ["a/model", "b/model"])
+    assert groq_client.model_candidates("vision") == ["a/model", "b/model"]
+
+
+def test_chat_walks_past_every_dead_model(monkeypatch):
+    """A retired id must cost one retry, not the whole request."""
+    seen = []
+
+    def post(url, **kwargs):
+        seen.append(kwargs["json"]["model"])
+        if len(seen) < 3:
+            return FakeResponse(404, {}, '{"error":{"message":"model not found"}}')
+        return FakeResponse(200, _completion("تحليل"))
+
+    monkeypatch.setattr(groq_client.requests, "post", post)
+    monkeypatch.setattr(groq_client, "available_models",
+                        lambda force=False: ["a/model", "b/model", "c/model"])
+    monkeypatch.setattr(config, "TEXT_MODEL_PREFERENCE", ["a/model", "b/model", "c/model"])
+    assert groq_client.chat([{"role": "user", "content": "x"}]) == "تحليل"
+    assert seen == ["a/model", "b/model", "c/model"]
+
+
+def test_chat_reports_what_the_key_actually_has(monkeypatch):
+    monkeypatch.setattr(groq_client.requests, "post",
+                        lambda *a, **k: FakeResponse(404, {}, '{"error":"model not found"}'))
+    monkeypatch.setattr(groq_client, "available_models",
+                        lambda force=False: ["llama-3.3-70b-versatile"])
+    monkeypatch.setattr(config, "VISION_MODEL_PREFERENCE", ["dead/vision"])
+    with pytest.raises(groq_client.GroqError) as excinfo:
+        groq_client.chat([{"role": "user", "content": "x"}], kind="vision")
+    assert "llama-3.3-70b-versatile" in str(excinfo.value)

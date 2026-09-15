@@ -12,6 +12,8 @@ wide stop chasing a multiple.
 from __future__ import annotations
 
 import math
+
+from . import config
 from dataclasses import dataclass, field
 
 BULL = "صاعد"
@@ -49,6 +51,10 @@ class Verdict:
     reward_pct: float | None = None
     invalidation_ar: str = ""
     expected_range: tuple[float, float] | None = None
+    horizon_bars: int = 10
+    target_eta_bars: int | None = None      # best case: a clean trending run
+    target_eta_typical: int | None = None   # random-walk estimate
+    horizon_target: float | None = None     # what is reachable inside the window
     conflicts: list[str] = field(default_factory=list)
     plan_valid: bool = True
 
@@ -63,6 +69,10 @@ class Verdict:
             "rr": self.rr, "breakeven_rate": self.breakeven_rate,
             "invalidation": self.invalidation_ar,
             "expected_range": list(self.expected_range) if self.expected_range else None,
+            "horizon_bars": self.horizon_bars,
+            "target_eta_bars": self.target_eta_bars,
+            "target_eta_typical": self.target_eta_typical,
+            "horizon_target": self.horizon_target,
             "conflicts": self.conflicts,
             "signals": [{"name": s.name, "points": s.points, "weight": s.weight,
                          "note": s.note_ar} for s in self.signals],
@@ -217,6 +227,30 @@ def _collect(facts: dict, context: dict | None) -> list[Signal]:
     return signals
 
 
+def _ordered(targets: list[float], entry: float) -> list[float]:
+    """Nearest target first, duplicates dropped.
+
+    An ATR-derived target can land closer than a real level when few levels
+    exist, and an out-of-order list makes the first target — the one the whole
+    risk/reward is measured against — the wrong one.
+    """
+    unique: list[float] = []
+    for target in sorted(targets, key=lambda t: abs(t - entry)):
+        if all(abs(target - kept) > 1e-9 for kept in unique):
+            unique.append(target)
+    return unique
+
+
+def _min_distance(entry: float, distance: float) -> float:
+    """Keep the stop outside spread-and-noise range.
+
+    A percentage floor, not an ATR one: when a bar is unusually quiet the ATR
+    stop collapses to a few ticks and the quote alone triggers it. That is not
+    a small loss, it is a guaranteed one.
+    """
+    return max(distance, entry * config.MIN_STOP_PCT / 100)
+
+
 def _plan(facts: dict, side: str, atr: float) -> dict:
     """Entry / stop / targets from real levels, ATR-bounded."""
     price = facts["price"]
@@ -235,13 +269,15 @@ def _plan(facts: dict, side: str, atr: float) -> dict:
             entry = (price + ema_fast) / 2
             note = "السعر ممتد عن متوسط 20 — الأفضل انتظار ارتداد لمنطقة الدخول"
         struct_stop = (support - 0.25 * atr) if support else None
-        atr_stop = entry - 1.2 * atr
+        atr_stop = entry - config.STOP_ATR_MULT * atr
         stop = max(struct_stop, atr_stop) if struct_stop else atr_stop
         stop = min(stop, entry - 0.6 * atr)          # never inside the noise
         stop = max(stop, entry - 2.5 * atr)          # never a runaway stop
+        stop = entry - _min_distance(entry, entry - stop)
         targets = [t for t in resistances if t > entry + 0.3 * atr][:3]
         while len(targets) < 2:
             targets.append(entry + (1.5 + len(targets)) * atr)
+        targets = _ordered(targets, entry)
         label = facts.get("frame_label") or facts["frame"]
         invalidation = f"إغلاق شمعة {label} تحت {round(stop, _digits(price))} يلغي السيناريو"
     elif side == "short":
@@ -250,13 +286,15 @@ def _plan(facts: dict, side: str, atr: float) -> dict:
             entry = (price + ema_fast) / 2
             note = "السعر ممتد تحت متوسط 20 — الأفضل انتظار ارتداد لمنطقة الدخول"
         struct_stop = (resistance + 0.25 * atr) if resistance else None
-        atr_stop = entry + 1.2 * atr
+        atr_stop = entry + config.STOP_ATR_MULT * atr
         stop = min(struct_stop, atr_stop) if struct_stop else atr_stop
         stop = max(stop, entry + 0.6 * atr)
         stop = min(stop, entry + 2.5 * atr)
+        stop = entry + _min_distance(entry, stop - entry)
         targets = [t for t in sorted(supports, reverse=True) if t < entry - 0.3 * atr][:3]
         while len(targets) < 2:
             targets.append(entry - (1.5 + len(targets)) * atr)
+        targets = _ordered(targets, entry)
         label = facts.get("frame_label") or facts["frame"]
         invalidation = f"إغلاق شمعة {label} فوق {round(stop, _digits(price))} يلغي السيناريو"
     else:
@@ -313,6 +351,25 @@ def decide(facts: dict, context: dict | None = None, horizon_bars: int = 10) -> 
             conflicts.append(f"تعارض: الفريم الأعلى ({context['frame']}) صاعد — الصفقة عكس الاتجاه الأكبر")
     if facts["volume"].get("dry") and side != "none":
         conflicts.append("الفوليوم ضعيف: الحركة تحتاج تأكيد بسيولة أعلى")
+    # A divergence pointing the other way is the single most common reason a
+    # strong-looking trend trade stalls before its first target.
+    divergence = facts["momentum"].get("rsi_divergence")
+    if divergence == "bullish" and side == "short":
+        conviction = int(conviction * 0.85)
+        conflicts.append("تباعد إيجابي معاكس للصفقة: قيعان أدنى مع RSI أعلى — "
+                         "احتمال ارتداد قبل بلوغ الهدف، الأفضل تقليل الحجم أو "
+                         "انتظار كسر بإغلاق")
+    if divergence == "bearish" and side == "long":
+        conviction = int(conviction * 0.85)
+        conflicts.append("تباعد سلبي معاكس للصفقة: قمم أعلى مع RSI أدنى — "
+                         "احتمال انعكاس قبل بلوغ الهدف")
+    rsi_value = facts["momentum"].get("rsi")
+    if side == "short" and rsi_value is not None and rsi_value <= 32:
+        conflicts.append(f"RSI {rsi_value} في منطقة تشبع بيعي: البيع هنا مطاردة "
+                         "لحركة نزلت أصلاً، والارتداد التقني وارد")
+    if side == "long" and rsi_value is not None and rsi_value >= 68:
+        conflicts.append(f"RSI {rsi_value} في منطقة تشبع شرائي: الشراء هنا مطاردة "
+                         "لحركة صعدت أصلاً")
     if facts["volatility"].get("squeeze"):
         conflicts.append("انضغاط تقلب: الحركة القادمة قد تكون عنيفة بالاتجاهين")
 
@@ -329,6 +386,23 @@ def decide(facts: dict, context: dict | None = None, horizon_bars: int = 10) -> 
     spread = atr * math.sqrt(horizon_bars)
     expected = (_r(price + drift - spread / 2, price), _r(price + drift + spread / 2, price))
 
+    # Can the first target even be reached inside the window that was asked
+    # about? A plan whose target needs sixteen hours answers a different
+    # question than "كم يوصل بعد ساعة؟", and saying so is the difference
+    # between a miss and a target that was never in reach.
+    eta_bars = eta_typical = horizon_target = None
+    if plan["targets"] and plan["entry"] and atr > 0:
+        distance = abs(plan["targets"][0] - plan["entry"])
+        eta_bars = max(1, math.ceil(distance / atr))
+        eta_typical = max(1, int(round((distance / atr) ** 2)))
+        horizon_target = expected[1] if side == "long" else expected[0]
+        if eta_bars > horizon_bars:
+            label = (facts.get("horizon") or {}).get("label") or f"{horizon_bars} شمعة"
+            conflicts.append(
+                f"الهدف الأول يبعد {distance / atr:.0f}× ATR ويحتاج {eta_bars} شمعة على "
+                f"الأقل (غالباً أكثر) — أبعد من {label}. الواقعي خلال هذه المدة هو "
+                f"{_r(horizon_target, price)} تقريباً، والهدف الكامل يحتاج وقتاً أطول")
+
     return Verdict(
         direction=direction, side=side, score=score, conviction=conviction,
         conviction_ar=_conviction_label(conviction), signals=signals,
@@ -336,6 +410,8 @@ def decide(facts: dict, context: dict | None = None, horizon_bars: int = 10) -> 
         targets=plan["targets"], rr=plan["rr"], breakeven_rate=plan["breakeven"],
         risk_pct=plan["risk_pct"], reward_pct=plan["reward_pct"],
         invalidation_ar=plan["invalidation"], expected_range=expected,
+        horizon_bars=horizon_bars, target_eta_bars=eta_bars,
+        target_eta_typical=eta_typical, horizon_target=horizon_target,
         conflicts=conflicts, plan_valid=side != "none",
     )
 

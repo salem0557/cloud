@@ -8,8 +8,12 @@ asset.
 """
 from __future__ import annotations
 
+import logging
 import re
+import time
 from dataclasses import dataclass
+
+import requests
 
 from . import config
 from .frames import ALIASES as FRAME_ALIASES
@@ -109,8 +113,12 @@ CRYPTO: dict[str, str] = {
     "bnb": "BNB-USD", "ton": "TON11419-USD", "avax": "AVAX-USD",
     "link": "LINK-USD", "matic": "MATIC-USD", "shib": "SHIB-USD",
     "trx": "TRX-USD", "dot": "DOT-USD", "ltc": "LTC-USD",
+    # Yahoo appends the CoinMarketCap id when a ticker is already taken by an
+    # older coin. Without this, APT resolves to a dead token priced at
+    # $0.0002 and the whole read is about the wrong asset.
+    "apt": "APT21794-USD", "aptos": "APT21794-USD",
     "bch": "BCH-USD", "xlm": "XLM-USD", "atom": "ATOM-USD", "uni": "UNI-USD",
-    "etc": "ETC-USD", "near": "NEAR-USD", "apt": "APT-USD", "arb": "ARB-USD",
+    "etc": "ETC-USD", "near": "NEAR-USD", "arb": "ARB-USD",
     "op": "OP-USD", "sui": "SUI-USD", "fil": "FIL-USD", "icp": "ICP-USD",
     "algo": "ALGO-USD", "vet": "VET-USD", "aave": "AAVE-USD", "mkr": "MKR-USD",
     "inj": "INJ-USD", "tia": "TIA-USD", "sei": "SEI-USD", "stx": "STX-USD",
@@ -140,6 +148,12 @@ STOPWORDS = {
     "ath", "atl", "ipo", "ceo", "cfo", "eps", "pe", "usa", "us", "eu",
     "ai", "gpt", "api", "tp", "sl", "be", "dm", "pm", "bro", "man", "lol",
 }
+
+
+log = logging.getLogger(__name__)
+
+YAHOO_SEARCH = "https://query2.finance.yahoo.com/v1/finance/search"
+_crypto_cache: dict[str, tuple[float, str | None]] = {}
 
 
 @dataclass(frozen=True)
@@ -226,14 +240,30 @@ def resolve(text: str | None, all_markets: bool = False) -> list[Candidate]:
                 continue
             out.append(Candidate(f"{token}.SR", "tadawul", "tadawul-code", 0.9))
 
-    # 5. FX pairs: EURUSD, usd/jpy.
+    # 5. Exchange-style crypto pairs written as one word: LINKUSD, BTCUSDT.
+    #    Checked before the FX rule so a real currency pair still wins below.
+    if config.ALLOW_NON_EQUITY:
+        for m in re.finditer(r"(?<![\w])([a-z]{2,6})\s*[-/]?\s*usd[tc]?(?![\w])", t):
+            base = m.group(1)
+            if base in FX_CODES:
+                continue                      # EURUSD is a currency pair, not a coin
+            mapped = CRYPTO.get(base)
+            if mapped:
+                out.append(Candidate(mapped, "crypto", "pair", 0.95))
+            elif base not in STOPWORDS:
+                resolved = lookup_crypto(base)
+                if resolved:
+                    out.append(Candidate(resolved, "crypto", "pair-lookup", 0.9))
+                out.append(Candidate(f"{base.upper()}-USD", "crypto", "pair-guess", 0.7))
+
+    # 6. FX pairs: EURUSD, usd/jpy.
     if all_markets or config.ALLOW_NON_EQUITY:
         for m in re.finditer(r"(?<![\w])([a-z]{3})\s*/?\s*([a-z]{3})(?![\w])", t):
             a, b = m.group(1), m.group(2)
             if a in FX_CODES and b in FX_CODES and a != b:
                 out.append(Candidate(f"{a}{b}=X".upper(), "fx", "fx-pair", 0.9))
 
-    # 6. Bare upper-case-ish tickers, lowest confidence.
+    # 7. Bare upper-case-ish tickers, lowest confidence.
     for m in re.finditer(r"(?<![\w$])([a-z]{1,5})(?![\w])", t):
         token = m.group(1)
         if token in STOPWORDS or token in FRAME_ALIASES or len(token) < 2:
@@ -250,6 +280,39 @@ def resolve(text: str | None, all_markets: bool = False) -> list[Candidate]:
         if c.symbol not in best or c.confidence > best[c.symbol].confidence:
             best[c.symbol] = c
     return sorted(best.values(), key=lambda c: -c.confidence)
+
+
+def lookup_crypto(base: str) -> str | None:
+    """Ask Yahoo which coin a ticker means, since short tickers collide.
+
+    "APT-USD" is a dead token; Aptos is "APT21794-USD". Yahoo's own search
+    ranks the real coin first, so one lookup (cached for the process) beats a
+    hardcoded table that goes stale with every new listing.
+    """
+    key = base.lower()
+    cached = _crypto_cache.get(key)
+    if cached and time.time() - cached[0] < 86400:
+        return cached[1]
+    found = None
+    try:
+        resp = requests.get(
+            YAHOO_SEARCH,
+            params={"q": base, "quotesCount": 8, "newsCount": 0},
+            headers={"User-Agent": "Mozilla/5.0"}, timeout=8,
+        )
+        if resp.status_code == 200:
+            for quote in resp.json().get("quotes") or []:
+                symbol = quote.get("symbol") or ""
+                if quote.get("quoteType") != "CRYPTOCURRENCY" or not symbol.endswith("-USD"):
+                    continue
+                # "APT21794-USD" and "APT-USD" both start with the base.
+                if symbol.split("-")[0].rstrip("0123456789").upper() == base.upper():
+                    found = symbol
+                    break
+    except Exception:
+        log.warning("crypto lookup failed for %s", base, exc_info=True)
+    _crypto_cache[key] = (time.time(), found)
+    return found
 
 
 def serves(symbol: str) -> bool:

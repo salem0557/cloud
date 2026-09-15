@@ -54,25 +54,48 @@ def available_models(force: bool = False) -> list[str]:
     return ids
 
 
-def resolve_model(kind: str = "text") -> str:
-    """Pick the model to call: explicit env value, else best live preference."""
+VISION_HINTS = ("llama-4", "vision", "vl", "scout", "maverick")
+
+
+def vision_capable(models: list[str]) -> list[str]:
+    """Served ids that look like they can read an image."""
+    return [m for m in models if any(hint in m.lower() for hint in VISION_HINTS)]
+
+
+def model_candidates(kind: str = "text") -> list[str]:
+    """Every model worth trying for this job, best first.
+
+    Groq retires model ids without notice, and a key may not carry every
+    model, so the caller walks this list instead of betting on one id.
+    """
     explicit = config.GROQ_VISION_MODEL if kind == "vision" else config.GROQ_TEXT_MODEL
-    if explicit:
-        return explicit
     preference = (config.VISION_MODEL_PREFERENCE if kind == "vision"
                   else config.TEXT_MODEL_PREFERENCE)
     live = available_models()
-    if live:
+    ordered: list[str] = []
+
+    def add(name: str | None) -> None:
+        if name and name not in ordered:
+            ordered.append(name)
+
+    add(explicit)                                   # an explicit choice wins
+    for candidate in preference:                    # preferred and confirmed live
+        if candidate in live:
+            add(candidate)
+    for candidate in (vision_capable(live) if kind == "vision" else live):
+        add(candidate)                              # anything else Groq serves
+    if not live:                                    # /models unreachable: guess
         for candidate in preference:
-            if candidate in live:
-                return candidate
-        # Nothing preferred is live: take any served model that looks capable.
-        for candidate in live:
-            if kind == "vision" and ("llama-4" in candidate or "vision" in candidate):
-                return candidate
-        if kind == "text" and live:
-            return live[0]
-    return preference[0]
+            add(candidate)
+    return ordered
+
+
+def resolve_model(kind: str = "text") -> str:
+    """The first model worth calling for this job."""
+    candidates = model_candidates(kind)
+    preference = (config.VISION_MODEL_PREFERENCE if kind == "vision"
+                  else config.TEXT_MODEL_PREFERENCE)
+    return candidates[0] if candidates else preference[0]
 
 
 def prepare_image(data: bytes) -> str:
@@ -113,7 +136,10 @@ def chat(messages: list[dict], kind: str = "text", json_mode: bool = False,
     """One completion. Retries 429/5xx with backoff, then raises GroqError."""
     if not config.GROQ_API_KEY:
         raise GroqError("GROQ_API_KEY غير مضبوط")
-    model = model or resolve_model(kind)
+    candidates = [model] if model else model_candidates(kind)
+    if not candidates:
+        candidates = [resolve_model(kind)]
+    model = candidates[0]
     body = {
         "model": model,
         "messages": messages,
@@ -156,15 +182,21 @@ def chat(messages: list[dict], kind: str = "text", json_mode: bool = False,
             log.warning("Groq %s, retrying in %.1fs", resp.status_code, delay)
             time.sleep(min(delay, 20))
             continue
-        elif resp.status_code == 404 and not (config.GROQ_TEXT_MODEL or config.GROQ_VISION_MODEL):
-            # The model id went away: refresh the live list and try the next one.
-            available_models(force=True)
-            new_model = resolve_model(kind)
+        elif resp.status_code in (400, 404) and "model" in resp.text.lower():
+            # This id is retired, or this key does not carry it: try the next.
             last_error = f"model {model} unavailable"
-            if new_model != model:
-                log.warning("model %s unavailable, switching to %s", model, new_model)
-                body["model"] = model = new_model
+            log.warning("model %s rejected (%s)", model, resp.status_code)
+            candidates = [c for c in candidates if c != model]
+            if not candidates:
+                available_models(force=True)         # maybe the list is stale
+                candidates = [c for c in model_candidates(kind) if c != model]
+            if candidates:
+                model = candidates[0]
+                body["model"] = model
+                log.warning("switching to %s", model)
                 continue
+            served = ", ".join(available_models()[:8]) or "تعذّر جلب القائمة"
+            raise GroqError(f"لا يوجد موديل صالح لـ {kind}. المتاح لمفتاحك: {served}")
         else:
             raise GroqError(f"HTTP {resp.status_code}: {resp.text[:300]}")
         time.sleep(1)

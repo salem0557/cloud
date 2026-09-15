@@ -20,9 +20,10 @@ HERE_COMMANDS = {"/here", ".here", "/وين", "/id"}
 POST_COMMANDS = {"/post", ".post", "/نشر"}
 SCAN_COMMANDS = {"/scan", ".scan", "/مسح"}
 WATCH_COMMANDS = {"/watchlist", ".watchlist", "/watch", "/المراقبة"}
+STATS_COMMANDS = {"/stats", ".stats", "/سجل", "/النتائج"}
 COMMANDS = ({"/help", ".help", "/start", "مساعدة", "/frames", "/ping", ".ping"}
             | DIAG_COMMANDS | HERE_COMMANDS | POST_COMMANDS | SCAN_COMMANDS
-            | WATCH_COMMANDS)
+            | WATCH_COMMANDS | STATS_COMMANDS)
 GENERAL_TOPIC = 1      # Telegram reports the General topic as thread id 1/None
 
 HELP = """أنا محلل فني آلي للسوق الأمريكي 📈
@@ -41,9 +42,11 @@ HELP = """أنا محلل فني آلي للسوق الأمريكي 📈
 
 الأوامر: /help | /frames | /ping | /here
 للمالك: /diag (فحص شامل) | /post (نشر تحليل في قسم التوصيات) |
-/scan (مسح فوري للمراقبة) | /watchlist (شروط التوصيات التلقائية)"""
+/scan (مسح فوري للمراقبة) | /watchlist (شروط التوصيات التلقائية) |
+/stats (سجل التوصيات ونسبة الإصابة الفعلية)"""
 
 _last_request: dict[int, float] = {}
+_told_private: set[int] = set()
 
 
 @dataclass
@@ -54,6 +57,7 @@ class Incoming:
     user_id: int | None = None
     has_photo: bool = False
     replied_has_photo: bool = False
+    username: str | None = None   # @name, for owner checks by name
     topic_id: int | None = None   # forum topic (None outside forum groups)
     is_forum: bool = False
     is_private: bool = False
@@ -103,9 +107,17 @@ def is_watchlist(text: str | None) -> bool:
     return _command(text) in WATCH_COMMANDS
 
 
+def is_stats(text: str | None) -> bool:
+    return _command(text) in STATS_COMMANDS
+
+
 def here_report(msg: Incoming) -> str:
-    """Answer to /here: the ids needed to fill in the topic variables."""
-    lines = [f"chat_id: `{msg.chat_id}`"]
+    """Answer to /here: every id needed to fill in the variables."""
+    lines = [f"chat_id: `{msg.chat_id}`",
+             f"your user_id: `{msg.user_id}`"
+             + (f" (@{msg.username})" if msg.username else ""),
+             "أنت ضمن الملاك ✅" if is_owner(msg.user_id, msg.username)
+             else "لست ضمن الملاك — أضف الرقم أعلاه إلى ANALYST_OWNER_IDS"]
     if msg.is_forum:
         lines.append(f"topic_id: `{topic_of(msg)}`" + (" (General)" if topic_of(msg) == GENERAL_TOPIC else ""))
     else:
@@ -120,26 +132,33 @@ def here_report(msg: Incoming) -> str:
     return "\n".join(lines)
 
 
-def diag_allowed(user_id: int | None, is_private: bool) -> bool:
+def diag_allowed(user_id: int | None, is_private: bool,
+                 username: str | None = None) -> bool:
     """The health report names models and settings, so it is owners-only.
 
     With no owners configured it is allowed in private chats, so a fresh
     install can still be checked before ANALYST_OWNER_IDS is set.
     """
-    if config.OWNER_IDS:
-        return user_id in config.OWNER_IDS
+    if owners_configured():
+        return is_owner(user_id, username)
     return is_private
 
 
-def cooldown_ok(user_id: int | None) -> bool:
+def cooldown_ok(user_id: int | None, username: str | None = None) -> bool:
     """One request per user per ANALYST_USER_COOLDOWN seconds (owners exempt)."""
-    if not user_id or user_id in config.OWNER_IDS:
+    if not user_id or is_owner(user_id, username):
         return True
     now = time.time()
     if now - _last_request.get(user_id, 0) < config.USER_COOLDOWN:
         return False
     _last_request[user_id] = now
     return True
+
+
+def analysable(msg: Incoming) -> bool:
+    """Is there anything here to analyse — a chart, a ticker, or a timeframe?"""
+    return bool(msg.has_photo or msg.replied_has_photo or has_trigger(msg.text)
+                or frames.parse(msg.text) or symbols.resolve(msg.text))
 
 
 def topic_of(msg: Incoming) -> int | None:
@@ -149,13 +168,47 @@ def topic_of(msg: Incoming) -> int | None:
     return msg.topic_id or GENERAL_TOPIC
 
 
+def is_owner(user_id: int | None = None, username: str | None = None) -> bool:
+    """An owner by numeric id or by @username — both spellings are accepted."""
+    if user_id is not None and user_id in config.OWNER_IDS:
+        return True
+    return bool(username and username.lstrip("@").lower() in config.OWNER_USERNAMES)
+
+
+def owners_configured() -> bool:
+    return bool(config.OWNER_IDS or config.OWNER_USERNAMES)
+
+
+def private_allowed(msg: "Incoming") -> bool:
+    """Private chats are served unless switched off — owners always are."""
+    return config.ANSWER_PRIVATE or is_owner(msg.user_id, msg.username)
+
+
+def private_notice(user_id: int | None) -> str | None:
+    """The one-time "ask in the group" reply, if one is configured."""
+    if not config.PRIVATE_NOTICE or user_id is None:
+        return None
+    if user_id in _told_private:
+        return None
+    _told_private.add(user_id)
+    if len(_told_private) > 2000:
+        _told_private.clear()
+    return config.PRIVATE_NOTICE
+
+
 def decide(msg: Incoming) -> tuple[bool, str]:
     """(answer?, why) — the single gate both backends go through."""
     if not chat_allowed(msg.chat_id):
         return False, "chat not allowed"
+    # /here stays reachable: it is how you read the ids this is configured with,
+    # and locking it behind the very setting it configures is a dead end.
+    if msg.is_private and not private_allowed(msg) and not is_here(msg.text):
+        return False, "private disabled"
     # In a forum group with a configured Q&A topic, every other topic is
-    # somebody else's conversation: stay out of it entirely.
-    if config.QA_TOPIC and msg.is_forum and not msg.is_private:
+    # somebody else's conversation: stay out of it entirely. /here is the one
+    # exception — it is how you discover a topic's id, including the id of the
+    # topic the agent is being configured to stay out of.
+    if config.QA_TOPIC and msg.is_forum and not msg.is_private and not is_here(msg.text):
         if topic_of(msg) != config.QA_TOPIC:
             return False, f"wrong topic ({topic_of(msg)})"
     # A userbot runs as its owner's account, so his ordinary chatter arrives
@@ -167,10 +220,17 @@ def decide(msg: Incoming) -> tuple[bool, str]:
         return True, "command"
 
     if msg.is_private and config.DM_ALWAYS_ANSWER:
-        if (msg.has_photo or msg.replied_has_photo or has_trigger(msg.text)
-                or frames.parse(msg.text) or symbols.resolve(msg.text)):
+        if analysable(msg):
             return True, "private chat"
         return False, "private but nothing to analyse"
+
+    # A topic dedicated to asking the agent: everything in it is addressed to
+    # it, so no trigger word is needed — but it still only speaks when there is
+    # something to analyse, so ordinary chatter there stays unanswered.
+    if config.QA_TOPIC and topic_of(msg) == config.QA_TOPIC:
+        if analysable(msg):
+            return True, "qa topic"
+        return False, "qa topic but nothing to analyse"
 
     if has_trigger(msg.text):
         return True, "trigger word"
@@ -220,6 +280,7 @@ def command_reply(text: str) -> str | None:
     if command in ("/ping", ".ping"):
         return "شغّال ✅"
     if (command in HERE_COMMANDS or command in POST_COMMANDS
-            or command in SCAN_COMMANDS or command in WATCH_COMMANDS):
+            or command in SCAN_COMMANDS or command in WATCH_COMMANDS
+            or command in STATS_COMMANDS):
         return None      # these need the message or the bot, handled by the backend
     return None

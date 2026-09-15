@@ -9,3 +9,4 @@ mplfinance
 tabulate>=0.9
 telethon>=1.36        # analyst_agent: Telegram userbot
 pillow>=10.0          # analyst_agent: chart screenshot resizing
+fastmcp>=4.0            # mcp_server.py: MCP bridge for Claude

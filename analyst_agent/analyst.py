@@ -18,16 +18,16 @@ import re
 from dataclasses import dataclass, field
 
 from . import (chart as chart_mod, config, frames, groq_client, indicators,
-               market, news as news_mod, prompts, session as session_mod, symbols,
-               verdict as verdict_mod)
+               journal, market, news as news_mod, prompts, session as session_mod,
+               symbols, verdict as verdict_mod)
 
 log = logging.getLogger(__name__)
 
 NO_SYMBOL = (
     "ما عرفت الرمز 🤔\n"
-    "أرسل الصورة ومعها الرمز والفريم، مثال:\n"
+    "اكتب الرمز مع الصورة، مثال:\n"
+    "• «NVDA وش رايك؟»\n"
     "• «حلل TSLA فريم 15 دقيقة»\n"
-    "• «أرامكو يومي»\n"
     "• «BTC 4 ساعات»"
 )
 NO_DATA = ("جبت الرمز {symbol} لكن ما توفرت بيانات كافية له على فريم {frame}.\n"
@@ -46,6 +46,7 @@ class Answer:
     frame_key: str | None = None
     used_model: str | None = None
     silent: bool = False      # send nothing at all (the photo was not a chart)
+    call_id: str | None = None   # journal entry, so the outcome can quote this
     debug: dict = field(default_factory=dict)
 
 
@@ -104,12 +105,17 @@ def analyze(caption: str | None = None, image: bytes | None = None,
 
     caption_candidates = symbols.resolve(caption) if caption else []
     if image and not addressed and not caption_candidates:
-        # Nothing points at a chart: either vision says it is not one, or there
-        # was no vision read to go on. Either way, say nothing.
-        if read is None or not read.is_chart:
+        # Stay silent only when the picture is confidently not a chart. A failed
+        # vision call is not the same answer: silence there means a member asks
+        # a question and gets nothing, with no way to tell the difference.
+        confident_not_chart = read is not None and not read.is_chart and not read.error
+        blind = read is None                  # no key, so nothing was even looked at
+        if confident_not_chart or blind:
             reason = "vision says not a chart" if read else "no vision read"
             log.info("ignoring photo silently (%s)", reason)
             return Answer(False, "", silent=True, debug={"skipped": reason})
+        if read is not None and read.error:
+            log.warning("vision failed on a group photo, answering anyway: %s", read.error)
 
     candidates, symbol_source = _pick_symbol(caption, read)
     if not candidates:
@@ -122,7 +128,9 @@ def analyze(caption: str | None = None, image: bytes | None = None,
                           symbol=elsewhere[0].symbol)
         hint = ""
         if read and read.error:
-            hint = f"\n(قراءة الصورة تعذّرت: {read.error})"
+            # The reason matters to whoever runs the bot, not to the group.
+            log.warning("vision read failed: %s", read.error)
+            hint = "\n(ما قدرت أقرأ الرمز من الصورة — اكتبه معها)"
         elif read and not read.is_chart:
             hint = "\n(الصورة لا تبدو تشارت)"
         return Answer(False, NO_SYMBOL + hint, debug={"vision": read.to_dict() if read else None})
@@ -136,25 +144,82 @@ def analyze(caption: str | None = None, image: bytes | None = None,
 
     used = data.frame
     facts = indicators.analyze(data.df, used.key, daily_df=data.daily_df)
+    # Indicators come from closed candles; the price you would actually trade at
+    # is inside the bar still forming, so both are reported.
+    if data.live_price:
+        facts["last_closed_price"] = facts["price"]
+        facts["price"] = data.live_price
+        facts["forming_bar"] = True
+        facts["price_note"] = (f"المؤشرات محسوبة على الشموع المغلقة (آخر إغلاق "
+                               f"{facts['last_closed_price']})، والسعر المعروض لحظي "
+                               f"داخل الشمعة الجارية")
     facts["frame_label"] = used.label_ar
     facts["frame_source"] = frame_source
     # The read has to state which session it is looking at, per asset class
     # (crypto never closes), and how old the last candle is in bar units.
-    facts["session"] = session_mod.state_for(data.symbol)
-    facts["session"].update(session_mod.bar_freshness(data.last_time.to_pydatetime(),
-                                                      used.minutes))
+    try:
+        facts["session"] = session_mod.state_for(data.symbol)
+        facts["session"].update(session_mod.bar_freshness(data.last_time.to_pydatetime(),
+                                                          used.minutes))
+    except Exception:
+        log.warning("session state failed", exc_info=True)
+        facts["session"] = {}
     context_facts = None
     if data.context_df is not None and len(data.context_df) >= 30:
-        ctx_frame = frames.context_frame(used)
-        context_facts = indicators.analyze(data.context_df, ctx_frame.key if ctx_frame else "1d",
-                                           daily_df=data.daily_df)
+        try:
+            ctx_frame = frames.context_frame(used)
+            context_facts = indicators.analyze(
+                data.context_df, ctx_frame.key if ctx_frame else "1d",
+                daily_df=data.daily_df)
+        except Exception:
+            # Context is a bonus: losing it costs alignment, not the answer.
+            log.warning("higher timeframe analysis failed", exc_info=True)
 
-    call = verdict_mod.decide(facts, context_facts)
+    # "كم يوصل بعد ساعة؟" — project over exactly that many bars of this frame,
+    # not over a fixed default that answers a different question.
+    horizon_minutes = frames.parse_horizon(caption)
+    label = None
+    if horizon_minutes == frames.REST_OF_DAY:
+        horizon_minutes, label = _rest_of_day(facts.get("session") or {})
+    horizon_bars = 10.0
+    if horizon_minutes:
+        # Fractional bars are kept: "today" on a daily chart is a fraction of
+        # one candle, and rounding it up to a whole bar overstates the range.
+        horizon_bars = max(0.1, min(200.0, horizon_minutes / used.minutes))
+    minutes = horizon_minutes or horizon_bars * used.minutes
+    horizon = {
+        "minutes": int(minutes),
+        "bars": round(horizon_bars, 2),
+        "bars_text": max(1, round(horizon_bars)),
+        "label": label or frames.humanise_minutes(int(minutes)),
+        "asked": bool(horizon_minutes),
+    }
+    horizon.update(_session_limits(horizon, facts.get("session") or {}, used))
+    facts["horizon"] = horizon
+    horizon_bars = horizon["bars"]
+    call = verdict_mod.decide(facts, context_facts, horizon_bars=horizon_bars)
     verdict_dict = call.to_dict()
 
-    news = news_mod.bundle(data.symbol, data.meta) if with_news else {}
+    # Every call with a real plan goes into the journal, so the hit rate can be
+    # measured later instead of argued about.
+    call_id = None
+    try:
+        entry = journal.record(symbol=data.symbol, frame=used.key, verdict=verdict_dict)
+        call_id = entry.id if entry else None
+    except Exception:
+        log.warning("journal record failed", exc_info=True)
+
+    news = {}
+    if with_news:
+        try:
+            news = news_mod.bundle(data.symbol, data.meta)
+        except Exception:
+            log.warning("news bundle failed", exc_info=True)
     # English label only — the chart image must stay free of Arabic text.
-    png = chart_mod.render(data.symbol, data.df, used.label_en, facts, verdict_dict)
+    # The chart draws the forming bar too: hiding it would make the picture
+    # disagree with the reader's own screen.
+    png = chart_mod.render(data.symbol, data.full_df if data.full_df is not None else data.df,
+                           used.label_en, facts, verdict_dict)
 
     note = data.fallback_note
     text, model_used = _write_analysis(
@@ -167,12 +232,59 @@ def analyze(caption: str | None = None, image: bytes | None = None,
                 f"{call.direction} (ثقة {call.conviction}%)")
     return Answer(
         ok=True, text=text, headline=headline, chart_png=png, symbol=data.symbol,
-        frame_key=used.key, used_model=model_used,
+        frame_key=used.key, used_model=model_used, call_id=call_id,
         debug={"symbol_source": symbol_source, "frame_source": frame_source,
                "requested_frame": frame.key, "used_frame": used.key,
                "bars": data.bars, "score": round(call.score, 1),
                "vision": read.to_dict() if read else None},
     )
+
+
+def _rest_of_day(session: dict) -> tuple[int, str]:
+    """How much of today is left to trade, and what to call it.
+
+    "هل يرتد اليوم؟" is a question about the hours remaining, not about ten
+    days. For a stock that is the rest of the session; for crypto, the rest of
+    the calendar day; for a market already shut, the session ahead.
+    """
+    from datetime import datetime, timezone
+
+    remaining = session.get("minutes_to_close")
+    if remaining:
+        return int(remaining), f"بقية جلسة اليوم ({int(remaining)} دقيقة)"
+    if session.get("asset_class") == "us_equity":
+        if session.get("minutes_to_open"):
+            return 390, "جلسة اليوم القادمة"
+        return 390, "الجلسة القادمة"
+    now = datetime.now(timezone.utc)
+    minutes_left = int((24 * 60) - (now.hour * 60 + now.minute))
+    return max(30, minutes_left), "بقية اليوم"
+
+
+def _session_limits(horizon: dict, session: dict, frame) -> dict:
+    """Clip an intraday projection to the trading day.
+
+    A stock does not trade for the next hour at 15:45 ET — it trades for
+    fifteen minutes and then gaps overnight. Projecting ATR across bars that
+    will never print is how a reasonable-looking range becomes wrong. Crypto,
+    which never closes, is left alone.
+    """
+    if session.get("asset_class") != "us_equity" or frame.minutes >= 1440:
+        return {}
+    if session.get("phase") != "regular":
+        return {"session_note": "السوق مغلق الآن — النطاق يخص الجلسة القادمة، "
+                                "ولا يشمل الفتحة السعرية عند الافتتاح"}
+    remaining = session.get("minutes_to_close")
+    if not remaining or remaining >= horizon["minutes"]:
+        return {}
+    capped_bars = max(1, int(remaining // frame.minutes))
+    return {
+        "bars": capped_bars,
+        "minutes": remaining,
+        "label": frames.humanise_minutes(int(remaining)),
+        "session_note": (f"يتبقى {int(remaining)} دقيقة على إغلاق السوق، "
+                         f"فالنطاق محسوب حتى الإغلاق لا لكامل المدة المطلوبة"),
+    }
 
 
 def vision_read(image: bytes):
@@ -194,12 +306,15 @@ def _write_analysis(*, symbol, meta, requested, used, facts, context_facts,
         verdict=verdict, news=news, chart_read=read.to_dict() if read else None,
         fallback_note=note,
     )
+    detailed = config.ANSWER_STYLE == "full" or prompts.wants_detail(question)
     if config.GROQ_API_KEY:
         try:
             model = groq_client.resolve_model("text")
-            text = groq_client.chat(prompts.build_messages(payload, question), kind="text",
-                                    model=model)
-            if text and len(text) > 120:
+            text = groq_client.chat(
+                prompts.build_messages(payload, question,
+                                       style="full" if detailed else "simple"),
+                kind="text", model=model)
+            if text and len(text) > (60 if not detailed else 120):
                 if note and note not in text:
                     text += f"\n\nℹ️ {note}"
                 return text, model
@@ -208,5 +323,6 @@ def _write_analysis(*, symbol, meta, requested, used, facts, context_facts,
             log.warning("Groq analysis failed: %s", exc)
         except Exception:
             log.exception("Groq analysis crashed")
-    return prompts.fallback_text(symbol=symbol, frame_label=used.label_ar, facts=facts,
-                                 verdict=verdict, news=news, note=note), None
+    writer = prompts.fallback_text if detailed else prompts.simple_text
+    return writer(symbol=symbol, frame_label=used.label_ar, facts=facts,
+                  verdict=verdict, news=news, note=note), None

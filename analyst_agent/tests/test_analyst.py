@@ -39,7 +39,7 @@ def test_text_request_produces_chart_and_analysis(offline):
     assert answer.symbol == "TSLA"
     assert answer.frame_key == "15m"
     assert answer.chart_png[:4] == b"\x89PNG"
-    assert "الخلاصة" in answer.text and "الخطة" in answer.text
+    assert "TSLA" in answer.text and "ثقة" in answer.text
     assert answer.debug["frame_source"] == "مكتوب في الرسالة"
 
 
@@ -133,7 +133,7 @@ def test_saudi_request_says_it_is_out_of_market(offline):
 
 
 def test_session_state_reaches_the_answer(offline):
-    answer = analyst.analyze("حلل TSLA يومي")
+    answer = analyst.analyze("حلل TSLA يومي بالتفصيل")
     assert answer.ok
     assert "حالة السوق" in answer.text
 
@@ -157,7 +157,7 @@ def test_groq_failure_falls_back_to_the_template(offline, monkeypatch):
     answer = analyst.analyze("حلل TSLA يومي")
     assert answer.ok
     assert answer.used_model is None
-    assert "الخلاصة" in answer.text
+    assert "ثقة" in answer.text and "📋" in answer.text
 
 
 def test_groq_text_is_used_when_it_answers(offline, monkeypatch):
@@ -210,3 +210,140 @@ def test_fallback_template_mentions_every_section():
     for marker in ("الخلاصة", "القراءة الفنية", "المستويات", "ما يلغي السيناريو"):
         assert marker in text
     assert str(facts["price"]) in text
+
+
+def _frame(key="5m"):
+    from analyst_agent import frames
+
+    return frames.get(key)
+
+
+def test_intraday_projection_is_clipped_to_the_close():
+    """At 15:45 ET a stock does not trade for another hour — it trades 15 minutes."""
+    horizon = {"minutes": 60, "bars": 12, "label": "ساعة", "asked": True}
+    limits = analyst._session_limits(
+        horizon, {"asset_class": "us_equity", "phase": "regular",
+                  "minutes_to_close": 15}, _frame())
+    assert limits["bars"] == 3
+    assert limits["minutes"] == 15
+    assert "الإغلاق" in limits["session_note"]
+
+
+def test_a_projection_that_fits_the_session_is_untouched():
+    horizon = {"minutes": 60, "bars": 12, "label": "ساعة", "asked": True}
+    assert analyst._session_limits(
+        horizon, {"asset_class": "us_equity", "phase": "regular",
+                  "minutes_to_close": 180}, _frame()) == {}
+
+
+def test_closed_market_says_the_range_is_for_the_next_session():
+    limits = analyst._session_limits(
+        {"minutes": 60, "bars": 12, "label": "ساعة"},
+        {"asset_class": "us_equity", "phase": "weekend"}, _frame())
+    assert "الجلسة القادمة" in limits["session_note"]
+    assert "bars" not in limits          # nothing to clip, only to explain
+
+
+def test_crypto_is_never_clipped():
+    """Crypto has no close, so the hour asked for is the hour projected."""
+    assert analyst._session_limits(
+        {"minutes": 60, "bars": 12, "label": "ساعة"},
+        {"asset_class": "crypto", "phase": "crypto_24h"}, _frame()) == {}
+
+
+def test_daily_frames_are_not_clipped():
+    assert analyst._session_limits(
+        {"minutes": 4320, "bars": 3, "label": "3 أيام"},
+        {"asset_class": "us_equity", "phase": "regular", "minutes_to_close": 15},
+        _frame("1d")) == {}
+
+
+def test_horizon_reaches_the_answer(offline, monkeypatch):
+    # Pin the session: on a live equity clock the hour would be clipped to the
+    # close, which is correct behaviour but makes the assertion time-dependent.
+    monkeypatch.setattr(analyst.session_mod, "state_for",
+                        lambda symbol: {"asset_class": "crypto", "phase": "crypto_24h",
+                                        "phase_ar": "24 ساعة", "is_open": True})
+    answer = analyst.analyze("NVDA على فريم 5 دقايق كم يوصل بعد ساعة؟")
+    assert answer.ok
+    assert "🔮" in answer.text          # the projection line
+    assert "ساعة" in answer.text
+
+
+def test_a_failed_vision_read_still_gets_an_answer(offline, monkeypatch):
+    """A Groq hiccup must not look like "that picture is not a chart"."""
+    monkeypatch.setattr(config, "GROQ_API_KEY", "k")
+    monkeypatch.setattr(analyst, "vision_read",
+                        lambda image: vision.ChartRead(error="rate limited"))
+    answer = analyst.analyze("متى يمكنني الدخول", image=b"\x89PNG", addressed=False)
+    assert answer.silent is False
+    assert "ما عرفت الرمز" in answer.text
+
+
+def test_a_confident_non_chart_is_still_silent(offline, monkeypatch):
+    monkeypatch.setattr(config, "GROQ_API_KEY", "k")
+    monkeypatch.setattr(analyst, "vision_read",
+                        lambda image: vision.ChartRead(is_chart=False))
+    assert analyst.analyze("شوفوا", image=b"\x89PNG", addressed=False).silent is True
+
+
+def test_without_a_key_group_photos_stay_silent(offline, monkeypatch):
+    monkeypatch.setattr(config, "GROQ_API_KEY", "")
+    assert analyst.analyze("شوفوا", image=b"\x89PNG", addressed=False).silent is True
+
+
+def test_the_default_answer_is_short_enough_for_a_caption(offline):
+    """The whole read should ride under the chart as one message."""
+    answer = analyst.analyze("BTC-USD على فريم 30 دقيقة")
+    assert answer.ok
+    assert len(answer.text) <= 1024
+    assert "EMA fast" not in answer.text and "lower_low" not in answer.text
+
+
+def test_the_short_answer_leads_with_the_decision(offline):
+    answer = analyst.analyze("NVDA يومي")
+    first = answer.text.splitlines()[0]
+    assert "ثقة" in first
+    assert any(mark in answer.text for mark in ("✅", "⚠️", "⛔", "⏸️"))
+
+
+def test_asking_for_detail_returns_the_long_form(offline):
+    short = analyst.analyze("NVDA يومي")
+    detailed = analyst.analyze("NVDA يومي بالتفصيل")
+    assert len(detailed.text) > len(short.text)
+    assert "القراءة الفنية" in detailed.text
+
+
+def test_full_style_can_be_the_default(offline, monkeypatch):
+    monkeypatch.setattr(config, "ANSWER_STYLE", "full")
+    assert "القراءة الفنية" in analyst.analyze("NVDA يومي").text
+
+
+def test_today_becomes_the_rest_of_the_session():
+    minutes, label = analyst._rest_of_day(
+        {"asset_class": "us_equity", "phase": "regular", "minutes_to_close": 297})
+    assert minutes == 297 and "بقية جلسة اليوم" in label
+
+
+def test_today_before_the_open_points_at_the_coming_session():
+    minutes, label = analyst._rest_of_day(
+        {"asset_class": "us_equity", "phase": "pre", "minutes_to_open": 45})
+    assert minutes == 390 and "القادمة" in label
+
+
+def test_today_for_crypto_is_the_rest_of_the_calendar_day():
+    minutes, label = analyst._rest_of_day({"asset_class": "crypto", "phase": "crypto_24h"})
+    assert 30 <= minutes <= 1440 and label == "بقية اليوم"
+
+
+def test_asking_about_today_does_not_project_ten_days(offline):
+    answer = analyst.analyze("هل سيرتد سعر SPY اليوم؟")
+    assert answer.ok
+    assert "10 أيام" not in answer.text
+    assert "اليوم" in answer.text or "الجلسة" in answer.text
+
+
+def test_a_fractional_window_keeps_its_bar_count_readable(offline):
+    """Today on a daily chart is a fraction of one candle, not ten."""
+    answer = analyst.analyze("SPY اليوم")
+    assert answer.ok and "10 أيام" not in answer.text

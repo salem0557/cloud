@@ -28,8 +28,51 @@ def _stocktwits_symbol(symbol: str) -> str:
     return symbol.replace("-USD", ".X").replace("=F", "").replace("^", "")
 
 
+def age_hours(published) -> float | None:
+    """How old a headline is, from either an epoch int or an ISO string."""
+    if published in (None, ""):
+        return None
+    try:
+        if isinstance(published, (int, float)):
+            when = datetime.fromtimestamp(float(published), tz=timezone.utc)
+        else:
+            text = str(published).replace("Z", "+00:00")
+            when = datetime.fromisoformat(text)
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+    return max(0.0, (datetime.now(timezone.utc) - when).total_seconds() / 3600)
+
+
+def age_label(hours: float | None) -> str:
+    if hours is None:
+        return ""
+    if hours < 1:
+        return "قبل دقائق"
+    if hours < 24:
+        return f"قبل {int(hours)} ساعة"
+    return f"قبل {int(hours / 24)} يوم"
+
+
+def _publisher_rank(publisher: str) -> int:
+    """0 for wire services and real outlets, 1 for everything else."""
+    low = (publisher or "").lower()
+    return 0 if any(name in low for name in config.NEWS_PREFER_PUBLISHERS) else 1
+
+
+def _is_noise(publisher: str) -> bool:
+    low = (publisher or "").lower()
+    return any(name in low for name in config.NEWS_SKIP_PUBLISHERS)
+
+
 def headlines(symbol: str, limit: int | None = None) -> list[dict]:
-    """Recent Yahoo Finance headlines for the symbol."""
+    """Recent headlines worth showing: reporting first, marketing dropped.
+
+    A "should you buy Costco?" piece from a stock-tips site beside a bearish
+    two-hour read reads like a contradiction when it is not even about the
+    same horizon. Promotional outlets are skipped and stale items dropped.
+    """
     if not config.NEWS_ENABLED:
         return []
     limit = limit or config.NEWS_LIMIT
@@ -39,20 +82,32 @@ def headlines(symbol: str, limit: int | None = None) -> list[dict]:
         log.warning("news fetch failed for %s", symbol, exc_info=True)
         return []
     out = []
-    for item in items[:limit]:
+    for item in items:
         content = item.get("content", item)  # newer yfinance nests under "content"
         title = content.get("title")
         if not title:
             continue
         provider = content.get("provider") or {}
+        publisher = provider.get("displayName") or item.get("publisher") or ""
+        if _is_noise(publisher):
+            continue
+        published = (content.get("pubDate") or content.get("displayTime")
+                     or item.get("providerPublishTime") or "")
+        hours = age_hours(published)
+        if hours is not None and hours > config.NEWS_MAX_AGE_HOURS:
+            continue
         out.append({
             "title": title,
-            "publisher": provider.get("displayName") or item.get("publisher") or "",
-            "published": (content.get("pubDate") or content.get("displayTime")
-                          or item.get("providerPublishTime") or ""),
+            "publisher": publisher,
+            "published": published,
+            "age_hours": round(hours, 1) if hours is not None else None,
+            "age_label": age_label(hours),
             "summary": (content.get("summary") or "")[:400],
         })
-    return out
+    # Real reporting first, then the freshest.
+    out.sort(key=lambda h: (_publisher_rank(h["publisher"]),
+                            h["age_hours"] if h["age_hours"] is not None else 9e9))
+    return out[:limit]
 
 
 def social(symbol: str, limit: int | None = None) -> dict:

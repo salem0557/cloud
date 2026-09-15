@@ -67,9 +67,16 @@ def check_groq_models() -> Check:
     if not models:
         return Check("موديلات Groq", False, "تعذّر الوصول إلى Groq — تأكد من المفتاح والاتصال", True)
     text = groq_client.resolve_model("text")
-    vision = groq_client.resolve_model("vision")
+    vision_models = groq_client.vision_capable(models)
+    if not vision_models:
+        return Check("موديلات Groq", False,
+                     f"{len(models)} موديل متاح لكن لا يوجد موديل يقرأ الصور — "
+                     "التحليل النصي يعمل، وقراءة التشارت من الصورة لا تعمل. "
+                     f"النصي: {text}")
     return Check("موديلات Groq", True,
-                 f"{len(models)} موديل متاح | النصي: {text} | قراءة الصور: {vision}")
+                 f"{len(models)} موديل | النصي: {text} | "
+                 f"قراءة الصور: {groq_client.resolve_model('vision')} "
+                 f"(متاح منها {len(vision_models)})")
 
 
 def check_groq_call() -> Check:
@@ -173,7 +180,8 @@ def check_config() -> Check:
         f"الفريم الافتراضي: {config.DEFAULT_FRAME}",
         f"تحليل كل الصور: {'نعم' if config.ANSWER_ALL_PHOTOS else 'لا'}",
         f"قروبات مسموحة: {len(config.ALLOWED_CHATS) or 'الكل'}",
-        f"مالكون: {len(config.OWNER_IDS) or 'لا أحد'}",
+        "مالكون: " + (", ".join([str(i) for i in config.OWNER_IDS]
+                                 + ["@" + u for u in config.OWNER_USERNAMES]) or "لا أحد"),
     ]
     return Check("الإعدادات", True, " | ".join(bits))
 
@@ -193,10 +201,11 @@ def check_watcher() -> Check:
                  f"| ثقة ≥ {config.WATCH_MIN_CONVICTION}%")
 
 
-QUICK = [check_packages, check_groq_key, check_telegram, check_config, check_session,
-         check_watcher]
-FULL = QUICK + [check_groq_models, check_groq_call, check_market_data, check_chart,
-                check_pipeline]
+# check_groq_models is in QUICK on purpose: which models a key carries is the
+# single most useful line in a deploy log, and it costs one GET.
+QUICK = [check_packages, check_groq_key, check_groq_models, check_telegram,
+         check_config, check_session, check_watcher]
+FULL = QUICK + [check_groq_call, check_market_data, check_chart, check_pipeline]
 
 
 def run_all(quick: bool = False) -> list[Check]:

@@ -82,3 +82,64 @@ def test_bare_letters_in_a_sentence_are_not_frames(text):
     """"W" and "MO" are real tickers: free text must not read them as frames."""
     parsed = frames.parse(text)
     assert parsed is None or parsed.key == "1d"
+
+
+@pytest.mark.parametrize("text,minutes", [
+    ("ETHUSD كم سيصل سعرها بعد ساعة؟", 60),
+    ("كم يوصل بعد نص ساعة", 30),
+    ("بعد ربع ساعة", 15),
+    ("خلال ساعتين", 120),
+    ("بعد 45 دقيقة", 45),
+    ("بعد 3 ساعات", 180),
+    ("بكرة وش تتوقع", 1440),
+    ("بعد يومين", 2880),
+    ("in 2 hours", 120),
+])
+def test_parse_horizon(text, minutes):
+    assert frames.parse_horizon(text) == minutes
+
+
+@pytest.mark.parametrize("text", ["حلل يومي", "على فريم ساعة وش رايك؟", "NVDA", ""])
+def test_no_horizon_in_a_plain_request(text):
+    """"على فريم ساعة" is a timeframe, not a horizon — reading one as the
+    other answers a question nobody asked."""
+    assert frames.parse_horizon(text) is None
+
+
+def test_frame_and_horizon_are_read_separately():
+    text = "على فريم 5 دقايق كم يوصل بعد ساعة؟"
+    assert frames.parse(text).key == "5m"
+    assert frames.parse_horizon(text) == 60
+
+
+@pytest.mark.parametrize("minutes,expected", [
+    (45, "45 دقيقة"), (60, "ساعة"), (120, "ساعتين"), (180, "3 ساعات"),
+    (1440, "يوم"), (2880, "يومين"),
+])
+def test_humanise_minutes(minutes, expected):
+    assert frames.humanise_minutes(minutes) == expected
+
+
+def test_question_marks_do_not_break_parsing():
+    """Arabic punctuation shares the letters' Unicode block."""
+    assert frames.parse("15 دقيقة؟").key == "15m"
+    assert frames.parse_horizon("بعد ساعة؟") == 60
+
+
+@pytest.mark.parametrize("text", [
+    "هل سيرتد سعر spx اليوم؟", "SPX اليوم", "وش يصير اليوم", "today", "هاليوم",
+])
+def test_today_is_a_horizon_not_ten_days(text):
+    """Asking about today used to fall through to the ten-bar default."""
+    assert frames.parse_horizon(text) == frames.REST_OF_DAY
+
+
+def test_the_daily_frame_is_not_a_today_horizon():
+    """"اليومي" names the timeframe; "اليوم" names the window."""
+    assert frames.parse_horizon("حلل SPX اليومي") is None
+    assert frames.parse("حلل SPX اليومي").key == "1d"
+
+
+def test_after_a_day_is_still_a_full_day():
+    assert frames.parse_horizon("بعد يوم") == 1440
+    assert frames.parse_horizon("بكرة") == 1440

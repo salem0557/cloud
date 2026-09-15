@@ -43,6 +43,20 @@ def _ids(name: str) -> set[int]:
     return out
 
 
+def _usernames(name: str) -> set[str]:
+    """The @names in the same variable, lowercased and without the @.
+
+    Numeric ids are what Telegram actually guarantees, but nobody knows their
+    own id by heart — so a username is accepted and matched at runtime.
+    """
+    out: set[str] = set()
+    for part in os.getenv(name, "").replace(",", " ").split():
+        token = part.strip().lstrip("@").lower()
+        if token and not token.lstrip("-").isdigit():
+            out.add(token)
+    return out
+
+
 def _list(name: str, default: list[str]) -> list[str]:
     parts = [p.strip() for p in os.getenv(name, "").split(",") if p.strip()]
     return parts or default
@@ -90,12 +104,19 @@ QA_TOPIC = _int("ANALYST_QA_TOPIC", 0)
 ALERTS_TOPIC = _int("ANALYST_ALERTS_TOPIC", 0)
 BLOCKED_CHATS = _ids("ANALYST_BLOCKED_CHATS")
 OWNER_IDS = _ids("ANALYST_OWNER_IDS")
+OWNER_USERNAMES = _usernames("ANALYST_OWNER_IDS")
 # In a group the agent stays silent unless one of these words is in the
 # message, it is a reply to the agent, or the agent is @mentioned.
 TRIGGERS = _list("ANALYST_TRIGGERS", [
     "تحليل", "حلل", "حلّل", "شارت", "تشارت", "الشارت", "التشارت",
     "analyze", "analysis", "chart", "ta",
 ])
+# Answer private chats at all. False = group only; owners are still served so
+# /diag and testing keep working in a DM.
+ANSWER_PRIVATE = _bool("ANALYST_ANSWER_PRIVATE", True)
+# Optional one-time reply to someone who messages privately while that is off.
+# Empty = stay silent.
+PRIVATE_NOTICE = os.getenv("ANALYST_PRIVATE_NOTICE", "").strip()
 # In a private chat every photo is analysed without needing a trigger word.
 DM_ALWAYS_ANSWER = _bool("ANALYST_DM_ALWAYS", True)
 # Any photo in an allowed chat is treated as a request, whatever is written
@@ -107,10 +128,21 @@ ANSWER_ALL_PHOTOS = _bool("ANALYST_ANSWER_ALL_PHOTOS",
 MAX_CONCURRENT = _int("ANALYST_MAX_CONCURRENT", 2)
 USER_COOLDOWN = _int("ANALYST_USER_COOLDOWN", 20)  # seconds between requests
 SEND_TYPING = _bool("ANALYST_SEND_TYPING", True)
+# python-telegram-bot defaults to 5s for every HTTP call. Uploading a ~300KB
+# chart over a slow link takes longer than that, and the TimedOut lands after
+# the photo is already on its way — so the analysis text never gets sent.
+TG_CONNECT_TIMEOUT = _float("ANALYST_TG_CONNECT_TIMEOUT", 20.0)
+TG_READ_TIMEOUT = _float("ANALYST_TG_READ_TIMEOUT", 40.0)
+TG_WRITE_TIMEOUT = _float("ANALYST_TG_WRITE_TIMEOUT", 60.0)
+TG_MEDIA_TIMEOUT = _float("ANALYST_TG_MEDIA_TIMEOUT", 120.0)
 # Log a short health report on boot, so the deploy logs say whether this
 # instance can actually answer before anyone tries it.
 STARTUP_CHECK = _bool("ANALYST_STARTUP_CHECK", True)
 REPLY_LANG = os.getenv("ANALYST_LANG", "ar").strip().lower()
+# simple: a decision in a few lines, short enough to ride under the chart as a
+# caption. full: every indicator spelled out. A message asking for "تفصيلي"
+# gets the long form whatever the default is.
+ANSWER_STYLE = os.getenv("ANALYST_STYLE", "simple").strip().lower()
 
 # --- Automatic recommendations (watcher) ------------------------------------
 # Where alerts are posted. In a forum group this is the group's chat id, with
@@ -133,7 +165,7 @@ WATCH_INTERVAL_MIN = _int("ANALYST_WATCH_INTERVAL", 30)
 # The bar a setup has to clear to be posted. These are the "conditions".
 WATCH_MIN_CONVICTION = _int("ANALYST_WATCH_MIN_CONVICTION", 65)
 WATCH_MIN_SCORE = _float("ANALYST_WATCH_MIN_SCORE", 40.0)
-WATCH_MIN_RR = _float("ANALYST_WATCH_MIN_RR", 1.5)
+WATCH_MIN_RR = _float("ANALYST_WATCH_MIN_RR", 1.2)
 WATCH_MIN_ADX = _float("ANALYST_WATCH_MIN_ADX", 18.0)
 WATCH_MIN_REL_VOLUME = _float("ANALYST_WATCH_MIN_REL_VOLUME", 0.9)
 # long | short | both — shorts are off by default: harder to time, and a
@@ -145,6 +177,25 @@ WATCH_MAX_PER_DAY = _int("ANALYST_WATCH_MAX_PER_DAY", 10)
 WATCH_SKIP_EARNINGS_DAYS = _int("ANALYST_WATCH_SKIP_EARNINGS_DAYS", 3)
 WATCH_ONLY_WHEN_OPEN = _bool("ANALYST_WATCH_ONLY_WHEN_OPEN", True)
 STATE_FILE = os.getenv("ANALYST_STATE_FILE", "analyst_state.json").strip()
+# Where state and the journal live. On Railway the container filesystem is
+# wiped on every deploy: mount a Volume and point this at it to keep history.
+DATA_DIR = os.getenv("ANALYST_DATA_DIR", ".").strip() or "."
+
+# --- journal: what actually happened to each call ---------------------------
+JOURNAL_ENABLED = _bool("ANALYST_JOURNAL", True)
+JOURNAL_FILE = os.getenv("ANALYST_JOURNAL_FILE", "analyst_journal.jsonl").strip()
+# How long a call stays open before it is judged undecided, in bars of its own
+# frame. Three times the usual horizon: long enough to be fair, short enough
+# that a stale call does not sit open forever.
+JOURNAL_MAX_BARS = _int("ANALYST_JOURNAL_MAX_BARS", 60)
+JOURNAL_MAX_RECORDS = _int("ANALYST_JOURNAL_MAX_RECORDS", 2000)
+
+# --- follow-up: reply to the original call when it resolves ------------------
+FOLLOWUP_ENABLED = _bool("ANALYST_FOLLOWUP", True)
+FOLLOWUP_INTERVAL_MIN = _int("ANALYST_FOLLOWUP_INTERVAL", 10)
+# An undecided call (neither level reached inside the window) is usually not
+# worth a message; turn this on to hear about those too.
+FOLLOWUP_UNDECIDED = _bool("ANALYST_FOLLOWUP_UNDECIDED", False)
 
 # --- Market data ------------------------------------------------------------
 DEFAULT_FRAME = os.getenv("ANALYST_DEFAULT_FRAME", "1d").strip()
@@ -175,10 +226,28 @@ MACD_SIGNAL = _int("ANALYST_MACD_SIGNAL", 9)
 PIVOT_WINDOW = _int("ANALYST_PIVOT_WINDOW", 5)   # bars each side of a swing
 LEVEL_TOLERANCE = _float("ANALYST_LEVEL_TOLERANCE", 0.008)  # 0.8% clustering
 STOP_ATR_MULT = _float("ANALYST_STOP_ATR_MULT", 1.2)
+# A stop closer than this to the entry is inside the spread and the noise: on a
+# quiet 5-minute crypto bar 1.2x ATR can be 0.09%, which the tape takes out in
+# seconds. The floor is a percentage of price, so it scales with any asset.
+MIN_STOP_PCT = _float("ANALYST_MIN_STOP_PCT", 0.3)
 
 # --- News / chatter ---------------------------------------------------------
 NEWS_ENABLED = _bool("ANALYST_NEWS", True)
 NEWS_LIMIT = _int("ANALYST_NEWS_LIMIT", 8)
+# A headline older than this is history, not news — and on an intraday frame
+# it says nothing about the next hour.
+NEWS_MAX_AGE_HOURS = _int("ANALYST_NEWS_MAX_AGE_HOURS", 48)
+# Outlets whose "top picks" and "should you buy" pieces are marketing, not
+# reporting: shown beside a bearish 2-hour read they only confuse.
+NEWS_SKIP_PUBLISHERS = _list("ANALYST_NEWS_SKIP", [
+    "motley fool", "zacks", "simply wall st", "insider monkey", "invezz",
+    "stocktwits", "benzinga insights", "24/7 wall st", "gurufocus",
+])
+NEWS_PREFER_PUBLISHERS = _list("ANALYST_NEWS_PREFER", [
+    "reuters", "bloomberg", "cnbc", "associated press", "barron", "wsj",
+    "wall street journal", "financial times", "marketwatch", "axios",
+    "investing.com", "yahoo finance", "business insider",
+])
 SOCIAL_ENABLED = _bool("ANALYST_SOCIAL", True)
 SOCIAL_LIMIT = _int("ANALYST_SOCIAL_LIMIT", 15)
 HTTP_TIMEOUT = _int("ANALYST_HTTP_TIMEOUT", 12)
