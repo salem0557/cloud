@@ -59,6 +59,7 @@ def _incoming(update: Update, bot_id: int) -> gate.Incoming:
         topic_id=getattr(message, "message_thread_id", None),
         is_forum=bool(getattr(update.effective_chat, "is_forum", False)),
         user_id=update.effective_user.id if update.effective_user else None,
+        username=getattr(update.effective_user, "username", None),
         has_photo=bool(message.photo),
         replied_has_photo=bool(replied and replied.photo),
         is_private=update.effective_chat.type == ChatType.PRIVATE,
@@ -134,9 +135,9 @@ async def _may_manage(update: Update, context: ContextTypes.DEFAULT_TYPE,
     Without the admin fallback the first thing a new install needs (/diag) is
     unreachable from the only place the bot lives: the group.
     """
-    if gate.diag_allowed(incoming.user_id, incoming.is_private):
+    if gate.diag_allowed(incoming.user_id, incoming.is_private, incoming.username):
         return True
-    if config.OWNER_IDS or not incoming.user_id:
+    if gate.owners_configured() or not incoming.user_id:
         return False
     try:
         member = await context.bot.get_chat_member(incoming.chat_id, incoming.user_id)
@@ -308,7 +309,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if canned:
         await update.effective_message.reply_text(canned)
         return
-    if not gate.cooldown_ok(incoming.user_id):
+    if not gate.cooldown_ok(incoming.user_id, incoming.username):
         return
 
     semaphore: asyncio.Semaphore = context.application.bot_data["semaphore"]

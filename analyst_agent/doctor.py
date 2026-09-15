@@ -180,7 +180,8 @@ def check_config() -> Check:
         f"الفريم الافتراضي: {config.DEFAULT_FRAME}",
         f"تحليل كل الصور: {'نعم' if config.ANSWER_ALL_PHOTOS else 'لا'}",
         f"قروبات مسموحة: {len(config.ALLOWED_CHATS) or 'الكل'}",
-        f"مالكون: {len(config.OWNER_IDS) or 'لا أحد'}",
+        "مالكون: " + (", ".join([str(i) for i in config.OWNER_IDS]
+                                 + ["@" + u for u in config.OWNER_USERNAMES]) or "لا أحد"),
     ]
     return Check("الإعدادات", True, " | ".join(bits))
 

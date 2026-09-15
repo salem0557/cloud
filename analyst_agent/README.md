@@ -403,7 +403,11 @@ BTC-USD · 30 دقيقة · 76,673
 
 | Name | القيمة | الفائدة |
 |---|---|---|
-| `ANALYST_OWNER_IDS` | معرّفك الرقمي (من @userinfobot) | يعفيك من الانتظار بين الطلبات، ويسمح لك بـ `/diag` |
+| `ANALYST_OWNER_IDS` | `@yourusername` أو الرقم | يعفيك من الانتظار، ويعطيك `/diag` و`/stats` و`/scan`، ويستثنيك من إقفال الخاص |
+
+> يقبل الاثنين في نفس المتغيّر: `ANALYST_OWNER_IDS=@salem0557, 123456789`.
+> ولمعرفة رقمك: أرسل `/here` للبوت — يرد برقمك واسمك، ويخبرك إن كنت ضمن الملاك.
+> و`/here` يعمل دائماً حتى لو كان الخاص مقفلاً، لأنه الطريق لمعرفة الرقم أصلاً.
 
 اختيارية (لها قيم افتراضية تعمل بلا تعديل): `ANALYST_US_ONLY` `ANALYST_DEFAULT_FRAME`
 `ANALYST_ANSWER_ALL_PHOTOS` `ANALYST_ALLOW_NON_EQUITY` `ANALYST_ALLOWED_CHATS`

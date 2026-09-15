@@ -53,6 +53,7 @@ def _incoming(event, me, replied=None) -> gate.Incoming:
         topic_id=topic_id,
         is_forum=is_forum,
         user_id=event.sender_id,
+        username=getattr(getattr(event, "sender", None), "username", None),
         has_photo=bool(message.photo),
         replied_has_photo=bool(replied and replied.photo),
         is_private=bool(event.is_private),
@@ -80,7 +81,7 @@ async def _image_bytes(event) -> bytes | None:
 async def _publish(event, me) -> None:
     """/post as a reply: re-send that message into the recommendations topic."""
     incoming = _incoming(event, me)
-    if not gate.diag_allowed(event.sender_id, bool(event.is_private)):
+    if not gate.diag_allowed(event.sender_id, bool(event.is_private), _username(event)):
         return
     if not config.ALERTS_TOPIC:
         await event.reply("قسم التوصيات غير مضبوط: أضف ANALYST_ALERTS_TOPIC "
@@ -176,6 +177,10 @@ async def _attempt(what: str, send):
     return False
 
 
+def _username(event) -> str | None:
+    return getattr(getattr(event, "sender", None), "username", None)
+
+
 def incoming_topic(event) -> int | None:
     reply_to = getattr(event.message, "reply_to", None)
     if not getattr(reply_to, "forum_topic", False):
@@ -245,17 +250,20 @@ async def main() -> None:
                 await _publish(event, me)
                 return
             if gate.is_stats(text):
-                if not gate.diag_allowed(event.sender_id, bool(event.is_private)):
+                if not gate.diag_allowed(event.sender_id, bool(event.is_private),
+                                         _username(event)):
                     return
                 await asyncio.to_thread(journal.evaluate)
                 await event.reply(journal.stats())
                 return
             if gate.is_watchlist(text):
-                if gate.diag_allowed(event.sender_id, bool(event.is_private)):
+                if gate.diag_allowed(event.sender_id, bool(event.is_private),
+                                     _username(event)):
                     await event.reply(watcher.status())
                 return
             if gate.is_scan(text):
-                if not gate.diag_allowed(event.sender_id, bool(event.is_private)):
+                if not gate.diag_allowed(event.sender_id, bool(event.is_private),
+                                         _username(event)):
                     return
                 if not watcher.destination():
                     await event.reply(watcher.status())
@@ -266,7 +274,8 @@ async def main() -> None:
                                   "لا يوجد سهم يحقق الشروط الآن — لا توصية.")
                 return
             if gate.is_diag(text):
-                if not gate.diag_allowed(event.sender_id, bool(event.is_private)):
+                if not gate.diag_allowed(event.sender_id, bool(event.is_private),
+                                         _username(event)):
                     return
                 await event.reply("جاري الفحص… ⏳")
                 checks = await asyncio.to_thread(doctor.run_all)
@@ -276,7 +285,7 @@ async def main() -> None:
             if canned:
                 await event.reply(canned)
                 return
-            if not gate.cooldown_ok(event.sender_id):
+            if not gate.cooldown_ok(event.sender_id, _username(event)):
                 return
             album = getattr(event.message, "grouped_id", None)
             if album:

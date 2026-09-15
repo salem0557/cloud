@@ -255,3 +255,64 @@ def test_no_notice_means_silence(monkeypatch):
     monkeypatch.setattr(config, "PRIVATE_NOTICE", "")
     monkeypatch.setattr(gate, "_told_private", set())
     assert gate.private_notice(777) is None
+
+
+def test_an_owner_can_be_named_instead_of_numbered(monkeypatch):
+    """Nobody knows their own Telegram id by heart."""
+    monkeypatch.setattr(config, "OWNER_IDS", set())
+    monkeypatch.setattr(config, "OWNER_USERNAMES", {"salem0557"})
+    assert gate.is_owner(user_id=999, username="Salem0557") is True   # case-insensitive
+    assert gate.is_owner(user_id=999, username="@salem0557") is True
+    assert gate.is_owner(user_id=999, username="someone") is False
+
+
+def test_an_owner_by_name_gets_into_a_closed_private_chat(monkeypatch):
+    monkeypatch.setattr(config, "ANSWER_PRIVATE", False)
+    monkeypatch.setattr(config, "OWNER_IDS", set())
+    monkeypatch.setattr(config, "OWNER_USERNAMES", {"salem0557"})
+    owner = gate.Incoming(text="حلل NVDA", has_photo=True, chat_id=5,
+                          user_id=999, username="salem0557", is_private=True)
+    stranger = gate.Incoming(text="حلل NVDA", has_photo=True, chat_id=5,
+                             user_id=777, username="other", is_private=True)
+    assert gate.decide(owner)[0] is True
+    assert gate.decide(stranger)[0] is False
+
+
+def test_here_survives_a_closed_private_chat(monkeypatch):
+    """It is how you read the id that the setting is configured with."""
+    monkeypatch.setattr(config, "ANSWER_PRIVATE", False)
+    monkeypatch.setattr(config, "OWNER_IDS", set())
+    monkeypatch.setattr(config, "OWNER_USERNAMES", set())
+    assert gate.decide(gate.Incoming(text="/here", chat_id=5, user_id=777,
+                                     is_private=True))[0] is True
+
+
+def test_here_reports_your_own_id(monkeypatch):
+    monkeypatch.setattr(config, "OWNER_IDS", set())
+    monkeypatch.setattr(config, "OWNER_USERNAMES", set())
+    report = gate.here_report(gate.Incoming(text="/here", chat_id=-1001,
+                                            user_id=777, username="someone"))
+    assert "777" in report and "someone" in report
+    assert "لست ضمن الملاك" in report
+
+
+def test_here_confirms_an_owner(monkeypatch):
+    monkeypatch.setattr(config, "OWNER_USERNAMES", {"salem0557"})
+    report = gate.here_report(gate.Incoming(text="/here", chat_id=-1, user_id=1,
+                                            username="salem0557"))
+    assert "ضمن الملاك ✅" in report
+
+
+def test_owner_commands_accept_a_username(monkeypatch):
+    monkeypatch.setattr(config, "OWNER_IDS", set())
+    monkeypatch.setattr(config, "OWNER_USERNAMES", {"salem0557"})
+    assert gate.diag_allowed(999, False, "salem0557") is True
+    assert gate.diag_allowed(999, False, "stranger") is False
+
+
+def test_the_cooldown_exempts_a_named_owner(monkeypatch):
+    monkeypatch.setattr(config, "USER_COOLDOWN", 60)
+    monkeypatch.setattr(config, "OWNER_IDS", set())
+    monkeypatch.setattr(config, "OWNER_USERNAMES", {"salem0557"})
+    assert gate.cooldown_ok(5, "salem0557") is True
+    assert gate.cooldown_ok(5, "salem0557") is True

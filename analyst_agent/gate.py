@@ -57,6 +57,7 @@ class Incoming:
     user_id: int | None = None
     has_photo: bool = False
     replied_has_photo: bool = False
+    username: str | None = None   # @name, for owner checks by name
     topic_id: int | None = None   # forum topic (None outside forum groups)
     is_forum: bool = False
     is_private: bool = False
@@ -111,8 +112,12 @@ def is_stats(text: str | None) -> bool:
 
 
 def here_report(msg: Incoming) -> str:
-    """Answer to /here: the ids needed to fill in the topic variables."""
-    lines = [f"chat_id: `{msg.chat_id}`"]
+    """Answer to /here: every id needed to fill in the variables."""
+    lines = [f"chat_id: `{msg.chat_id}`",
+             f"your user_id: `{msg.user_id}`"
+             + (f" (@{msg.username})" if msg.username else ""),
+             "أنت ضمن الملاك ✅" if is_owner(msg.user_id, msg.username)
+             else "لست ضمن الملاك — أضف الرقم أعلاه إلى ANALYST_OWNER_IDS"]
     if msg.is_forum:
         lines.append(f"topic_id: `{topic_of(msg)}`" + (" (General)" if topic_of(msg) == GENERAL_TOPIC else ""))
     else:
@@ -127,20 +132,21 @@ def here_report(msg: Incoming) -> str:
     return "\n".join(lines)
 
 
-def diag_allowed(user_id: int | None, is_private: bool) -> bool:
+def diag_allowed(user_id: int | None, is_private: bool,
+                 username: str | None = None) -> bool:
     """The health report names models and settings, so it is owners-only.
 
     With no owners configured it is allowed in private chats, so a fresh
     install can still be checked before ANALYST_OWNER_IDS is set.
     """
-    if config.OWNER_IDS:
-        return user_id in config.OWNER_IDS
+    if owners_configured():
+        return is_owner(user_id, username)
     return is_private
 
 
-def cooldown_ok(user_id: int | None) -> bool:
+def cooldown_ok(user_id: int | None, username: str | None = None) -> bool:
     """One request per user per ANALYST_USER_COOLDOWN seconds (owners exempt)."""
-    if not user_id or user_id in config.OWNER_IDS:
+    if not user_id or is_owner(user_id, username):
         return True
     now = time.time()
     if now - _last_request.get(user_id, 0) < config.USER_COOLDOWN:
@@ -162,9 +168,20 @@ def topic_of(msg: Incoming) -> int | None:
     return msg.topic_id or GENERAL_TOPIC
 
 
-def private_allowed(user_id: int | None) -> bool:
+def is_owner(user_id: int | None = None, username: str | None = None) -> bool:
+    """An owner by numeric id or by @username — both spellings are accepted."""
+    if user_id is not None and user_id in config.OWNER_IDS:
+        return True
+    return bool(username and username.lstrip("@").lower() in config.OWNER_USERNAMES)
+
+
+def owners_configured() -> bool:
+    return bool(config.OWNER_IDS or config.OWNER_USERNAMES)
+
+
+def private_allowed(msg: "Incoming") -> bool:
     """Private chats are served unless switched off — owners always are."""
-    return config.ANSWER_PRIVATE or (user_id is not None and user_id in config.OWNER_IDS)
+    return config.ANSWER_PRIVATE or is_owner(msg.user_id, msg.username)
 
 
 def private_notice(user_id: int | None) -> str | None:
@@ -183,7 +200,9 @@ def decide(msg: Incoming) -> tuple[bool, str]:
     """(answer?, why) — the single gate both backends go through."""
     if not chat_allowed(msg.chat_id):
         return False, "chat not allowed"
-    if msg.is_private and not private_allowed(msg.user_id):
+    # /here stays reachable: it is how you read the ids this is configured with,
+    # and locking it behind the very setting it configures is a dead end.
+    if msg.is_private and not private_allowed(msg) and not is_here(msg.text):
         return False, "private disabled"
     # In a forum group with a configured Q&A topic, every other topic is
     # somebody else's conversation: stay out of it entirely. /here is the one

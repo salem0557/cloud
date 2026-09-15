@@ -43,6 +43,20 @@ def _ids(name: str) -> set[int]:
     return out
 
 
+def _usernames(name: str) -> set[str]:
+    """The @names in the same variable, lowercased and without the @.
+
+    Numeric ids are what Telegram actually guarantees, but nobody knows their
+    own id by heart — so a username is accepted and matched at runtime.
+    """
+    out: set[str] = set()
+    for part in os.getenv(name, "").replace(",", " ").split():
+        token = part.strip().lstrip("@").lower()
+        if token and not token.lstrip("-").isdigit():
+            out.add(token)
+    return out
+
+
 def _list(name: str, default: list[str]) -> list[str]:
     parts = [p.strip() for p in os.getenv(name, "").split(",") if p.strip()]
     return parts or default
@@ -90,6 +104,7 @@ QA_TOPIC = _int("ANALYST_QA_TOPIC", 0)
 ALERTS_TOPIC = _int("ANALYST_ALERTS_TOPIC", 0)
 BLOCKED_CHATS = _ids("ANALYST_BLOCKED_CHATS")
 OWNER_IDS = _ids("ANALYST_OWNER_IDS")
+OWNER_USERNAMES = _usernames("ANALYST_OWNER_IDS")
 # In a group the agent stays silent unless one of these words is in the
 # message, it is a reply to the agent, or the agent is @mentioned.
 TRIGGERS = _list("ANALYST_TRIGGERS", [
