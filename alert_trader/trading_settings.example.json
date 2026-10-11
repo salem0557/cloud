@@ -1,0 +1,68 @@
+{
+  "_comment": "قيم تجريبية للمحاكاة فقط (demo=true). ليست قيمك. التشغيل الحقيقي يرفض هذا الملف حتى تضع قيمك وتجعل demo=false. انسخه إلى DATA_DIR/trading_settings.json",
+  "demo": true,
+  "mode": "paper",
+
+  "paper_capital_usd": 5000,
+  "live_capital_usd": null,
+
+  "max_cost_per_trade_usd": 500,
+  "max_total_exposure_usd": 1500,
+  "max_open_positions": 3,
+  "daily_loss_limit_usd": 300,
+  "daily_loss_method": "realized_plus_unrealized",
+
+  "max_alert_age_sec": 120,
+  "max_entry_deviation_pct": 10,
+  "max_spread_pct": 10,
+  "max_quote_age_sec": 60,
+  "allow_delayed_quotes": false,
+  "min_open_interest": 0,
+  "min_volume": 0,
+
+  "allowed_symbols": ["*"],
+  "min_dte": 1,
+  "max_dte": 60,
+  "allow_0dte": false,
+  "require_stop": false,
+  "date_order": null,
+
+  "exit_without_source": {
+    "stop_pct": 50,
+    "target_pct": null,
+    "max_hold_minutes": null,
+    "close_at_session_end_minutes": null
+  },
+  "close_before_expiry_minutes": 60,
+  "targets_split": [0.5, 0.5],
+  "move_stop_to_entry_after_first_target": false,
+
+  "entry_only_regular_session": true,
+  "duplicate_window_sec": 600,
+  "entry_order_ttl_sec": 60,
+  "exit_order_ttl_sec": 30,
+  "exit_max_reprices": 3,
+  "slippage_ticks": 1,
+  "simulated_latency_sec": 2,
+  "require_quote_size_for_fill": true,
+  "tick_below_3": 0.01,
+  "tick_above_3": 0.05,
+  "fmv_tolerance_pct": 15,
+  "paper_allow_without_broker_verification": false,
+  "abyan_options_enabled_confirmed": null,
+
+  "fees": {
+    "per_contract": 0.495,
+    "min_per_order": 0.995,
+    "low_premium_threshold": 0.10,
+    "low_premium_per_contract": 0.245,
+    "low_premium_min_per_order": 0.495,
+    "vat_pct": 15,
+    "third_party_per_contract": 0.0
+  },
+
+  "extra_holidays": [],
+  "extra_early_closes": [],
+  "monitor_interval_sec": 15,
+  "notes": "رسوم أبيان المنشورة بخصم 50% للشهر الأول؛ السعر القياسي بعد الخصم لم يُؤكد (يُذكر أنه الضعف)."
+}
