@@ -9,3 +9,8 @@ universe.json
 *.session-journal
 chart.png
 analyst_state.json
+data/
+*.db
+*.db-wal
+*.db-shm
+trading_settings.json
