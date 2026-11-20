@@ -68,6 +68,7 @@ def test_run_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setattr(deals.time, "sleep", lambda x: None)
     sent = []
     monkeypatch.setattr(deals, "send", lambda t: sent.append(t) or True)
+    monkeypatch.delenv("DEALS_BOT_TOKEN", raising=False)
     deals.run()
     assert len(sent) == 1 and "MacBook" in sent[0]  # تنبيه وحيد ومو مكرر رغم 6 صفحات
     deals.run()
@@ -115,3 +116,24 @@ def test_accessories_do_not_hit_floor():
 def test_resale_ignores_list_price_discount():
     r = deals.evaluate(item("Lenovo ThinkPad E16 Gen 1 Laptop (Renewed)", 2599.0, 11144.0), "SAR", [])
     assert r == []
+
+
+def test_welcome_sent_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(deals, "STATE_PATH", tmp_path / "s.json")
+    monkeypatch.setattr(deals, "fetch", lambda s, u: "<html></html>")
+    monkeypatch.setattr(deals.time, "sleep", lambda x: None)
+    monkeypatch.setenv("DEALS_BOT_TOKEN", "x")
+    sent = []
+    monkeypatch.setattr(deals, "send", lambda t: sent.append(t) or True)
+    deals.run(); deals.run()
+    assert sum("👋" in t for t in sent) == 1
+
+
+def test_stops_on_block(tmp_path, monkeypatch):
+    monkeypatch.setattr(deals, "STATE_PATH", tmp_path / "s.json")
+    calls = []
+    monkeypatch.setattr(deals, "fetch", lambda s, u: calls.append(u) or None)
+    monkeypatch.setattr(deals.time, "sleep", lambda x: None)
+    monkeypatch.delenv("DEALS_BOT_TOKEN", raising=False)
+    deals.run()
+    assert len(calls) == 1  # كل الصفحات الأولى من نفس الموقع: يوقف بعد أول رفض

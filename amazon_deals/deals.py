@@ -272,16 +272,26 @@ def run() -> int:
                  f"{stats['alerts']} تنبيه، {stats['blocked']} حظر مؤقت من أمازون")
         stats.update(day=today, pages=0, blocked=0, items=0, alerts=0)
 
+    # أول تشغيل بعد إضافة الـ token: رسالة ترحيب + رقم المحادثة (حتى لو ما فيه عروض)
+    if os.environ.get("DEALS_BOT_TOKEN") and not state.get("welcomed"):
+        if send("👋 صياد أخطاء الأسعار شغال!\nبيفحص إلكترونيات أمازون السعودية وأمريكا (جديد + مجدد) "
+                "ويرسل لك هنا أي سعر غلط أو تخفيض مجنون."):
+            state["welcomed"] = True
+
     now = time.time()
     session = requests.Session()
+    blocked_hosts: set[str] = set()
     for i, src in enumerate(batch):
         if i:
             time.sleep(random.uniform(3, 7))
         market = CONFIG["markets"][src["market"]]
+        if market["host"] in blocked_hosts:  # أمازون رفضتنا: نوقف الطلب عليها لين التشغيلة الجاية
+            continue
         page = fetch(session, search_url(src))
         stats["pages"] += 1
         if page is None or is_blocked(page):
             stats["blocked"] += 1
+            blocked_hosts.add(market["host"])
             print("blocked/failed:", src["q"])
             continue
         items = parse_results(page)
