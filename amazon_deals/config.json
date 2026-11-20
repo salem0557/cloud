@@ -378,5 +378,41 @@
       "مقبول"
     ],
     "floor_factor": 0.6
-  }
+  },
+  "floor_accessory_words": [
+    "for",
+    "controller",
+    "gamepad",
+    "headset",
+    "headphones",
+    "battery",
+    "batteries",
+    "charging",
+    "charger",
+    "dock",
+    "chatpad",
+    "joystick",
+    "remote",
+    "case",
+    "cover",
+    "stand",
+    "mount",
+    "cable",
+    "adapter",
+    "skin",
+    "sleeve",
+    "bag",
+    "holder",
+    "protector",
+    "sticker",
+    "grip",
+    "cooling",
+    "fan",
+    "disc drive",
+    "expansion",
+    "faceplate",
+    "shell",
+    "box"
+  ],
+  "_note_floor_accessory_words": "إذا جات وحدة من هالكلمات قبل اسم الجهاز في العنوان (مثل: Controller for Xbox Series X) فهو إكسسوار وما نطبق عليه حد السعر"
 }

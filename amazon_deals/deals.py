@@ -127,8 +127,13 @@ def floor_hit(title: str, price: float, currency: str) -> float | None:
     factor = CONFIG["resale"]["floor_factor"] if is_resale(title) else 1.0
     for rule in CONFIG["floors"].get(currency, []):
         below = rule["below"] * factor
-        if all(w in t for w in rule["match"]) and price < below:
-            return below
+        if not all(w in t for w in rule["match"]) or price >= below:
+            continue
+        # "Controller for Xbox Series X" / "Battery Pack (Xbox Series X)": الإكسسوار يجي قبل اسم الجهاز
+        head = t[:max(t.find(w) for w in rule["match"])]
+        if _has_word(head, CONFIG.get("floor_accessory_words", [])):
+            continue
+        return below
     return None
 
 
@@ -146,7 +151,8 @@ def evaluate(item: dict, currency: str, history: list[float]) -> list[str]:
         drop = (1 - price / med) * 100 if med else 0
         if drop >= CONFIG["history_drop_pct"]:
             reasons.append(f"📉 نزل {drop:.0f}% عن متوسط سعره ({med:,.0f} {currency})")
-    if item["list_price"]:
+    # المجدد سعره "الأصلي" المشطوب هو سعر الجديد، فالخصم الكبير عليه طبيعي ومو فرصة
+    if item["list_price"] and not is_resale(item["title"]):
         disc = (1 - price / item["list_price"]) * 100
         if disc >= CONFIG["discount_alert_pct"]:
             reasons.append(f"🔥 خصم {disc:.0f}% عن السعر الأصلي ({item['list_price']:,.0f} {currency})")
