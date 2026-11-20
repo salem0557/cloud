@@ -303,6 +303,11 @@ def run() -> int:
             print("blocked/failed:", src["q"])
             continue
         items = parse_results(page)
+        if not items:  # صفحة بدون منتجات = أمازون رجعت صفحة مختصرة (حظر ناعم)
+            stats["blocked"] += 1
+            blocked_hosts.add(market["host"])
+            print(f"no results (soft block?) '{src['q']}' len={len(page)}")
+            continue
         stats["items"] += len(items)
         print(f"{src['market']} '{src['q']}': {len(items)} منتج")
         for it in items:
