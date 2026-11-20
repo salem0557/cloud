@@ -73,13 +73,29 @@ def test_run_end_to_end(tmp_path, monkeypatch):
     deals.run()
     assert len(sent) == 1  # ما يكرر نفس التنبيه
     state = json.loads((tmp_path / "s.json").read_text())
-    assert state["cursor"] == 12
+    assert state["cursor"] == 12 % len(deals.CONFIG["searches"])
 
 
-def test_renewed_ignored():
-    it = {"asin": "X", "title": "Amazon Renewed (Refurbished) iPhone 13 (128GB)", "price": 1149.0,
-          "list_price": None, "sponsored": False}
-    assert deals.evaluate(it, "SAR", []) == []
-    it["title"] = "Apple iPhone 16 Pro (256 GB) - Desert Titanium"
-    it["price"] = 999.0
-    assert any("خطأ تسعير" in r for r in deals.evaluate(it, "SAR", []))
+def item(title, price, list_price=None):
+    return {"asin": "X", "title": title, "price": price, "list_price": list_price, "sponsored": False}
+
+
+def test_renewed_uses_lower_floor():
+    # مجدد iPhone 16 بـ 1100: طبيعي للمجدد (الحد 1600×0.6=960) فما ينبه
+    assert deals.evaluate(item("Amazon Renewed (Refurbished) iPhone 16 (128GB)", 1100.0), "SAR", []) == []
+    # مجدد MacBook Pro بـ 1000 ريال: أقل من 3000×0.6=1800 → خطأ
+    r = deals.evaluate(item("Apple MacBook Pro 14 M3 (Renewed Premium)", 1000.0), "SAR", [])
+    assert any("خطأ تسعير" in x for x in r)
+    assert deals.evaluate(item("Apple iPhone 16 Pro (256 GB) - Desert Titanium", 999.0), "SAR", [])
+
+
+def test_renewed_bad_condition_ignored():
+    assert deals.excluded("Apple MacBook Pro (Renewed) - Acceptable")
+    assert not deals.excluded("Apple MacBook Pro (Renewed) - Excellent")
+    assert not deals.excluded("Laptop with focused cooling")
+
+
+def test_resale_tag_in_alert():
+    msg = deals.format_alert(item("Apple MacBook Pro (Renewed Premium)", 1000.0),
+                             deals.CONFIG["markets"]["sa"], ["x"])
+    assert "♻️" in msg

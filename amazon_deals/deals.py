@@ -104,20 +104,31 @@ def is_blocked(page: str) -> bool:
 
 # ---------- قواعد الكشف ----------
 
+def _has_word(t: str, words: list[str]) -> bool:
+    return any(re.search(rf"(?<!\w){re.escape(w)}(?!\w)", t) for w in words)
+
+
+def is_resale(title: str) -> bool:
+    return _has_word(title.lower(), CONFIG["resale"]["words"])
+
+
 def excluded(title: str) -> bool:
+    t = title.lower()
+    # مجدد بحالة سيئة/مقبولة: ما نبيه
+    if is_resale(title) and _has_word(t, CONFIG["resale"]["bad_condition"]):
+        return True
     # الإكسسوارات تبدأ عادة بـ "Case for MacBook..." والمنتج الحقيقي يذكر "Case" متأخر
     # (مثل Apple Watch ... Aluminium Case with Sport Band)، فنفحص أول العنوان بس.
-    t = title.lower()
-    if any(re.search(rf"(?<!\w){re.escape(w)}(?!\w)", t) for w in CONFIG.get("exclude_anywhere", [])):  # مجدد/مستعمل: سعره الطبيعي أقل
-        return True
     return any(w in t[:45] for w in CONFIG["exclude_words"])
 
 
 def floor_hit(title: str, price: float, currency: str) -> float | None:
     t = title.lower()
+    factor = CONFIG["resale"]["floor_factor"] if is_resale(title) else 1.0
     for rule in CONFIG["floors"].get(currency, []):
-        if all(w in t for w in rule["match"]) and price < rule["below"]:
-            return rule["below"]
+        below = rule["below"] * factor
+        if all(w in t for w in rule["match"]) and price < below:
+            return below
     return None
 
 
@@ -201,7 +212,8 @@ def format_alert(item: dict, market: dict, reasons: list[str]) -> str:
     cur = market["currency"]
     flag = "🇸🇦" if market["host"].endswith(".sa") else "🇺🇸" if market["host"].endswith(".com") else "🌍"
     url = f"https://{market['host']}/dp/{item['asin']}"
-    lines = [f"{flag} <b>{html.escape(item['title'][:150])}</b>",
+    tag = "♻️ <b>مجدد / Resale</b>\n" if is_resale(item["title"]) else ""
+    lines = [f"{tag}{flag} <b>{html.escape(item['title'][:150])}</b>",
              f"💰 السعر: <b>{item['price']:,.2f} {cur}</b>"]
     lines += reasons
     lines.append(f'🔗 <a href="{url}">افتح المنتج واشترِ بسرعة</a>')
