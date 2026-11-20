@@ -156,6 +156,30 @@
     {
       "market": "us",
       "q": "gaming laptop"
+    },
+    {
+      "market": "sa",
+      "q": "amazon renewed iphone"
+    },
+    {
+      "market": "sa",
+      "q": "amazon renewed macbook"
+    },
+    {
+      "market": "sa",
+      "q": "amazon renewed ipad"
+    },
+    {
+      "market": "sa",
+      "q": "amazon renewed samsung galaxy"
+    },
+    {
+      "market": "us",
+      "q": "renewed premium iphone"
+    },
+    {
+      "market": "us",
+      "q": "renewed premium macbook"
     }
   ],
   "floors": {
@@ -329,13 +353,30 @@
       }
     ]
   },
-  "exclude_anywhere": [
-    "renewed",
-    "refurbished",
-    "pre-owned",
-    "used",
-    "open box",
-    "مجدد",
-    "مستعمل"
-  ]
+  "resale": {
+    "_note": "مجدد/Resale بحالة ممتازة: حد السعر = حد الجديد × floor_factor. الحالات السيئة تُستبعد.",
+    "words": [
+      "renewed",
+      "refurbished",
+      "resale",
+      "warehouse",
+      "pre-owned",
+      "used",
+      "open box",
+      "like new",
+      "مجدد",
+      "مستعمل"
+    ],
+    "bad_condition": [
+      "acceptable",
+      "fair",
+      "good condition",
+      "renewed good",
+      "heavily",
+      "scratches",
+      "damaged",
+      "مقبول"
+    ],
+    "floor_factor": 0.6
+  }
 }
