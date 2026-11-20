@@ -197,16 +197,24 @@ def send(text: str) -> bool:
 
 
 def discover_chat(token: str) -> str | None:
-    """إذا ما حطيت DEALS_CHAT_ID: ياخذ آخر محادثة خاصة أرسلت للبوت ويقولك رقمها."""
+    """إذا ما حطيت DEALS_CHAT_ID: ياخذ آخر محادثة أرسلت للبوت ويقولك رقمها."""
     try:
         r = requests.get(f"https://api.telegram.org/bot{token}/getUpdates", timeout=20).json()
-    except Exception:
+    except Exception as e:
+        print("getUpdates failed:", type(e).__name__)
         return None
-    for upd in reversed(r.get("result", [])):
-        chat = (upd.get("message") or {}).get("chat") or {}
-        if chat.get("type") == "private":
+    if not r.get("ok"):
+        # مثلاً: webhook مفعّل على البوت، أو بوت ثاني يقرأ نفس الرسائل
+        print("getUpdates error:", r.get("error_code"), r.get("description"))
+        return None
+    updates = r.get("result", [])
+    print(f"getUpdates: {len(updates)} رسالة")
+    for upd in reversed(updates):
+        msg = upd.get("message") or upd.get("my_chat_member") or upd.get("channel_post") or {}
+        chat = msg.get("chat") or {}
+        if chat.get("id"):
             cid = str(chat["id"])
-            print(f"لقيت رقم محادثتك: {cid} — حطه في السر DEALS_CHAT_ID")
+            print(f"لقيت رقم المحادثة ({chat.get('type')}) — حطه في السر DEALS_CHAT_ID")
             requests.post(f"https://api.telegram.org/bot{token}/sendMessage", timeout=20, json={
                 "chat_id": cid,
                 "text": f"رقم محادثتك: {cid}\nحطه في GitHub Secrets باسم DEALS_CHAT_ID"})
