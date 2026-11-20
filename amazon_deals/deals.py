@@ -107,8 +107,10 @@ def is_blocked(page: str) -> bool:
 def excluded(title: str) -> bool:
     # الإكسسوارات تبدأ عادة بـ "Case for MacBook..." والمنتج الحقيقي يذكر "Case" متأخر
     # (مثل Apple Watch ... Aluminium Case with Sport Band)، فنفحص أول العنوان بس.
-    t = title.lower()[:45]
-    return any(w in t for w in CONFIG["exclude_words"])
+    t = title.lower()
+    if any(re.search(rf"(?<!\w){re.escape(w)}(?!\w)", t) for w in CONFIG.get("exclude_anywhere", [])):  # مجدد/مستعمل: سعره الطبيعي أقل
+        return True
+    return any(w in t[:45] for w in CONFIG["exclude_words"])
 
 
 def floor_hit(title: str, price: float, currency: str) -> float | None:
@@ -208,7 +210,7 @@ def format_alert(item: dict, market: dict, reasons: list[str]) -> str:
 
 # ---------- التشغيل ----------
 
-def fetch(session: requests.Session, url: str) -> str | None:
+def fetch(session: requests.Session, url: str, retry: bool = True) -> str | None:
     try:
         r = session.get(url, timeout=25, headers={
             "User-Agent": random.choice(USER_AGENTS),
@@ -218,6 +220,9 @@ def fetch(session: requests.Session, url: str) -> str | None:
     except requests.RequestException as e:
         print("fetch error", url, e)
         return None
+    if r.status_code in (503, 429) and retry:  # أمازون أحياناً ترفض مؤقتاً، نحاول مرة ثانية
+        time.sleep(random.uniform(8, 15))
+        return fetch(session, url, retry=False)
     if r.status_code != 200:
         print("status", r.status_code, url)
         return None
