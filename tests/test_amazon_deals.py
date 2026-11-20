@@ -74,3 +74,12 @@ def test_run_end_to_end(tmp_path, monkeypatch):
     assert len(sent) == 1  # ما يكرر نفس التنبيه
     state = json.loads((tmp_path / "s.json").read_text())
     assert state["cursor"] == 12
+
+
+def test_renewed_ignored():
+    it = {"asin": "X", "title": "Amazon Renewed (Refurbished) iPhone 13 (128GB)", "price": 1149.0,
+          "list_price": None, "sponsored": False}
+    assert deals.evaluate(it, "SAR", []) == []
+    it["title"] = "Apple iPhone 16 Pro (256 GB) - Desert Titanium"
+    it["price"] = 999.0
+    assert any("خطأ تسعير" in r for r in deals.evaluate(it, "SAR", []))

@@ -1,76 +1,341 @@
 {
   "_note": "مصادر المراقبة. كل تشغيلة (كل 5 دقائق) تفحص pages_per_run صفحة بالتناوب.",
   "pages_per_run": 6,
-  "min_price": { "SAR": 80, "USD": 20 },
+  "min_price": {
+    "SAR": 80,
+    "USD": 20
+  },
   "discount_alert_pct": 70,
   "history_drop_pct": 55,
   "realert_hours": 24,
   "exclude_words": [
-    "case", "cover", "sleeve", "skin", "protector", "screen guard", "tempered", "glass film",
-    "charger", "cable", "adapter", "strap", "band", "stand", "holder", "mount", "bag",
-    "backpack", "sticker", "decal", "keyboard cover", "dust plug", "replacement", "compatible with",
-    "for apple", "for iphone", "for macbook", "for ipad", "for samsung", "for ps5", "for playstation",
-    "for nintendo", "controller grip", "thumb grip", "box only", "dummy", "toy"
+    "case",
+    "cover",
+    "sleeve",
+    "skin",
+    "protector",
+    "screen guard",
+    "tempered",
+    "glass film",
+    "charger",
+    "cable",
+    "adapter",
+    "strap",
+    "band",
+    "stand",
+    "holder",
+    "mount",
+    "bag",
+    "backpack",
+    "sticker",
+    "decal",
+    "keyboard cover",
+    "dust plug",
+    "replacement",
+    "compatible with",
+    "for apple",
+    "for iphone",
+    "for macbook",
+    "for ipad",
+    "for samsung",
+    "for ps5",
+    "for playstation",
+    "for nintendo",
+    "controller grip",
+    "thumb grip",
+    "box only",
+    "dummy",
+    "toy"
   ],
   "markets": {
-    "sa": { "host": "www.amazon.sa", "currency": "SAR", "params": "language=en_AE" },
-    "us": { "host": "www.amazon.com", "currency": "USD", "params": "language=en_US" }
+    "sa": {
+      "host": "www.amazon.sa",
+      "currency": "SAR",
+      "params": "language=en_AE"
+    },
+    "us": {
+      "host": "www.amazon.com",
+      "currency": "USD",
+      "params": "language=en_US"
+    }
   },
   "searches": [
-    { "market": "sa", "q": "apple macbook" },
-    { "market": "sa", "q": "apple iphone" },
-    { "market": "sa", "q": "apple ipad" },
-    { "market": "sa", "q": "apple airpods" },
-    { "market": "sa", "q": "apple watch" },
-    { "market": "sa", "q": "samsung galaxy s" },
-    { "market": "sa", "q": "samsung galaxy tab" },
-    { "market": "sa", "q": "playstation 5 console" },
-    { "market": "sa", "q": "nintendo switch console" },
-    { "market": "sa", "q": "xbox series" },
-    { "market": "sa", "q": "gaming laptop" },
-    { "market": "sa", "q": "laptop" },
-    { "market": "sa", "q": "gaming monitor" },
-    { "market": "sa", "q": "smart tv 65 inch" },
-    { "market": "sa", "q": "rtx graphics card" },
-    { "market": "sa", "q": "sony headphones" },
-    { "market": "sa", "q": "dji drone" },
-    { "market": "sa", "q": "canon camera" },
-    { "market": "sa", "q": "ssd 2tb" },
-    { "market": "sa", "q": "apple", "extra": "i=electronics&s=date-desc-rank" },
-    { "market": "us", "q": "apple macbook" },
-    { "market": "us", "q": "apple iphone unlocked" },
-    { "market": "us", "q": "playstation 5 console" },
-    { "market": "us", "q": "gaming laptop" }
+    {
+      "market": "sa",
+      "q": "apple macbook"
+    },
+    {
+      "market": "sa",
+      "q": "apple iphone"
+    },
+    {
+      "market": "sa",
+      "q": "apple ipad"
+    },
+    {
+      "market": "sa",
+      "q": "apple airpods"
+    },
+    {
+      "market": "sa",
+      "q": "apple watch"
+    },
+    {
+      "market": "sa",
+      "q": "samsung galaxy s"
+    },
+    {
+      "market": "sa",
+      "q": "samsung galaxy tab"
+    },
+    {
+      "market": "sa",
+      "q": "playstation 5 console"
+    },
+    {
+      "market": "sa",
+      "q": "nintendo switch console"
+    },
+    {
+      "market": "sa",
+      "q": "xbox series"
+    },
+    {
+      "market": "sa",
+      "q": "gaming laptop"
+    },
+    {
+      "market": "sa",
+      "q": "laptop"
+    },
+    {
+      "market": "sa",
+      "q": "gaming monitor"
+    },
+    {
+      "market": "sa",
+      "q": "smart tv 65 inch"
+    },
+    {
+      "market": "sa",
+      "q": "rtx graphics card"
+    },
+    {
+      "market": "sa",
+      "q": "sony headphones"
+    },
+    {
+      "market": "sa",
+      "q": "dji drone"
+    },
+    {
+      "market": "sa",
+      "q": "canon camera"
+    },
+    {
+      "market": "sa",
+      "q": "ssd 2tb"
+    },
+    {
+      "market": "sa",
+      "q": "apple",
+      "extra": "i=electronics&s=date-desc-rank"
+    },
+    {
+      "market": "us",
+      "q": "apple macbook"
+    },
+    {
+      "market": "us",
+      "q": "apple iphone unlocked"
+    },
+    {
+      "market": "us",
+      "q": "playstation 5 console"
+    },
+    {
+      "market": "us",
+      "q": "gaming laptop"
+    }
   ],
   "floors": {
     "_note": "إذا ظهر منتج يطابق الكلمات بسعر أقل من الحد = غالباً خطأ تسعير",
     "SAR": [
-      { "match": ["macbook pro"], "below": 3000 },
-      { "match": ["macbook air"], "below": 1800 },
-      { "match": ["iphone 1"], "below": 1200 },
-      { "match": ["ipad pro"], "below": 1800 },
-      { "match": ["ipad air"], "below": 1200 },
-      { "match": ["apple watch ultra"], "below": 1200 },
-      { "match": ["airpods pro"], "below": 350 },
-      { "match": ["airpods max"], "below": 900 },
-      { "match": ["galaxy s2"], "below": 1200 },
-      { "match": ["galaxy z fold"], "below": 2500 },
-      { "match": ["playstation 5", "console"], "below": 900 },
-      { "match": ["ps5", "console"], "below": 900 },
-      { "match": ["xbox series x"], "below": 900 },
-      { "match": ["nintendo switch", "console"], "below": 500 },
-      { "match": ["rtx 40"], "below": 1000 },
-      { "match": ["rtx 50"], "below": 1200 },
-      { "match": ["rtx", "laptop"], "below": 2000 },
-      { "match": ["65", "tv"], "below": 900 },
-      { "match": ["dji", "drone"], "below": 600 }
+      {
+        "match": [
+          "macbook pro"
+        ],
+        "below": 3000
+      },
+      {
+        "match": [
+          "macbook air"
+        ],
+        "below": 1800
+      },
+      {
+        "match": [
+          "iphone 17"
+        ],
+        "below": 2000
+      },
+      {
+        "match": [
+          "iphone 16"
+        ],
+        "below": 1600
+      },
+      {
+        "match": [
+          "ipad pro"
+        ],
+        "below": 1800
+      },
+      {
+        "match": [
+          "ipad air"
+        ],
+        "below": 1200
+      },
+      {
+        "match": [
+          "apple watch ultra"
+        ],
+        "below": 1200
+      },
+      {
+        "match": [
+          "airpods pro"
+        ],
+        "below": 350
+      },
+      {
+        "match": [
+          "airpods max"
+        ],
+        "below": 900
+      },
+      {
+        "match": [
+          "galaxy s2"
+        ],
+        "below": 1200
+      },
+      {
+        "match": [
+          "galaxy z fold"
+        ],
+        "below": 2500
+      },
+      {
+        "match": [
+          "playstation 5",
+          "console"
+        ],
+        "below": 900
+      },
+      {
+        "match": [
+          "ps5",
+          "console"
+        ],
+        "below": 900
+      },
+      {
+        "match": [
+          "xbox series x"
+        ],
+        "below": 900
+      },
+      {
+        "match": [
+          "nintendo switch",
+          "console"
+        ],
+        "below": 500
+      },
+      {
+        "match": [
+          "rtx 40"
+        ],
+        "below": 1000
+      },
+      {
+        "match": [
+          "rtx 50"
+        ],
+        "below": 1200
+      },
+      {
+        "match": [
+          "rtx",
+          "laptop"
+        ],
+        "below": 2000
+      },
+      {
+        "match": [
+          "65",
+          "tv"
+        ],
+        "below": 900
+      },
+      {
+        "match": [
+          "dji",
+          "drone"
+        ],
+        "below": 600
+      }
     ],
     "USD": [
-      { "match": ["macbook pro"], "below": 800 },
-      { "match": ["macbook air"], "below": 450 },
-      { "match": ["iphone 1"], "below": 300 },
-      { "match": ["playstation 5", "console"], "below": 250 },
-      { "match": ["rtx", "laptop"], "below": 500 }
+      {
+        "match": [
+          "macbook pro"
+        ],
+        "below": 800
+      },
+      {
+        "match": [
+          "macbook air"
+        ],
+        "below": 450
+      },
+      {
+        "match": [
+          "iphone 17"
+        ],
+        "below": 450
+      },
+      {
+        "match": [
+          "iphone 16"
+        ],
+        "below": 350
+      },
+      {
+        "match": [
+          "playstation 5",
+          "console"
+        ],
+        "below": 250
+      },
+      {
+        "match": [
+          "rtx",
+          "laptop"
+        ],
+        "below": 500
+      }
     ]
-  }
+  },
+  "exclude_anywhere": [
+    "renewed",
+    "refurbished",
+    "pre-owned",
+    "used",
+    "open box",
+    "مجدد",
+    "مستعمل"
+  ]
 }
