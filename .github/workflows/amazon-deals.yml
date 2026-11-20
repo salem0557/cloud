@@ -1,0 +1,58 @@
+name: Amazon price-error hunter
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write   # لإعادة تفعيل الجدول تلقائياً (GitHub يوقفه بعد 60 يوم بدون نشاط)
+  contents: read
+
+concurrency:
+  group: amazon-deals
+  cancel-in-progress: false
+
+jobs:
+  hunt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: pip install --quiet requests beautifulsoup4
+
+      - name: Restore price history
+        uses: actions/cache/restore@v4
+        with:
+          path: amazon_deals/deals_state.json
+          key: deals-state-${{ github.run_id }}
+          restore-keys: deals-state-
+
+      - name: Hunt
+        env:
+          DEALS_BOT_TOKEN: ${{ secrets.DEALS_BOT_TOKEN }}
+          DEALS_CHAT_ID: ${{ secrets.DEALS_CHAT_ID }}
+        run: python amazon_deals/deals.py
+
+      - name: Save price history
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: amazon_deals/deals_state.json
+          key: deals-state-${{ github.run_id }}
+
+      - name: Keep schedule alive
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # مرة باليوم تقريباً
+          if [ "$(date -u +%H%M)" -lt 0005 ]; then
+            gh api -X PUT "repos/${{ github.repository }}/actions/workflows/amazon-deals.yml/enable" || true
+          fi
