@@ -99,3 +99,19 @@ def test_resale_tag_in_alert():
     msg = deals.format_alert(item("Apple MacBook Pro (Renewed Premium)", 1000.0),
                              deals.CONFIG["markets"]["sa"], ["x"])
     assert "♻️" in msg
+
+
+def test_accessories_do_not_hit_floor():
+    for t in ["GameSir G7 SE Wired Controller for Xbox Series X|S, Xbox One",
+              "Venom High Capacity 1100mAh Rechargeable Battery Twin Pack - White (Xbox Series X & S/Xbox One)",
+              "HyperX Cloud III – Wired Gaming Headset, PC, PS5, Xbox Series X|S",
+              "PlayStation PS5 Disc Drive - for Digital Edition Consoles (model group – slim)"]:
+        assert deals.floor_hit(t, 150.0, "SAR") is None, t
+    assert deals.floor_hit("Xbox Series X 1TB Console", 500.0, "SAR")
+    assert deals.floor_hit("PlayStation 5 Console Digital Edition Slim (KSA Version)", 500.0, "SAR")
+    assert deals.floor_hit("ASUS ROG Strix G16 Gaming Laptop, 16GB, 1TB SSD, RTX 4060 Laptop GPU", 1500.0, "SAR")
+
+
+def test_resale_ignores_list_price_discount():
+    r = deals.evaluate(item("Lenovo ThinkPad E16 Gen 1 Laptop (Renewed)", 2599.0, 11144.0), "SAR", [])
+    assert r == []
