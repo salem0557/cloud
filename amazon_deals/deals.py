@@ -328,7 +328,7 @@ def scan_channels(state: dict, session: requests.Session) -> int:
                 continue
             msg = (f"📢 من قناة @{html.escape(ch)}\n{html.escape(text[:700])}\n"
                    f'🔗 <a href="https://t.me/{ch}/{pid}">افتح المنشور</a>')
-            if send(msg):
+            if send(msg, silent=True):  # منشورات القنوات: إشعار صامت
                 sent += 1
     return sent
 
@@ -348,7 +348,7 @@ def save_state(state: dict) -> None:
 
 # ---------- تيليجرام ----------
 
-def send(text: str) -> bool:
+def send(text: str, silent: bool = False) -> bool:
     token = os.environ.get("DEALS_BOT_TOKEN")
     chat = os.environ.get("DEALS_CHAT_ID")
     if os.environ.get("DEALS_DRY") == "1" or not token:
@@ -361,7 +361,8 @@ def send(text: str) -> bool:
             return False
     try:
         r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", timeout=20, json={
-            "chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": False})
+            "chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": False,
+            "disable_notification": silent})
         if r.status_code != 200:
             print("telegram error", r.status_code, r.text[:200])
         return r.status_code == 200
@@ -396,7 +397,7 @@ def discover_chat(token: str) -> str | None:
     return None
 
 
-def format_alert(item: dict, market: dict, reasons: list[str]) -> str:
+def format_alert(item: dict, market: dict, reasons: list[str], season: dict | None = None) -> str:
     cur = market["currency"]
     flag = "🇸🇦" if market["host"].endswith(".sa") else "🇺🇸" if market["host"].endswith(".com") else "🌍"
     flag = f"{flag} {market.get('label', 'أمازون')}"
@@ -408,6 +409,8 @@ def format_alert(item: dict, market: dict, reasons: list[str]) -> str:
         lines.append(f"🎟️ كوبون -{item['coupon']:,.0f} → <b>{item['price'] - item['coupon']:,.2f} {cur}</b> بعد الكوبون "
                      "(فعّله من صفحة المنتج)")
     lines += reasons
+    if season:
+        lines.append(f"🗓️ موسم {season['name']}")
     lines.append(f'🔗 <a href="{url}">افتح المنتج واشترِ بسرعة</a>')
     return "\n".join(lines)
 
@@ -442,14 +445,27 @@ def search_url(src: dict) -> str:
     return f"https://{m['host']}/s?k={q}&{m['params']}{extra}"
 
 
+def active_season(now: float) -> dict | None:
+    """الموسم الحالي من config (from/to: "MM-DD" كل سنة، أو "YYYY-MM-DD" لتاريخ محدد مثل رمضان)."""
+    d = datetime.fromtimestamp(now, timezone.utc)
+    for se in CONFIG.get("seasons", []):
+        f, t = se["from"], se["to"]
+        cur = d.strftime("%Y-%m-%d") if len(f) == 10 else d.strftime("%m-%d")
+        if f <= cur <= t:
+            return se
+    return None
+
+
 def pick_batch(state: dict, now: float) -> list[dict]:
     """لكل متجر: عدد صفحات وفترة خاصة فيه (أمازون أقل وأبطأ عشان ما تحظرنا)، وبالتناوب على كلمات البحث."""
     cursors: dict = state.setdefault("cursors", {})
     last: dict = state.setdefault("last_scan", {})
     per_market: list[list[dict]] = []
+    extra = (active_season(now) or {}).get("extra_pages", {})
     for name, m in CONFIG["markets"].items():
         srcs = [x for x in CONFIG["searches"] if x["market"] == name]
-        n = min(m.get("pages_per_run", CONFIG["pages_per_run"]), len(srcs))
+        base = m.get("pages_per_run", CONFIG["pages_per_run"])
+        n = min(base + (extra.get(name, 0) if base else 0), len(srcs))
         if not n or now - last.get(name, 0) < m.get("every_min", 0) * 60 - 30:
             continue
         c = cursors.get(name, 0) % len(srcs)
@@ -519,13 +535,16 @@ def run() -> int:
     alerted: dict = state.setdefault("alerted", {})   # "sa:ASIN" -> {"price":, "ts":}
     stats: dict = state.setdefault("stats", {"day": "", "pages": 0, "blocked": 0, "items": 0, "alerts": 0})
     batch = pick_batch(state, time.time())
+    season = active_season(time.time())
+    if season:
+        print(f"موسم: {season['name']} (صفحات إضافية {season.get('extra_pages')})")
     models: dict = state.setdefault("models", {})     # موديل -> {متجر: {"price":, "ts":}}
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if stats["day"] != today:
         if stats["day"]:
             send(f"✅ صياد الأسعار شغال\nأمس: {stats['pages']} صفحة، {stats['items']} منتج، "
-                 f"{stats['alerts']} تنبيه، {stats['blocked']} حظر مؤقت")
+                 f"{stats['alerts']} تنبيه، {stats['blocked']} حظر مؤقت", silent=True)
         stats.update(day=today, pages=0, blocked=0, items=0, alerts=0)
 
     # أول تشغيل بعد إضافة الـ token: رسالة ترحيب + رقم المحادثة (حتى لو ما فيه عروض)
@@ -583,7 +602,9 @@ def run() -> int:
                 prev = alerted.get(key)
                 fresh = (not prev or now - prev["ts"] > CONFIG["realert_hours"] * 3600
                          or it["price"] < prev["price"] * 0.95)
-                if fresh and send(format_alert(it, market, reasons)):
+                # 🚨 خطأ تسعير = إشعار بصوت، باقي العروض = إشعار صامت
+                loud = any(r.startswith("🚨") for r in reasons)
+                if fresh and send(format_alert(it, market, reasons, season), silent=not loud):
                     alerted[key] = {"price": it["price"], "ts": now}
                     stats["alerts"] += 1
             # لا نخلي سعر الخطأ يخرب المتوسط

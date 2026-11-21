@@ -67,9 +67,10 @@ def test_run_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setattr(deals, "fetch", lambda s, u: PAGE)
     monkeypatch.setattr(deals.time, "sleep", lambda x: None)
     sent = []
-    monkeypatch.setattr(deals, "send", lambda t: sent.append(t) or True)
+    monkeypatch.setattr(deals, "send", lambda t, silent=False: sent.append(t) or True)
     monkeypatch.delenv("DEALS_BOT_TOKEN", raising=False)
     monkeypatch.setitem(deals.CONFIG, "amazon_experiment", False)
+    monkeypatch.setattr(deals, "active_season", lambda now: None)
     deals.run()
     assert len(sent) == 1 and "MacBook" in sent[0]  # تنبيه وحيد ومو مكرر رغم 6 صفحات
     deals.run()
@@ -135,7 +136,7 @@ def test_welcome_sent_once(tmp_path, monkeypatch):
     monkeypatch.setattr(deals.time, "sleep", lambda x: None)
     monkeypatch.setenv("DEALS_BOT_TOKEN", "x")
     sent = []
-    monkeypatch.setattr(deals, "send", lambda t: sent.append(t) or True)
+    monkeypatch.setattr(deals, "send", lambda t, silent=False: sent.append(t) or True)
     deals.run(); deals.run()
     assert sum("👋" in t for t in sent) == 1
 
@@ -212,7 +213,7 @@ def test_channels(monkeypatch):
         def get(self, url, timeout):
             return R()
     sent = []
-    monkeypatch.setattr(deals, "send", lambda t: sent.append(t) or True)
+    monkeypatch.setattr(deals, "send", lambda t, silent=False: sent.append(t) or True)
     state = {}
     assert deals.scan_channels(state, S()) == 0 and state["tg_seen"]["deals"] == 11  # أول مرة: بس نحفظ المكان
     state["tg_seen"]["deals"] = 9
@@ -265,3 +266,16 @@ def test_coupon_makes_a_deal():
     assert any("خصم" in r for r in deals.evaluate(ev, "SAR", []))
     msg = deals.format_alert(it, deals.CONFIG["markets"]["sa"], ["x"])
     assert "🎟️" in msg and "بعد الكوبون" in msg
+
+
+def test_seasons_and_priority(monkeypatch):
+    from datetime import datetime, timezone
+    ts = lambda y, m, d: datetime(y, m, d, 12, tzinfo=timezone.utc).timestamp()
+    assert deals.active_season(ts(2026, 11, 21))["name"].startswith("الجمعة البيضاء")
+    assert deals.active_season(ts(2027, 2, 20))["name"] == "رمضان 2027" or deals.active_season(ts(2027, 2, 20))
+    assert deals.active_season(ts(2026, 10, 5)) is None
+    b = deals.pick_batch({}, ts(2026, 11, 21))
+    assert [x["market"] for x in b].count("almanea") == 5 and "us" not in [x["market"] for x in b]
+    msg = deals.format_alert(item("Apple iPhone 16 Pro 256GB", 999.0), deals.CONFIG["markets"]["sa"], ["x"],
+                             deals.active_season(ts(2026, 11, 21)))
+    assert "🗓️ موسم" in msg
