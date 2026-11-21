@@ -335,8 +335,12 @@ def scan_channels(state: dict, session: requests.Session) -> int:
         for pid, text in posts:
             if pid <= last:
                 continue
-            low = text.lower()
-            if words and not any(w in low for w in words):
+            # نشيل الروابط (فيها حروف عشوائية مثل ...PC...) ونطابق كلمات كاملة بس
+            low = re.sub(r"https?://\S+|\b[\w.-]+\.(?:com|net|sa|gl|ly|me)/\S*", " ", text.lower())
+            # العربي: جزء من الكلمة (الشاشة، المكيفات). الإنجليزي: كلمة كاملة (tv ما تطابق داخل كلمة ثانية)
+            arabic = [w for w in words if re.search(r"[\u0600-\u06FF]", w)]
+            latin = [w for w in words if w not in arabic]
+            if words and not (any(w in low for w in arabic) or _has_word(low, latin)):
                 continue
             msg = (f"📢 من قناة @{html.escape(ch)}\n{html.escape(text[:700])}\n"
                    f'🔗 <a href="https://t.me/{ch}/{pid}">افتح المنشور</a>')
