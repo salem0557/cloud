@@ -392,3 +392,17 @@ def test_parse_mahally_and_arabic_rules():
 @pytest.fixture(autouse=True)
 def _no_real_browser(monkeypatch):
     monkeypatch.setattr(deals, "fetch_browser", lambda url: None)
+
+
+def test_knockoff_phones_ignored():
+    for t, price in [("شبيه ايفون 17 برو ماكس بلاك فون", 289.0),
+                     ("جوال OALE 17 Pro Max – ذاكرة 128GB – متوافق كلياً مع كفرات آيفون 17 برو ماكس عجيب غريب .كوم", 399.0),
+                     ("ايفون 17 برو ماكس نسخة هاي كوبي 256 جيجا", 450.0)]:
+        assert deals.excluded(t), t
+        assert deals.evaluate(item(t, price), "SAR", [], trust_list=False) == [], t
+    assert not deals.excluded("مكيف سبليت جري 18000 وحدة متوافق مع الواي فاي")
+    assert not deals.excluded("Samsung 65 Inch Smart TV, Compatible with Alexa")
+    real = item("ابل - ايفون 17 برو ماكس، بسعة 256 جيجا، 5 جي، 6.9 بوصة، ازرق المخازن السوداء", 1500.0)
+    assert any("خطأ تسعير" in r for r in deals.evaluate(real, "SAR", [], trust_list=False))
+    msg = deals.format_alert(real, deals.CONFIG["markets"]["mahally"], ["x"])
+    assert "🇸🇦" in msg and "🇺🇸" not in msg
