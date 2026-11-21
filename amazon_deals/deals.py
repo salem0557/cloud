@@ -447,6 +447,54 @@ def pick_batch(state: dict, now: float) -> list[dict]:
     return batch
 
 
+# ---------- تجربة طرق أمازون (نقيس أي طريقة يقل فيها الحظر) ----------
+
+EXPERIMENT = {
+    # الاسم: (عدد الصفحات, (أقل, أكثر) ثواني قبل كل صفحة, شكل الرابط)
+    "base":      (2, (3, 7), "search"),
+    "one_page":  (1, (3, 7), "search"),
+    "slow_gap":  (2, (20, 30), "search"),
+    "en_path":   (2, (3, 7), "en_path"),
+    "bestsellers": (1, (3, 7), "bestsellers"),
+}
+
+
+def apply_experiment(state: dict, batch: list[dict]) -> str | None:
+    """يعدّل صفحات أمازون السعودية في هالتشغيلة حسب الطريقة اللي دورها (بالتناوب)."""
+    if not CONFIG.get("amazon_experiment"):
+        return None
+    exp = state.setdefault("exp", {"i": 0, "stats": {}})
+    names = list(EXPERIMENT)
+    name = names[exp["i"] % len(names)]
+    exp["i"] += 1
+    pages, gap, form = EXPERIMENT[name]
+    sa = [x for x in batch if x["market"] == "sa"]
+    rest = [x for x in batch if x["market"] != "sa"]
+    chosen = []
+    for src in sa[:pages]:
+        src = dict(src, _gap=gap, _exp=name)
+        if form == "en_path":
+            src["_url"] = f"https://www.amazon.sa/-/en/s?k={requests.utils.quote(src['q'])}"
+        elif form == "bestsellers":
+            src["_url"] = "https://www.amazon.sa/gp/bestsellers/electronics"
+            src["_measure_only"] = True
+        chosen.append(src)
+    batch[:] = chosen + rest  # أمازون أول (قبل ما نطلب أي شي ثاني)
+    return name
+
+
+def record_experiment(state: dict, name: str | None, ok: int, blocked: int) -> None:
+    if not name:
+        return
+    st = state["exp"]["stats"].setdefault(name, {"runs": 0, "ok": 0, "blocked": 0})
+    st["runs"] += 1
+    st["ok"] += ok
+    st["blocked"] += blocked
+    summary = " | ".join(f"{k}: {v['ok']}✓/{v['blocked']}✗ ({v['runs']} مرات)"
+                         for k, v in state["exp"]["stats"].items())
+    print(f"EXP this_run={name} ok={ok} blocked={blocked} || {summary}")
+
+
 def run() -> int:
     state = load_state()
     prices: dict = state.setdefault("prices", {})     # "sa:ASIN" -> [سعر, ...]
@@ -471,25 +519,36 @@ def run() -> int:
     now = time.time()
     session = requests.Session()
     blocked_hosts: set[str] = set()
+    exp_name = apply_experiment(state, batch)
+    exp_ok = exp_blocked = 0
     for i, src in enumerate(batch):
         if i:
-            time.sleep(random.uniform(3, 7))
+            time.sleep(random.uniform(*src.get("_gap", (3, 7))))
         market = CONFIG["markets"][src["market"]]
         if market["host"] in blocked_hosts:  # أمازون رفضتنا: نوقف الطلب عليها لين التشغيلة الجاية
             continue
-        page = fetch(session, search_url(src))
+        page = fetch(session, src.get("_url") or search_url(src))
         stats["pages"] += 1
         if page is None or is_blocked(page):
             stats["blocked"] += 1
             blocked_hosts.add(market["host"])
-            print("blocked/failed:", src["q"])
+            exp_blocked += bool(src.get("_exp"))
+            print("blocked/failed:", src["q"], src.get("_exp", ""))
+            continue
+        if src.get("_measure_only"):  # صفحة الأكثر مبيعاً: نقيس الوصول بس
+            good = len(page) > 50000
+            exp_ok += good
+            exp_blocked += not good
+            print(f"{src['_exp']}: len={len(page)} {'ok' if good else 'short page'}")
             continue
         items = PARSERS[market.get("parser", "amazon")](page)
         if not items:  # صفحة بدون منتجات = أمازون رجعت صفحة مختصرة (حظر ناعم)
             stats["blocked"] += 1
             blocked_hosts.add(market["host"])
-            print(f"no results (soft block?) '{src['q']}' len={len(page)}")
+            exp_blocked += bool(src.get("_exp"))
+            print(f"no results (soft block?) '{src['q']}' len={len(page)} {src.get('_exp', '')}")
             continue
+        exp_ok += bool(src.get("_exp"))
         stats["items"] += len(items)
         print(f"{src['market']} '{src['q']}': {len(items)} منتج")
         for it in items:
@@ -517,6 +576,7 @@ def run() -> int:
                     if not rec or now - rec["ts"] > 48 * 3600 or it["price"] < rec["price"]:
                         models[mk][src["market"]] = {"price": it["price"], "ts": now}
 
+    record_experiment(state, exp_name, exp_ok, exp_blocked)
     try:
         stats["alerts"] += scan_channels(state, session)
     except Exception as e:  # القنوات إضافة: ما نخليها توقف الصيد
