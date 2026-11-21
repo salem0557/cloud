@@ -98,6 +98,59 @@ def parse_results(page: str) -> list[dict]:
     return items
 
 
+def _walk(o):
+    if isinstance(o, dict):
+        yield o
+        for v in o.values():
+            yield from _walk(v)
+    elif isinstance(o, list):
+        for v in o:
+            yield from _walk(v)
+
+
+def _first(v):
+    return v[0] if isinstance(v, list) and v else v
+
+
+def parse_almanea(page: str) -> list[dict]:
+    """المنيع: المنتجات داخل __NEXT_DATA__ (نتائج Algolia) وكل منتج فيه prices_with_tax."""
+    m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', page, re.S)
+    if not m:
+        return []
+    try:
+        data = json.loads(m.group(1))
+    except ValueError:
+        return []
+    items, seen = [], set()
+    for d in _walk(data):
+        p = d.get("prices_with_tax")
+        if not isinstance(p, dict):
+            continue
+        pid = str(_first(d.get("sku")) or d.get("objectID") or d.get("id") or "")
+        name = _first(d.get("name"))
+        price = p.get("price") or p.get("discounted_price")
+        if not pid or not isinstance(name, str) or not price or pid in seen:
+            continue
+        seen.add(pid)
+        orig = p.get("original_price")
+        url = _first(d.get("url")) or ""
+        if url and not url.startswith("http"):
+            url = "https://www.almanea.sa/" + url.lstrip("/")
+        if not url and d.get("url_key"):
+            url = f"https://www.almanea.sa/en/{_first(d['url_key'])}"
+        items.append({
+            "asin": pid, "title": re.sub(r"\s+", " ", name)[:200], "price": round(float(price), 2),
+            "list_price": round(float(orig), 2) if orig and float(orig) > float(price) else None,
+            "sponsored": False, "url": url or None,
+        })
+    if not items:
+        print("almanea: ما لقيت منتجات في __NEXT_DATA__")
+    return items
+
+
+PARSERS = {"amazon": parse_results, "almanea": parse_almanea}
+
+
 def is_blocked(page: str) -> bool:
     return any(m in page for m in BLOCK_MARKERS)
 
@@ -227,7 +280,8 @@ def discover_chat(token: str) -> str | None:
 def format_alert(item: dict, market: dict, reasons: list[str]) -> str:
     cur = market["currency"]
     flag = "🇸🇦" if market["host"].endswith(".sa") else "🇺🇸" if market["host"].endswith(".com") else "🌍"
-    url = f"https://{market['host']}/dp/{item['asin']}"
+    flag = f"{flag} {market.get('label', 'أمازون')}"
+    url = item.get("url") or f"https://{market['host']}/dp/{item['asin']}"
     tag = "♻️ <b>مجدد / Resale</b>\n" if is_resale(item["title"]) else ""
     lines = [f"{tag}{flag} <b>{html.escape(item['title'][:150])}</b>",
              f"💰 السعر: <b>{item['price']:,.2f} {cur}</b>"]
@@ -260,6 +314,8 @@ def fetch(session: requests.Session, url: str, retry: bool = True) -> str | None
 def search_url(src: dict) -> str:
     m = CONFIG["markets"][src["market"]]
     q = requests.utils.quote(src["q"])
+    if m.get("search"):
+        return m["search"].format(q=q)
     extra = "&" + src["extra"] if src.get("extra") else ""
     return f"https://{m['host']}/s?k={q}&{m['params']}{extra}"
 
@@ -304,7 +360,7 @@ def run() -> int:
             blocked_hosts.add(market["host"])
             print("blocked/failed:", src["q"])
             continue
-        items = parse_results(page)
+        items = PARSERS[market.get("parser", "amazon")](page)
         if not items:  # صفحة بدون منتجات = أمازون رجعت صفحة مختصرة (حظر ناعم)
             stats["blocked"] += 1
             blocked_hosts.add(market["host"])

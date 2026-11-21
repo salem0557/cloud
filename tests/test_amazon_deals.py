@@ -136,7 +136,8 @@ def test_stops_on_block(tmp_path, monkeypatch):
     monkeypatch.setattr(deals.time, "sleep", lambda x: None)
     monkeypatch.delenv("DEALS_BOT_TOKEN", raising=False)
     deals.run()
-    assert len(calls) == 1  # كل الصفحات الأولى من نفس الموقع: يوقف بعد أول رفض
+    hosts = [u.split("/")[2] for u in calls]
+    assert len(hosts) == len(set(hosts))  # بعد أول رفض من موقع ما نرجع له في نفس التشغيلة
 
 
 def test_whole_word_floor_match():
@@ -147,3 +148,22 @@ def test_whole_word_floor_match():
     assert deals.floor_hit("Samsung 65 Inch Crystal UHD 4K Smart TV", 500.0, "SAR")
     assert deals.floor_hit("ASUS TUF Gaming GeForce RTX 4070 Super 12GB Graphics Card", 600.0, "SAR")
     assert deals.floor_hit("Samsung Galaxy S25 Ultra 5G, 256GB", 900.0, "SAR")
+
+
+ALMANEA = ('<html><script id="__NEXT_DATA__" type="application/json">' + json.dumps({"props": {"pageProps": {"hits": [
+    {"objectID": "1", "sku": "IP16P", "name": "Apple iPhone 16 Pro 256GB", "url": "en/apple-iphone-16-pro",
+     "prices_with_tax": {"price": 999.0, "original_price": 4999.0, "discounted_price": 999.0}},
+    {"objectID": "2", "sku": "TV65", "name": ["Samsung 65 Inch Smart TV"], "url_key": "samsung-65",
+     "prices_with_tax": {"price": 2599.0, "original_price": 2599.0}},
+]}}}) + '</script></html>')
+
+
+def test_parse_almanea():
+    items = {i["asin"]: i for i in deals.parse_almanea(ALMANEA)}
+    assert items["IP16P"]["price"] == 999.0 and items["IP16P"]["list_price"] == 4999.0
+    assert items["IP16P"]["url"] == "https://www.almanea.sa/en/apple-iphone-16-pro"
+    assert items["TV65"]["list_price"] is None and items["TV65"]["url"].endswith("/en/samsung-65")
+    r = deals.evaluate(items["IP16P"], "SAR", [])
+    assert any("خطأ تسعير" in x for x in r)
+    msg = deals.format_alert(items["IP16P"], deals.CONFIG["markets"]["almanea"], r)
+    assert "المنيع" in msg and "almanea.sa/en/apple-iphone-16-pro" in msg

@@ -51,12 +51,21 @@
     "sa": {
       "host": "www.amazon.sa",
       "currency": "SAR",
-      "params": "language=en_AE"
+      "params": "language=en_AE",
+      "label": "أمازون"
     },
     "us": {
       "host": "www.amazon.com",
       "currency": "USD",
-      "params": "language=en_US"
+      "params": "language=en_US",
+      "label": "أمازون أمريكا"
+    },
+    "almanea": {
+      "host": "www.almanea.sa",
+      "currency": "SAR",
+      "label": "المنيع",
+      "parser": "almanea",
+      "search": "https://www.almanea.sa/en/search?q={q}"
     }
   },
   "searches": [
@@ -69,12 +78,20 @@
       "q": "apple iphone"
     },
     {
+      "market": "almanea",
+      "q": "iphone"
+    },
+    {
       "market": "sa",
       "q": "apple ipad"
     },
     {
       "market": "sa",
       "q": "apple airpods"
+    },
+    {
+      "market": "almanea",
+      "q": "macbook"
     },
     {
       "market": "sa",
@@ -85,12 +102,20 @@
       "q": "samsung galaxy s"
     },
     {
+      "market": "almanea",
+      "q": "ipad"
+    },
+    {
       "market": "sa",
       "q": "samsung galaxy tab"
     },
     {
       "market": "sa",
       "q": "playstation 5 console"
+    },
+    {
+      "market": "almanea",
+      "q": "samsung galaxy"
     },
     {
       "market": "sa",
@@ -101,11 +126,19 @@
       "q": "xbox series"
     },
     {
+      "market": "almanea",
+      "q": "playstation 5"
+    },
+    {
       "market": "sa",
       "q": "gaming laptop"
     },
     {
       "market": "sa",
+      "q": "laptop"
+    },
+    {
+      "market": "almanea",
       "q": "laptop"
     },
     {
@@ -117,12 +150,20 @@
       "q": "smart tv 65 inch"
     },
     {
+      "market": "almanea",
+      "q": "smart tv"
+    },
+    {
       "market": "sa",
       "q": "rtx graphics card"
     },
     {
       "market": "sa",
       "q": "sony headphones"
+    },
+    {
+      "market": "almanea",
+      "q": "airpods"
     },
     {
       "market": "sa",
@@ -133,6 +174,10 @@
       "q": "canon camera"
     },
     {
+      "market": "almanea",
+      "q": "apple watch"
+    },
+    {
       "market": "sa",
       "q": "ssd 2tb"
     },
@@ -140,6 +185,10 @@
       "market": "sa",
       "q": "apple",
       "extra": "i=electronics&s=date-desc-rank"
+    },
+    {
+      "market": "almanea",
+      "q": "gaming monitor"
     },
     {
       "market": "us",
