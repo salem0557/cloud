@@ -1111,5 +1111,8 @@
     "moment",
     "عجيب غريب"
   ],
-  "_note_blocked_sellers": "تجار محلي اللي يبيعون تقليد باسم المنتج الأصلي — أضف اسم المتجر هنا"
+  "_note_blocked_sellers": "تجار محلي اللي يبيعون تقليد باسم المنتج الأصلي — أضف اسم المتجر هنا",
+  "used_deal_pct": 35,
+  "verified_discount_pct": 25,
+  "_note_market_deals": "♻️ مستعمل/مجدد أرخص used_deal_pct% من الجديد، و🔥 خصم ≥ verified_discount_pct% وأرخص 10%+ من متجر ثاني (نفس الموديل)"
 }

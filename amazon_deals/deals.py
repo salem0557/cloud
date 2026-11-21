@@ -336,10 +336,11 @@ def evaluate(item: dict, currency: str, history: list[float], trust_list: bool =
 
 # ---------- مقارنة نفس الموديل بين المتاجر ----------
 
-def model_key(title: str) -> str | None:
+def model_key(title: str, allow_resale: bool = False) -> str | None:
     """مفتاح موحّد لنفس المنتج في أي متجر (آيفون/ماك/سامسونج/PS5/AirPods). None = ما نعرف نطابقه."""
     t = norm_title(title).replace("\u201d", '"').replace("''", '"')
-    if is_resale(title):
+    t = re.sub(r"\b(used|renewed|refurbished|مستعمل|مجدد)\b", " ", t) if allow_resale else t
+    if is_resale(title) and not allow_resale:
         return None
     # كلمة إكسسوار قبل اسم الجهاز ("Face Plates ... for PS5"، "Case for iPhone") = مو الجهاز نفسه.
     # بعد اسم الجهاز عادي: "AirPods Pro 2 with Charging Case"، "PS5 Console with DualSense Controller"
@@ -367,6 +368,33 @@ def model_key(title: str) -> str | None:
     if m:
         return "airpods-" + m.group(1).replace(" ", "")
     return None
+
+
+def market_deal_reasons(item: dict, price: float, market_name: str, models: dict, now: float) -> list[str]:
+    """عروض مؤكدة بسعر السوق (نفس الموديل الجديد في كل المتاجر، آخر 48 ساعة):
+    ♻️ مستعمل/مجدد أرخص من الجديد بنسبة كبيرة، و🔥 خصم المتجر + أرخص من متجر ثاني."""
+    key = model_key(item["title"], allow_resale=True)
+    if not key:
+        return []
+    recs = {m: r for m, r in models.get(key, {}).items() if now - r["ts"] <= 48 * 3600}
+    if not recs:
+        return []
+    label = lambda m: CONFIG["markets"].get(m, {}).get("label", m)
+    out = []
+    if is_resale(item["title"]):
+        m, r = min(recs.items(), key=lambda kv: kv[1]["price"])
+        cheaper = (1 - price / r["price"]) * 100
+        if CONFIG.get("used_deal_pct", 35) <= cheaper <= 80:  # أكثر من 80% = غالباً منتج ثاني/تقليد
+            out.append(f"♻️ مستعمل/مجدد أرخص {cheaper:.0f}% من الجديد ({r['price']:,.0f} في {label(m)})")
+    elif item.get("list_price"):
+        disc = (1 - price / item["list_price"]) * 100
+        others = {m: r for m, r in recs.items() if m != market_name}
+        if disc >= CONFIG.get("verified_discount_pct", 25) and others:
+            m, r = min(others.items(), key=lambda kv: kv[1]["price"])
+            cheaper = (1 - price / r["price"]) * 100
+            if 10 <= cheaper <= 75:
+                out.append(f"🔥 خصم {disc:.0f}% وأرخص {cheaper:.0f}% من {label(m)} ({r['price']:,.0f}) — عرض مؤكد")
+    return out
 
 
 def cross_store_reason(item: dict, market_name: str, models: dict, now: float) -> str | None:
@@ -769,6 +797,9 @@ def run() -> int:
                 cross = cross_store_reason(ev, src["market"], models, now)
                 if cross:
                     reasons.append(cross)
+                else:
+                    reasons += [r for r in market_deal_reasons(it, ev["price"], src["market"], models, now)
+                                if r not in reasons]
             if reasons:
                 prev = alerted.get(key)
                 fresh = (not prev or now - prev["ts"] > CONFIG["realert_hours"] * 3600
