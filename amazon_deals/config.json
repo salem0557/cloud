@@ -501,7 +501,11 @@
   "_note_floor_accessory_words": "إذا جات وحدة من هالكلمات قبل اسم الجهاز في العنوان (مثل: Controller for Xbox Series X) فهو إكسسوار وما نطبق عليه حد السعر",
   "cross_store_pct": 35,
   "_note_telegram": "أسماء قنوات تيليجرام العامة (بدون @). البوت يرسل لك منشوراتها الجديدة اللي فيها وحدة من telegram_keywords",
-  "telegram_channels": [],
+  "telegram_channels": [
+    "aroodnews",
+    "crazy_deals5",
+    "almowafir"
+  ],
   "telegram_keywords": [
     "iphone",
     "آيفون",
