@@ -70,7 +70,9 @@
       "parser": "almanea",
       "search": "https://www.almanea.sa/en/search?q={q}",
       "pages_per_run": 3,
-      "every_min": 0
+      "every_min": 0,
+      "trust_list_price": false,
+      "_note": "trust_list_price=false: السعر المشطوب في المنيع مبالغ فيه غالباً، فالخصم لازم يتأكد من سجل الأسعار"
     }
   },
   "searches": [
