@@ -953,7 +953,7 @@
   ],
   "cross_store_max_pct": 75,
   "trendyol_min_pct": 60,
-  "_note_trendyol": "تريندول من القنوات (غير الإلكترونيات): توصل إذا الخصم ≥ trendyol_min_pct والسعر قبل الخصم ≥ trendyol_min_old_price، أو إذا فيها خطأ تسعير",
+  "_note_trendyol": "false = من القنوات توصل الإلكترونيات بس (تريندول أو غيره). true = صفقات تريندول القوية من أي قسم.",
   "trendyol_min_old_price": 150,
   "exclude_knockoffs": [
     "شبيه",
@@ -1135,5 +1135,6 @@
   "_note_blocked_sellers": "تجار محلي اللي يبيعون تقليد باسم المنتج الأصلي — أضف اسم المتجر هنا",
   "used_deal_pct": 35,
   "verified_discount_pct": 25,
-  "_note_market_deals": "♻️ مستعمل/مجدد أرخص used_deal_pct% من الجديد، و🔥 خصم ≥ verified_discount_pct% وأرخص 10%+ من متجر ثاني (نفس الموديل)"
+  "_note_market_deals": "♻️ مستعمل/مجدد أرخص used_deal_pct% من الجديد، و🔥 خصم ≥ verified_discount_pct% وأرخص 10%+ من متجر ثاني (نفس الموديل)",
+  "trendyol_any_category": false
 }

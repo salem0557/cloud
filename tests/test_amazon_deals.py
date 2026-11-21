@@ -352,6 +352,7 @@ TY = """<div class="tgme_widget_message" data-post="d/30"><div class="tgme_widge
 
 def test_trendyol_strong_deals_any_category(monkeypatch):
     monkeypatch.setitem(deals.CONFIG, "telegram_channels", ["d"])
+    monkeypatch.setitem(deals.CONFIG, "trendyol_any_category", True)
     class R:
         status_code = 200
         text = TY
@@ -533,3 +534,20 @@ def test_accessories_with_arabic_prefixes_and_bundles():
     assert any("خطأ تسعير" in r for r in deals.evaluate(item("Apple MacBook Pro 14-inch M4 chip, 512GB, Space Black", 1500.0), "SAR", []))
     assert any("خطأ تسعير" in r for r in
                deals.evaluate(item("ابل ايربودز برو 2 مع علبة شحن MagSafe", 200.0), "SAR", [], trust_list=False, brand_first=True))
+
+
+def test_trendyol_non_electronics_off_by_default(monkeypatch):
+    monkeypatch.setitem(deals.CONFIG, "telegram_channels", ["d"])
+    post = ('<div class="tgme_widget_message" data-post="d/40"><div class="tgme_widget_message_text">'
+            '🫖 ترمس شاي وقهوة بتصميم شجرة نخيل من أسيب (57.93 ريال بدل 273.19 ريال - خصم 81%) https://ty.gl/2q</div></div>'
+            '<div class="tgme_widget_message" data-post="d/41"><div class="tgme_widget_message_text">'
+            'سماعة سامسونج Galaxy Buds من تريندول بخصم 60% https://ty.gl/3q</div></div>')
+    class R:
+        status_code = 200
+        text = post
+    class S:
+        def get(self, url, timeout):
+            return R()
+    sent = []
+    monkeypatch.setattr(deals, "send", lambda t, silent=False: sent.append(t) or True)
+    assert deals.scan_channels({"tg_seen": {"d": 39}}, S()) == 1 and "Galaxy" in sent[0]

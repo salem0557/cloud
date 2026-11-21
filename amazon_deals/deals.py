@@ -477,7 +477,7 @@ def scan_channels(state: dict, session: requests.Session) -> int:
             latin = [w for w in words if w not in arabic]
             hit = not words or any(w in low for w in arabic) or _has_word(low, latin)
             # تريندول (روابط ty.gl): أي قسم، بشرط عرض قوي — خصم كبير أو "ببلاش"
-            if not hit and re.search(r"ty\.gl/|trendyol", text, re.I):
+            if not hit and CONFIG.get("trendyol_any_category") and re.search(r"ty\.gl/|trendyol", text, re.I):
                 pcts = [int(x) for x in re.findall(r"(\d{2})\s*[%٪]", text)]
                 strong = CONFIG.get("trendyol_min_pct", 60)
                 # السعر قبل الخصم: "بدل 58 ريال" أو "(بدل 58)"؛ لو ما انكتب نحسبه من السعر والنسبة
