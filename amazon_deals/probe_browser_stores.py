@@ -43,18 +43,35 @@ def mahally_search(page, q: str = "ايفون") -> None:
     print("product links on home:", cards.count())
     for t in cards.all_inner_texts()[:6]:
         print("  card:", re.sub(r"\s+", " ", t)[:160])
+    # 1) صفحة منتج: كيف مكتوب الاسم والسعر (JSON-LD أو نص)
+    href = page.eval_on_selector("a[href*='/products/']", "e => e.href")
+    page.goto(href, wait_until="domcontentloaded", timeout=45000)
+    page.wait_for_timeout(5000)
+    print("product:", page.url, "|", page.title()[:100])
+    ld = page.eval_on_selector_all("script[type='application/ld+json']", "els => els.map(e => e.textContent)")
+    print("ld+json:", [x[:400] for x in ld][:2])
+    body = re.sub(r"\s+", " ", page.inner_text("body"))
+    print("product text:", body[:500])
+    # 2) أشكال روابط بحث شائعة
+    for u in ["https://mahally.com/ar/search?query=%D8%A7%D9%8A%D9%81%D9%88%D9%86",
+              "https://mahally.com/ar/search/?query=%D8%A7%D9%8A%D9%81%D9%88%D9%86",
+              "https://mahally.com/ar/products?query=%D8%A7%D9%8A%D9%81%D9%88%D9%86",
+              "https://mahally.com/ar/products/?query=%D8%A7%D9%8A%D9%81%D9%88%D9%86"]:
+        page.goto(u, wait_until="domcontentloaded", timeout=45000)
+        page.wait_for_timeout(5000)
+        n = page.locator("a[href*='/products/']").count()
+        print(f"try {u[-40:]} -> {page.title()[:50]} | product links={n}")
+    # 3) نكتب في مربع البحث مباشرة (حتى لو فيه نافذة فوقه)
+    page.goto("https://mahally.com/ar/", wait_until="domcontentloaded", timeout=45000)
+    page.wait_for_timeout(4000)
+    page.keyboard.press("Escape")
     box = page.locator("input[type=search]:visible, input[placeholder*='بحث']:visible, input[name=q]:visible")
-    print("visible search inputs:", box.count())
     if box.count():
-        box.first.click()
-        box.first.fill(q, timeout=10000)
+        box.first.fill(q, force=True, timeout=10000)
         box.first.press("Enter")
         page.wait_for_timeout(8000)
-        print("after search:", page.url, "|", page.title()[:80])
-        body = re.sub(r"\s+", " ", page.inner_text("body"))
-        prices = re.findall(r"[\d,]+(?:\.\d+)?\s?(?:ر\.س|ريال|SAR)", body)
-        print("prices_found:", len(prices), prices[:10])
-        print("text:", body[:700])
+        print("after search:", page.url, "|", page.title()[:80],
+              "| product links:", page.locator("a[href*='/products/']").count())
 
 
 def main() -> int:
