@@ -744,5 +744,22 @@
         "almanea": 2
       }
     }
+  ],
+  "exclude_services": [
+    "installation",
+    "maintenance",
+    "repair",
+    "warranty",
+    "applecare",
+    "protection plan",
+    "copper pipe",
+    "gas refill",
+    "صيانة",
+    "ضمان",
+    "تمديد",
+    "فك وتركيب",
+    "installation service",
+    "خدمة تركيب",
+    "تركيب مكيف"
   ]
 }
