@@ -94,8 +94,23 @@ def parse_results(page: str) -> list[dict]:
             "price": price,
             "list_price": list_price if list_price and list_price > price else None,
             "sponsored": sponsored,
+            "coupon": parse_coupon(div.get_text(" ", strip=True), price),
         })
     return items
+
+
+def parse_coupon(text: str, price: float) -> float | None:
+    """'Save 10% with coupon' / 'Save SAR 50.00 with coupon' / 'وفر 10% مع القسيمة' → قيمة الخصم بالريال."""
+    t = text.replace("\u00a0", " ")
+    m = re.search(r"save\s+(\d{1,2})\s*%\s+(?:with|on)\s+(?:coupon|voucher)", t, re.I) or \
+        re.search(r"(?:وفر|وفّر)\s*(\d{1,2})\s*%\s*(?:مع|ب)\s*(?:ال)?(?:كوبون|قسيمة)", t)
+    if m:
+        return round(price * int(m.group(1)) / 100, 2)
+    m = re.search(r"save\s+(?:sar|ر\.?س\.?)\s*([\d,]+(?:\.\d+)?)\s+(?:with|on)\s+(?:coupon|voucher)", t, re.I)
+    if m:
+        off = float(m.group(1).replace(",", ""))
+        return off if 0 < off < price else None
+    return None
 
 
 def _walk(o):
@@ -389,6 +404,9 @@ def format_alert(item: dict, market: dict, reasons: list[str]) -> str:
     tag = "♻️ <b>مجدد / Resale</b>\n" if is_resale(item["title"]) else ""
     lines = [f"{tag}{flag} <b>{html.escape(item['title'][:150])}</b>",
              f"💰 السعر: <b>{item['price']:,.2f} {cur}</b>"]
+    if item.get("coupon"):
+        lines.append(f"🎟️ كوبون -{item['coupon']:,.0f} → <b>{item['price'] - item['coupon']:,.2f} {cur}</b> بعد الكوبون "
+                     "(فعّله من صفحة المنتج)")
     lines += reasons
     lines.append(f'🔗 <a href="{url}">افتح المنتج واشترِ بسرعة</a>')
     return "\n".join(lines)
@@ -554,9 +572,11 @@ def run() -> int:
         for it in items:
             key = f"{src['market']}:{it['asin']}"
             hist = prices.get(key, [])
-            reasons = evaluate(it, market["currency"], hist, market.get("trust_list_price", True))
+            # إذا فيه كوبون نقيّم بالسعر بعده (عرض قوي + كوبون = صيدة)
+            ev = dict(it, price=round(it["price"] - it["coupon"], 2)) if it.get("coupon") else it
+            reasons = evaluate(ev, market["currency"], hist, market.get("trust_list_price", True))
             if not excluded(it["title"]):
-                cross = cross_store_reason(it, src["market"], models, now)
+                cross = cross_store_reason(ev, src["market"], models, now)
                 if cross:
                     reasons.append(cross)
             if reasons:

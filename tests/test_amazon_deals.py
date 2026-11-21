@@ -248,3 +248,20 @@ def test_new_categories_floors():
     assert deals.floor_hit("Replacement Remote Control for Split Air Conditioner", 50.0, "SAR") is None
     assert deals.floor_hit("AMD Ryzen 7 7800X3D 8-Core Desktop Processor", 300.0, "SAR")
     assert deals.floor_hit("Thermalright CPU Cooler for AMD Ryzen 7 / Intel Core i7", 120.0, "SAR") is None
+
+
+def test_coupon_makes_a_deal():
+    assert deals.parse_coupon("Save 20% with coupon", 1000.0) == 200.0
+    assert deals.parse_coupon("Save SAR 150.00 with coupon", 1000.0) == 150.0
+    assert deals.parse_coupon("وفر 15% مع الكوبون", 1000.0) == 150.0
+    assert deals.parse_coupon("Free delivery", 1000.0) is None
+    page = card("B0TVCPN001", "Samsung 65 Inch Crystal UHD 4K Smart TV", "1,999.00", "3,199.00")
+    page = page.replace("</div>", '<span class="s-coupon-unclipped">Save 25% with coupon</span></div>')
+    it = deals.parse_results("<html>" + page + "</html>")[0]
+    assert it["coupon"] == round(1999 * 0.25, 2)
+    # بدون كوبون: خصم 37% (أقل من 45) — مع الكوبون يصير 53% → تنبيه
+    assert deals.evaluate(it, "SAR", []) == []
+    ev = dict(it, price=it["price"] - it["coupon"])
+    assert any("خصم" in r for r in deals.evaluate(ev, "SAR", []))
+    msg = deals.format_alert(it, deals.CONFIG["markets"]["sa"], ["x"])
+    assert "🎟️" in msg and "بعد الكوبون" in msg
