@@ -2,6 +2,11 @@ name: Saudi stores probe
 
 on:
   workflow_dispatch:
+    inputs:
+      only:
+        description: "أسماء المتاجر (مثلاً: mahally jarir) — فاضي = الكل"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -17,3 +22,5 @@ jobs:
           python-version: "3.11"
       - run: pip install --quiet requests
       - run: python amazon_deals/probe_stores.py
+        env:
+          PROBE_ONLY: ${{ inputs.only }}
