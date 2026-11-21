@@ -807,5 +807,7 @@
     "grip",
     "bag"
   ],
-  "cross_store_max_pct": 75
+  "cross_store_max_pct": 75,
+  "trendyol_min_pct": 50,
+  "_note_trendyol": "منشورات القنوات اللي فيها روابط تريندول (ty.gl) توصل من أي قسم إذا الخصم ≥ trendyol_min_pct أو فيها ببلاش"
 }
