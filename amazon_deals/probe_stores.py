@@ -1,0 +1,56 @@
+"""فحص تجريبي: هل نقدر نقرأ صفحات البحث في متاجر سعودية؟ يطبع ملخص لكل متجر.
+
+طلب واحد عادي لكل متجر (بدون تحايل على أي حماية)، والنتيجة في سجل GitHub Actions.
+"""
+import json
+import re
+import sys
+
+import requests
+
+STORES = {
+    "extra": "https://www.extra.com/en-sa/search/?q=iphone",
+    "almanea": "https://www.almanea.sa/en/search?q=iphone",
+    "jarir": "https://www.jarir.com/sa-en/catalogsearch/result?search=iphone",
+    "noon": "https://www.noon.com/saudi-en/search/?q=iphone",
+    "blackbox": "https://www.blackbox.com.sa/en/search?q=iphone",
+}
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+
+
+def summarize(name: str, url: str) -> None:
+    print(f"\n===== {name} =====\n{url}")
+    try:
+        r = requests.get(url, timeout=30, headers={"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"})
+    except requests.RequestException as e:
+        print("ERROR", type(e).__name__, e)
+        return
+    t = r.text
+    title = re.search(r"<title[^>]*>(.*?)</title>", t, re.S | re.I)
+    print(f"status={r.status_code} final_url={r.url} len={len(t)} type={r.headers.get('content-type')}")
+    print("title:", (title.group(1).strip()[:120] if title else None))
+    markers = {
+        "__NEXT_DATA__": "__NEXT_DATA__" in t,
+        "ld+json": t.count("application/ld+json"),
+        "SAR": len(re.findall(r"\bSAR\b", t)),
+        "ر.س": t.count("ر.س"),
+        '"price"': t.count('"price"'),
+        "iphone": t.lower().count("iphone"),
+        "captcha/challenge": bool(re.search(r"captcha|cf-chl|challenge-platform|akamai|px-captcha", t, re.I)),
+    }
+    print("markers:", json.dumps(markers, ensure_ascii=False))
+    m = re.search(r'"price"\s*:', t) or re.search(r"\bSAR\b", t)
+    if m:
+        s = max(0, m.start() - 400)
+        print("snippet:", re.sub(r"\s+", " ", t[s:m.start() + 400]))
+    # روابط API ظاهرة في الصفحة (تساعد نعرف من وين تجي الأسعار)
+    apis = sorted(set(re.findall(r"https?://[a-z0-9.\-]+/(?:api|search|v\d)[^\"'\s<>]{0,80}", t)))[:10]
+    if apis:
+        print("api-like urls:", *apis, sep="\n  ")
+
+
+if __name__ == "__main__":
+    for n, u in STORES.items():
+        if len(sys.argv) > 1 and n not in sys.argv[1:]:
+            continue
+        summarize(n, u)
