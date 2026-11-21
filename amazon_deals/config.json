@@ -45,7 +45,13 @@
     "thumb grip",
     "box only",
     "dummy",
-    "toy"
+    "toy",
+    "face plate",
+    "face plates",
+    "faceplates",
+    "plates",
+    "panels",
+    "skins"
   ],
   "markets": {
     "sa": {
@@ -621,7 +627,13 @@
     "heatsink",
     "bracket",
     "sleeve cable",
-    "dust filter"
+    "dust filter",
+    "face plate",
+    "face plates",
+    "faceplates",
+    "plates",
+    "panels",
+    "skins"
   ],
   "_note_floor_accessory_words": "إذا جات وحدة من هالكلمات قبل اسم الجهاز في العنوان (مثل: Controller for Xbox Series X) فهو إكسسوار وما نطبق عليه حد السعر",
   "cross_store_pct": 35,
@@ -761,5 +773,33 @@
     "installation service",
     "خدمة تركيب",
     "تركيب مكيف"
-  ]
+  ],
+  "model_accessory_words": [
+    "face plate",
+    "face plates",
+    "faceplates",
+    "plates",
+    "panels",
+    "panel",
+    "skins",
+    "sticker",
+    "shell",
+    "stand",
+    "dock",
+    "charging station",
+    "controller",
+    "headset",
+    "case",
+    "cover",
+    "protector",
+    "strap",
+    "band",
+    "sleeve",
+    "cable",
+    "charger",
+    "adapter",
+    "grip",
+    "bag"
+  ],
+  "cross_store_max_pct": 75
 }
