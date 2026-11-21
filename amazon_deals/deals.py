@@ -243,6 +243,12 @@ def model_key(title: str) -> str | None:
     t = title.lower().replace("\u201d", '"').replace("''", '"')
     if is_resale(title):
         return None
+    # كلمة إكسسوار قبل اسم الجهاز ("Face Plates ... for PS5"، "Case for iPhone") = مو الجهاز نفسه.
+    # بعد اسم الجهاز عادي: "AirPods Pro 2 with Charging Case"، "PS5 Console with DualSense Controller"
+    dev = re.search(r"iphone|macbook|galaxy|playstation|\bps5\b|airpods", t)
+    head = t[:dev.start()] if dev else t
+    if _has_word(head, CONFIG.get("floor_accessory_words", []) + CONFIG.get("model_accessory_words", [])):
+        return None
     st = re.search(r"\b(\d{3,4})\s*gb\b|\b(\d)\s*tb\b", t)
     storage = (st.group(1) + "gb") if st and st.group(1) else (st.group(2) + "tb") if st else None
     m = re.search(r"iphone\s*(\d{2})\s*(pro max|pro|plus|air|e)?\b", t)
@@ -275,6 +281,8 @@ def cross_store_reason(item: dict, market_name: str, models: dict, now: float) -
         if other == market_name or now - rec["ts"] > 48 * 3600:
             continue
         cheaper = (1 - item["price"] / rec["price"]) * 100
+        if cheaper > CONFIG.get("cross_store_max_pct", 75):
+            continue  # فرق خيالي = غالباً منتج ثاني (إكسسوار) مو نفس الموديل؛ الأخطاء الحقيقية تمسكها الحدود
         if cheaper >= pct_min and (not best or cheaper > best[0]):
             best = (cheaper, other, rec["price"])
     if not best:

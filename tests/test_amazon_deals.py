@@ -289,3 +289,17 @@ def test_services_excluded():
     assert not deals.excluded("Gree 18000 BTU Split Air Conditioner, Inverter, Cold Only")
     assert not deals.excluded("LG Window Air Conditioner 18000 BTU, Easy to Install, Cold Only")
     assert not deals.excluded("مكيف سبليت جري 18000 وحدة سهل التركيب")
+
+
+def test_ps5_faceplates_not_a_console():
+    t = ("Newentor Disc Edition Face Plates with Cooling Vents Cover Skins Shell Panels for PS5 Slim Cover Console, "
+         "Playstation 5 Slim Covers Protective Shell")
+    assert deals.model_key(t) is None
+    assert deals.evaluate(item(t, 69.0), "SAR", []) == []
+    models = {"ps5-disc": {"almanea": {"price": 2749.0, "ts": 1000.0}}}
+    assert deals.cross_store_reason({"title": "PlayStation 5 Console Slim Disc", "price": 300.0}, "sa", models, 2000.0) is None
+    assert deals.model_key("Sony PlayStation 5 Slim Console Disc Edition (KSA Version)") == "ps5-disc"
+    assert deals.model_key("Apple Watch Series 10 GPS 42mm Aluminium Case with Sport Band") is None
+    assert deals.model_key("Apple AirPods Pro 2 Wireless Earbuds with MagSafe Charging Case (USB-C)") == "airpods-pro2"
+    assert deals.model_key("PlayStation 5 Console Slim Disc with DualSense Wireless Controller") == "ps5-disc"
+    assert deals.model_key("Silicone Case for Apple iPhone 16 Pro Max 256GB") is None
