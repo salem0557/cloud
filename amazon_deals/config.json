@@ -1104,5 +1104,12 @@
     "محدودة",
     "عرض_خاص"
   ],
-  "brand_gate_min_ratio": 0.4
+  "brand_gate_min_ratio": 0.4,
+  "too_cheap_ratio": 0.2,
+  "_note_too_cheap": "محلي: سعر أقل من too_cheap_ratio × حد الجهاز = تقليد، ما ينبه. (أمازون والمنيع ما يتأثرون)",
+  "blocked_sellers": [
+    "moment",
+    "عجيب غريب"
+  ],
+  "_note_blocked_sellers": "تجار محلي اللي يبيعون تقليد باسم المنتج الأصلي — أضف اسم المتجر هنا"
 }

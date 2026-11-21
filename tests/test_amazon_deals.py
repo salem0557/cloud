@@ -489,3 +489,15 @@ def test_knockoff_misspelled():
     assert deals.evaluate(item(t, 159.0), "SAR", [], trust_list=False, brand_first=True) == []
     assert deals.excluded("ايفون 17 نسخة طبق الاصل")
     assert deals.excluded("إصلاح شاشة ايفون")
+
+
+def test_copycat_titles_too_cheap_on_small_stores():
+    for t in ["ايربودز ماكس اسود MOMENT", "ايربودز ماكس ابيض MOMENT"]:
+        assert deals.evaluate(item(t, 96.0), "SAR", [], trust_list=False, brand_first=True) == [], t
+    # نفس الفكرة من تاجر ثاني: أرخص من 20% من سعر الجهاز → ما ينبه
+    assert deals.evaluate(item("ايربودز ماكس فضي متجر النخبة", 150.0), "SAR", [], trust_list=False, brand_first=True) == []
+    # خطأ تسعير معقول (40% من الحد) → ينبه
+    assert any("خطأ تسعير" in r for r in
+               deals.evaluate(item("ايربودز ماكس فضي متجر النخبة", 450.0), "SAR", [], trust_list=False, brand_first=True))
+    # أمازون ما يتأثر: ماك بوك M4 بـ 500 (17%) يبقى ينبه
+    assert any("خطأ تسعير" in r for r in deals.evaluate(item("Apple MacBook Pro 14 M4 chip 512GB", 500.0), "SAR", []))
