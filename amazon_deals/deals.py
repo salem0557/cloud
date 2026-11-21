@@ -240,15 +240,15 @@ def is_resale(title: str) -> bool:
 
 
 def excluded(title: str) -> bool:
-    t = title.lower()
+    t = _ar_fold(title.lower())  # "شبية" = "شبيه"، "إصلاح" = "اصلاح" ...
     # مجدد بحالة سيئة/مقبولة: ما نبيه
     if is_resale(title) and _has_word(t, CONFIG["resale"]["bad_condition"]):
         return True
     # تقليد/شبيه/متوافق مع: مو الجهاز الأصلي (وين ما جات بالعنوان)
-    if any(w in t for w in CONFIG.get("exclude_knockoffs", [])):
+    if any(_ar_fold(w) in t for w in CONFIG.get("exclude_knockoffs", [])):
         return True
     # خدمات صيانة بالعربي (محلي مليان مراكز صيانة): "خدمة فحص"، "تغيير بطارية"، "استبدال شاشة"...
-    if any(w in t for w in CONFIG.get("exclude_services_anywhere", [])):
+    if any(_ar_fold(w) in t for w in CONFIG.get("exclude_services_anywhere", [])):
         return True
     # خدمات (تركيب/صيانة/ضمان) مو منتجات — بس إذا في أول العنوان، لأن أجهزة كثيرة تكتب
     # "... 2 Years Warranty" في آخر عنوانها وما نبي نفوّتها
@@ -256,7 +256,7 @@ def excluded(title: str) -> bool:
         return True
     # الإكسسوارات تبدأ عادة بـ "Case for MacBook..." والمنتج الحقيقي يذكر "Case" متأخر
     # (مثل Apple Watch ... Aluminium Case with Sport Band)، فنفحص أول العنوان بس.
-    return any(w in t[:45] for w in CONFIG["exclude_words"])
+    return any(_ar_fold(w) in t[:45] for w in CONFIG["exclude_words"])
 
 
 def floor_hit(title: str, price: float, currency: str) -> float | None:
