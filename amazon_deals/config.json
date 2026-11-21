@@ -236,6 +236,70 @@
     {
       "market": "us",
       "q": "renewed premium macbook"
+    },
+    {
+      "market": "sa",
+      "q": "playstation 5 pro"
+    },
+    {
+      "market": "sa",
+      "q": "xbox series x console"
+    },
+    {
+      "market": "sa",
+      "q": "gaming pc desktop"
+    },
+    {
+      "market": "sa",
+      "q": "amd ryzen processor"
+    },
+    {
+      "market": "sa",
+      "q": "intel core processor"
+    },
+    {
+      "market": "sa",
+      "q": "ddr5 ram"
+    },
+    {
+      "market": "sa",
+      "q": "motherboard"
+    },
+    {
+      "market": "sa",
+      "q": "apple macbook air"
+    },
+    {
+      "market": "sa",
+      "q": "apple macbook pro"
+    },
+    {
+      "market": "sa",
+      "q": "split air conditioner"
+    },
+    {
+      "market": "sa",
+      "q": "window air conditioner"
+    },
+    {
+      "market": "almanea",
+      "q": "xbox"
+    },
+    {
+      "market": "almanea",
+      "q": "gaming pc"
+    },
+    {
+      "market": "almanea",
+      "q": "split air conditioner"
+    },
+    {
+      "market": "almanea",
+      "q": "مكيف"
+    },
+    {
+      "market": "almanea",
+      "q": "macbook pro"
     }
   ],
   "floors": {
@@ -396,6 +460,59 @@
           "rtx 5090"
         ],
         "below": 1200
+      },
+      {
+        "match": [
+          "split",
+          "air conditioner"
+        ],
+        "below": 900
+      },
+      {
+        "match": [
+          "window",
+          "air conditioner"
+        ],
+        "below": 600
+      },
+      {
+        "match": [
+          "gaming",
+          "pc",
+          "rtx"
+        ],
+        "below": 1800
+      },
+      {
+        "match": [
+          "ryzen 7"
+        ],
+        "below": 400
+      },
+      {
+        "match": [
+          "ryzen 9"
+        ],
+        "below": 700
+      },
+      {
+        "match": [
+          "core i7"
+        ],
+        "below": 450
+      },
+      {
+        "match": [
+          "core i9"
+        ],
+        "below": 800
+      },
+      {
+        "match": [
+          "playstation 5",
+          "pro"
+        ],
+        "below": 1500
       }
     ],
     "USD": [
@@ -498,7 +615,13 @@
     "expansion",
     "faceplate",
     "shell",
-    "box"
+    "box",
+    "cooler",
+    "thermal",
+    "heatsink",
+    "bracket",
+    "sleeve cable",
+    "dust filter"
   ],
   "_note_floor_accessory_words": "إذا جات وحدة من هالكلمات قبل اسم الجهاز في العنوان (مثل: Controller for Xbox Series X) فهو إكسسوار وما نطبق عليه حد السعر",
   "cross_store_pct": 35,
