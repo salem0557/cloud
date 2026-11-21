@@ -1,5 +1,5 @@
 {
-  "_note": "مصادر المراقبة. كل تشغيلة (كل 5 دقائق) تفحص pages_per_run صفحة بالتناوب.",
+  "_note": "كل متجر له pages_per_run (صفحات كل تشغيلة) و every_min (كل كم دقيقة). 0 صفحات = موقوف.",
   "pages_per_run": 6,
   "min_price": {
     "SAR": 80,
@@ -52,20 +52,25 @@
       "host": "www.amazon.sa",
       "currency": "SAR",
       "params": "language=en_AE",
-      "label": "أمازون"
+      "label": "أمازون",
+      "pages_per_run": 2,
+      "every_min": 15
     },
     "us": {
       "host": "www.amazon.com",
       "currency": "USD",
       "params": "language=en_US",
-      "label": "أمازون أمريكا"
+      "label": "أمازون أمريكا",
+      "pages_per_run": 0
     },
     "almanea": {
       "host": "www.almanea.sa",
       "currency": "SAR",
       "label": "المنيع",
       "parser": "almanea",
-      "search": "https://www.almanea.sa/en/search?q={q}"
+      "search": "https://www.almanea.sa/en/search?q={q}",
+      "pages_per_run": 3,
+      "every_min": 0
     }
   },
   "searches": [

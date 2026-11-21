@@ -320,27 +320,46 @@ def search_url(src: dict) -> str:
     return f"https://{m['host']}/s?k={q}&{m['params']}{extra}"
 
 
+def pick_batch(state: dict, now: float) -> list[dict]:
+    """لكل متجر: عدد صفحات وفترة خاصة فيه (أمازون أقل وأبطأ عشان ما تحظرنا)، وبالتناوب على كلمات البحث."""
+    cursors: dict = state.setdefault("cursors", {})
+    last: dict = state.setdefault("last_scan", {})
+    per_market: list[list[dict]] = []
+    for name, m in CONFIG["markets"].items():
+        srcs = [x for x in CONFIG["searches"] if x["market"] == name]
+        n = min(m.get("pages_per_run", CONFIG["pages_per_run"]), len(srcs))
+        if not n or now - last.get(name, 0) < m.get("every_min", 0) * 60 - 30:
+            continue
+        c = cursors.get(name, 0) % len(srcs)
+        per_market.append([srcs[(c + i) % len(srcs)] for i in range(n)])
+        cursors[name] = (c + n) % len(srcs)
+        last[name] = now
+    # نخلط المتاجر: صفحة من هذا وصفحة من ذاك
+    batch = []
+    while any(per_market):
+        for lst in per_market:
+            if lst:
+                batch.append(lst.pop(0))
+    return batch
+
+
 def run() -> int:
     state = load_state()
     prices: dict = state.setdefault("prices", {})     # "sa:ASIN" -> [سعر, ...]
     alerted: dict = state.setdefault("alerted", {})   # "sa:ASIN" -> {"price":, "ts":}
     stats: dict = state.setdefault("stats", {"day": "", "pages": 0, "blocked": 0, "items": 0, "alerts": 0})
-    searches = CONFIG["searches"]
-    cursor = state.get("cursor", 0) % len(searches)
-    n = min(CONFIG["pages_per_run"], len(searches))
-    batch = [searches[(cursor + i) % len(searches)] for i in range(n)]
-    state["cursor"] = (cursor + n) % len(searches)
+    batch = pick_batch(state, time.time())
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if stats["day"] != today:
         if stats["day"]:
             send(f"✅ صياد الأسعار شغال\nأمس: {stats['pages']} صفحة، {stats['items']} منتج، "
-                 f"{stats['alerts']} تنبيه، {stats['blocked']} حظر مؤقت من أمازون")
+                 f"{stats['alerts']} تنبيه، {stats['blocked']} حظر مؤقت")
         stats.update(day=today, pages=0, blocked=0, items=0, alerts=0)
 
     # أول تشغيل بعد إضافة الـ token: رسالة ترحيب + رقم المحادثة (حتى لو ما فيه عروض)
     if os.environ.get("DEALS_BOT_TOKEN") and not state.get("welcomed"):
-        if send("👋 صياد أخطاء الأسعار شغال!\nبيفحص إلكترونيات أمازون السعودية وأمريكا (جديد + مجدد) "
+        if send("👋 صياد أخطاء الأسعار شغال!\nبيفحص إلكترونيات أمازون السعودية والمنيع (جديد + مجدد) "
                 "ويرسل لك هنا أي سعر غلط أو تخفيض مجنون."):
             state["welcomed"] = True
 

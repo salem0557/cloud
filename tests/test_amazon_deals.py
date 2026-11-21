@@ -74,7 +74,18 @@ def test_run_end_to_end(tmp_path, monkeypatch):
     deals.run()
     assert len(sent) == 1  # ما يكرر نفس التنبيه
     state = json.loads((tmp_path / "s.json").read_text())
-    assert state["cursor"] == 12 % len(deals.CONFIG["searches"])
+    assert state["cursors"]["sa"] == 2  # التشغيلة الثانية خلال 15 دقيقة ما تفحص أمازون
+
+
+def test_pick_batch_rates():
+    state = {}
+    b = deals.pick_batch(state, 1000.0)
+    markets = [x["market"] for x in b]
+    assert markets.count("sa") == 2 and markets.count("almanea") == 3 and "us" not in markets
+    b2 = deals.pick_batch(state, 1000.0 + 300)      # بعد 5 دقائق: المنيع بس
+    assert {x["market"] for x in b2} == {"almanea"}
+    b3 = deals.pick_batch(state, 1000.0 + 900)      # بعد 15 دقيقة: أمازون ترجع
+    assert [x["market"] for x in b3].count("sa") == 2
 
 
 def item(title, price, list_price=None):
