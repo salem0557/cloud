@@ -518,3 +518,18 @@ def test_market_verified_deals():
     assert r and r[0].startswith("🔥") and "عرض مؤكد" in r[0]
     # خصم كبير بس السعر نفس السوق → ولا شي (الخصم وهمي)
     assert deals.market_deal_reasons(dict(new, price=4950.0, list_price=8999.0), 4950.0, "mahally", models, now) == []
+
+
+def test_accessories_with_arabic_prefixes_and_bundles():
+    t1 = ("Peslv Privacy Screen Compatible With MacBook Pro 14 Inch (2021-2023, M1, M2, M3)-A2918 A2992 A2442 A2779, "
+          "Magnetic Removable Matte Anti Blue Light Gla")
+    assert deals.evaluate(item(t1, 159.04), "SAR", []) == []
+    t2 = "بكج ساعة وسماعة من موج ماكس , ساعة الترا وسماعة ايربودز برو فون زون"
+    assert deals.evaluate(item(t2, 145.0), "SAR", [], trust_list=False, brand_first=True) == []
+    t3 = "علبة فردية ايربودز برو الجيل الثاني اصلية ابل ibznss Store متجر اي بزنس"
+    assert deals.evaluate(item(t3, 250.0), "SAR", [], trust_list=False, brand_first=True) == []
+    assert deals._has_word("كفر وسماعة للايفون", ["سماعة"]) and deals._has_word("حامل بالكفر", ["كفر"])
+    # أجهزة حقيقية ما تتأثر
+    assert any("خطأ تسعير" in r for r in deals.evaluate(item("Apple MacBook Pro 14-inch M4 chip, 512GB, Space Black", 1500.0), "SAR", []))
+    assert any("خطأ تسعير" in r for r in
+               deals.evaluate(item("ابل ايربودز برو 2 مع علبة شحن MagSafe", 200.0), "SAR", [], trust_list=False, brand_first=True))
