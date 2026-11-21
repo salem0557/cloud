@@ -270,7 +270,15 @@ def floor_hit(title: str, price: float, currency: str) -> float | None:
     return None
 
 
-def evaluate(item: dict, currency: str, history: list[float], trust_list: bool = True) -> list[str]:
+def starts_with_brand(title: str) -> bool:
+    """أول كلمة بالعنوان ماركة أو اسم جهاز (بعد الترجمة) — المنتج نفسه، مو "واقي/ريموت/موجه هواء لـ..."."""
+    t = re.sub(r"^[^\w\u0600-\u06FF]+", "", norm_title(title))
+    first = re.split(r"[\s\-|،,:(]+", t, maxsplit=1)[0]
+    return first in set(CONFIG.get("brand_first_words", []))
+
+
+def evaluate(item: dict, currency: str, history: list[float], trust_list: bool = True,
+             brand_first: bool = False) -> list[str]:
     """يرجع أسباب التنبيه (فاضية = ما فيه شي).
 
     trust_list=False: المتجر يضخّم "السعر الأصلي"، فخصمه ما نصدقه إلا إذا السعر نزل فعلاً
@@ -280,6 +288,8 @@ def evaluate(item: dict, currency: str, history: list[float], trust_list: bool =
         return []
     reasons = []
     floor = floor_hit(item["title"], price, currency)
+    if floor and brand_first and not starts_with_brand(item["title"]):
+        floor = None  # متاجر صغيرة: خطأ التسعير لازم يكون لمنتج عنوانه يبدأ بالماركة/الجهاز
     if floor:
         reasons.append(f"🚨 أقل من الحد الطبيعي ({floor:,.0f} {currency}) — احتمال خطأ تسعير")
     if len(history) >= 3:
@@ -725,8 +735,9 @@ def run() -> int:
             hist = prices.get(key, [])
             # إذا فيه كوبون نقيّم بالسعر بعده (عرض قوي + كوبون = صيدة)
             ev = dict(it, price=round(it["price"] - it["coupon"], 2)) if it.get("coupon") else it
-            reasons = evaluate(ev, market["currency"], hist, market.get("trust_list_price", True))
-            if not excluded(it["title"]):
+            bf = market.get("floor_requires_brand", False)
+            reasons = evaluate(ev, market["currency"], hist, market.get("trust_list_price", True), bf)
+            if not excluded(it["title"]) and (not bf or starts_with_brand(it["title"])):
                 cross = cross_store_reason(ev, src["market"], models, now)
                 if cross:
                     reasons.append(cross)
