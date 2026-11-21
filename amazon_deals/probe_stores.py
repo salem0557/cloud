@@ -3,6 +3,7 @@
 طلب واحد عادي لكل متجر (بدون تحايل على أي حماية)، والنتيجة في سجل GitHub Actions.
 """
 import json
+import os
 import re
 import sys
 
@@ -52,10 +53,30 @@ def summarize(name: str, url: str) -> None:
         print("api-like urls:", *apis, sep="\n  ")
 
 
+def probe_channel(ch: str) -> None:
+    """قناة تيليجرام عامة: كم منشور ظاهر، تاريخ آخر منشور، ومثال."""
+    print(f"\n===== tg:{ch} =====")
+    try:
+        r = requests.get(f"https://t.me/s/{ch}", timeout=20, headers={"User-Agent": UA})
+    except requests.RequestException as e:
+        print("ERROR", type(e).__name__)
+        return
+    posts = re.findall(r'data-post="[^"]+/(\d+)"', r.text)
+    dates = re.findall(r'<time datetime="([^"]+)"', r.text)
+    texts = re.findall(r'class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>', r.text, re.S)
+    print(f"status={r.status_code} final_url={r.url} posts={len(posts)} last_post={posts[-1] if posts else None} "
+          f"last_date={dates[-1] if dates else None}")
+    for t in texts[-3:]:
+        print("  •", re.sub(r"<[^>]+>|\s+", " ", t)[:160])
+
+
 if __name__ == "__main__":
-    import os
+    for ch in os.environ.get("PROBE_TG", "").split():
+        probe_channel(ch)
     only = (os.environ.get("PROBE_ONLY") or " ".join(sys.argv[1:])).split()
     for n, u in STORES.items():
+        if os.environ.get("PROBE_TG") and not only:
+            break
         if only and not any(n.startswith(o) for o in only):
             continue
         summarize(n, u)

@@ -5,8 +5,8 @@
     "SAR": 80,
     "USD": 20
   },
-  "discount_alert_pct": 70,
-  "history_drop_pct": 55,
+  "discount_alert_pct": 45,
+  "history_drop_pct": 35,
   "realert_hours": 24,
   "exclude_words": [
     "case",
