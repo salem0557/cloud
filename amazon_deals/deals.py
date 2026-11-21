@@ -356,7 +356,11 @@ def parse_channel(page: str) -> list[tuple[int, str]]:
             continue
         txt = div.select_one(".tgme_widget_message_text")
         if txt:
-            out.append((pid, txt.get_text("\n", strip=True)))
+            for br in txt.find_all("br"):
+                br.replace_with("\n")
+            text = txt.get_text("")  # المسافات الحقيقية موجودة في النص؛ الفاصل يكسر "ال"+"جسم"
+            text = "\n".join(re.sub(r"[ \t]+", " ", ln).strip() for ln in text.split("\n"))
+            out.append((pid, re.sub(r"\n{3,}", "\n\n", text).strip()))
     return out
 
 
@@ -395,8 +399,13 @@ def scan_channels(state: dict, session: requests.Session) -> int:
             # تريندول (روابط ty.gl): أي قسم، بشرط عرض قوي — خصم كبير أو "ببلاش"
             if not hit and re.search(r"ty\.gl/|trendyol", text, re.I):
                 pcts = [int(x) for x in re.findall(r"(\d{2})\s*[%٪]", text)]
-                strong = CONFIG.get("trendyol_min_pct", 50)
-                hit = any(p >= strong for p in pcts) or any(w in text for w in ("ببلاش", "مجانا", "مجاناً", "خطأ تسعير"))
+                strong = CONFIG.get("trendyol_min_pct", 60)
+                # السعر قبل الخصم: "بدل 58 ريال" أو "(بدل 58)"؛ لو ما انكتب نحسبه من السعر والنسبة
+                olds = [float(x) for x in re.findall(r"بدل\s*([\d,.]+)", text.replace(",", ""))]
+                min_old = CONFIG.get("trendyol_min_old_price", 150)
+                worth = not olds or max(olds) >= min_old
+                hit = (any(p >= strong for p in pcts) and worth) or \
+                    any(w in text for w in ("خطأ تسعير", "غلط تسعير"))
             if not hit:
                 continue
             tag = "🛍️ تريندول — " if re.search(r"ty\.gl/|trendyol", text, re.I) else ""

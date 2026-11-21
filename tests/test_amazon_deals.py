@@ -345,8 +345,9 @@ def test_channel_ignores_keywords_inside_links(monkeypatch):
 
 
 TY = """<div class="tgme_widget_message" data-post="d/30"><div class="tgme_widget_message_text">طقم حقائب سفر خصم 20% https://ty.gl/aa</div></div>
-<div class="tgme_widget_message" data-post="d/31"><div class="tgme_widget_message_text">جاكيت شتوي من تريندول خصم 65% https://ty.gl/bb</div></div>
-<div class="tgme_widget_message" data-post="d/32"><div class="tgme_widget_message_text">عطر ببلاش https://ty.gl/cc</div></div>"""
+<div class="tgme_widget_message" data-post="d/31"><div class="tgme_widget_message_text">جاكيت شتوي من تريندول بـ 199 ريال (بدل 699 ريال - خصم 72%) https://ty.gl/bb</div></div>
+<div class="tgme_widget_message" data-post="d/32"><div class="tgme_widget_message_text">✨<b>معطر</b> <b>ال</b><b>جسم</b> من <b>جيس</b> بـ 28.45 ريال (بدل 58 ريال - خصم 51%).<br>كود: X https://ty.gl/cc</div></div>
+<div class="tgme_widget_message" data-post="d/33"><div class="tgme_widget_message_text">خطأ تسعير! كنبة بـ 99 https://ty.gl/dd</div></div>"""
 
 
 def test_trendyol_strong_deals_any_category(monkeypatch):
@@ -360,7 +361,14 @@ def test_trendyol_strong_deals_any_category(monkeypatch):
     sent = []
     monkeypatch.setattr(deals, "send", lambda t, silent=False: sent.append(t) or True)
     assert deals.scan_channels({"tg_seen": {"d": 29}}, S()) == 2
-    assert "65%" in sent[0] and "🛍️ تريندول" in sent[0] and "ببلاش" in sent[1]
+    assert "72%" in sent[0] and "🛍️ تريندول" in sent[0] and "خطأ تسعير" in sent[1]
+
+
+def test_channel_text_keeps_words_on_one_line():
+    posts = deals.parse_channel(TY)
+    perfume = dict(posts)[32]
+    assert perfume.startswith("✨معطر الجسم من جيس بـ 28.45 ريال")
+    assert perfume.count("\n") == 1
 
 
 MAHALLY = json.dumps([

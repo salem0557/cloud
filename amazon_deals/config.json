@@ -874,6 +874,7 @@
     "bag"
   ],
   "cross_store_max_pct": 75,
-  "trendyol_min_pct": 50,
-  "_note_trendyol": "منشورات القنوات اللي فيها روابط تريندول (ty.gl) توصل من أي قسم إذا الخصم ≥ trendyol_min_pct أو فيها ببلاش"
+  "trendyol_min_pct": 60,
+  "_note_trendyol": "تريندول من القنوات (غير الإلكترونيات): توصل إذا الخصم ≥ trendyol_min_pct والسعر قبل الخصم ≥ trendyol_min_old_price، أو إذا فيها خطأ تسعير",
+  "trendyol_min_old_price": 150
 }
