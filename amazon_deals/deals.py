@@ -74,6 +74,11 @@ def parse_results(page: str) -> list[dict]:
             t2 = alt.get_text(" ", strip=True)
             if len(t2) > len(title):
                 title = t2
+        # الإعلانات: أمازون تحط "Sponsored ... Let us know" قبل العنوان — نشيلها ونعلّم المنتج كإعلان
+        if re.match(r"\s*sponsored\b", title, re.I):
+            sponsored = True
+            title = re.sub(r"^\s*(?:sponsored\s*)+(?:you.re seeing this ad.*?let us know\s*)?", "", title,
+                           flags=re.I | re.S)
         price = None
         for sp in div.select("span.a-price"):
             if "a-text-price" in (sp.get("class") or []):
@@ -279,6 +284,9 @@ def floor_hit(title: str, price: float, currency: str) -> float | None:
         hits = [re.search(rf"(?<![\w]){re.escape(w)}(?![\w])", t) for w in rule["match"]]
         if not all(hits) or price >= below:
             continue
+        # قطع وملحقات واضحة وين ما جات ("Portable Air Conditioner Window Kit")
+        if _has_word(t, CONFIG.get("floor_accessory_anywhere", [])):
+            continue
         # "Controller for Xbox Series X" / "Battery Pack (Xbox Series X)": الإكسسوار يجي قبل اسم الجهاز
         head = t[:max(h.start() for h in hits)]
         if _has_word(head, CONFIG.get("floor_accessory_words", [])):
@@ -316,6 +324,8 @@ def evaluate(item: dict, currency: str, history: list[float], trust_list: bool =
         return []
     reasons = []
     floor = floor_hit(item["title"], price, currency)
+    if floor and item.get("sponsored"):
+        floor = None  # الإعلانات الممولة ما تكون أخطاء تسعير (وغالباً إكسسوارات)
     if floor and brand_first and price < floor * CONFIG.get("too_cheap_ratio", 0.2):
         floor = None  # متاجر صغيرة: أرخص من 20% من سعر الجهاز = تقليد ينسخ اسم الأصلي، مو خطأ تسعير
     if floor and brand_first and not starts_with_brand(item["title"]):
