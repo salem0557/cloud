@@ -231,7 +231,13 @@ def is_blocked(page: str) -> bool:
 
 def _has_word(t: str, words: list[str]) -> bool:
     t = _ar_fold(t)  # "تعليقة" في القائمة تطابق "تعليقه" بعد التوحيد
-    return any(re.search(rf"(?<!\w){re.escape(_ar_fold(w))}(?!\w)", t) for w in words)
+
+    def pat(w: str) -> str:
+        w = re.escape(_ar_fold(w))
+        # العربي يجي ملصوق بالبادئات: "وسماعة"، "بالكفر"، "للايفون"
+        pre = r"(?:وال|بال|فال|كال|لل|ال|و|ف|ب|ل|ك)?" if re.search(r"[\u0600-\u06FF]", w) else ""
+        return rf"(?<!\w){pre}{w}(?!\w)"
+    return any(re.search(pat(w), t) for w in words)
 
 
 def is_resale(title: str) -> bool:
