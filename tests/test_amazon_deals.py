@@ -50,7 +50,8 @@ def test_accessory_ignored_but_real_watch_not():
 
 def test_normal_discount_no_alert():
     tv = deals.parse_results(PAGE)[3]
-    assert deals.evaluate(tv, "SAR", [2999, 2899, 2999]) == []
+    assert deals.evaluate(tv, "SAR", [2299, 2249, 2299]) == []  # نفس سعره المعتاد تقريباً
+    assert any(r.startswith("📉") for r in deals.evaluate(tv, "SAR", [2999, 2899, 2999]))  # تخفيض مخفي 27%
 
 
 def test_history_drop():
@@ -561,6 +562,7 @@ D4D = ('<script type="application/ld+json">' + json.dumps({"@graph": [{"@type": 
 
 
 def test_flyers(monkeypatch):
+    monkeypatch.setitem(deals.CONFIG, "flyers", dict(deals.CONFIG["flyers"], url="https://d4donline.com/x"))
     class R:
         status_code = 200
         text = D4D
