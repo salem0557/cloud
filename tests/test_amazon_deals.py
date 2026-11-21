@@ -449,3 +449,19 @@ def test_tv_screen_protectors_ignored():
                      ("تعليقة جدارية لشاشة تلفزيون 65 بوصة", 120.0)]:
         assert deals.evaluate(item(t, price), "SAR", [], trust_list=False) == [], t
     assert any("خطأ تسعير" in r for r in deals.evaluate(item("شاشة سامسونج 65 بوصة سمارت 4K", 700.0), "SAR", [], trust_list=False))
+
+
+def test_mahally_brand_first_gate():
+    junk = ["موجه هواء مكيف سبليت كلاسيك من ويتفورمز | Witforms Classic ويتفورمز",
+            "ريموت مكيف سبليت سامسونج أصلي تحكم عن بعد موديل DB93-11489C مقشة",
+            "واقي شاشة تلفزيون 65 بوصة مقاوم للخدوش"]
+    for t in junk:
+        assert deals.evaluate(item(t, 90.0), "SAR", [], trust_list=False, brand_first=True) == [], t
+    real = ["ابل - ايفون 17 برو ماكس، بسعة 256 جيجا، 5 جي",
+            "ايفون 17 برو ماكس 256 جيجا ميكانيزم الكترونيات",
+            "مكيف سبليت جري 18000 وحدة انفرتر",
+            "سامسونج جالكسي S25 الترا 256 جيجا",
+            "كاش ابل ايفون 17 برو ماكس ،6.9 بوصة، 256 جيجا"]
+    for t in real:
+        assert deals.starts_with_brand(t), t
+    assert any("خطأ تسعير" in r for r in deals.evaluate(item(real[0], 900.0), "SAR", [], trust_list=False, brand_first=True))
