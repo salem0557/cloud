@@ -14,6 +14,9 @@ STORES = {
     "jarir": "https://www.jarir.com/sa-en/catalogsearch/result?search=iphone",
     "noon": "https://www.noon.com/saudi-en/search/?q=iphone",
     "blackbox": "https://www.blackbox.com.sa/en/search?q=iphone",
+    "mahally_home": "https://mahally.com/ar/",
+    "mahally_search": "https://mahally.com/ar/search?q=iphone",
+    "mahally_search2": "https://mahally.com/ar/products?search=iphone",
 }
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
 
@@ -50,7 +53,9 @@ def summarize(name: str, url: str) -> None:
 
 
 if __name__ == "__main__":
+    import os
+    only = (os.environ.get("PROBE_ONLY") or " ".join(sys.argv[1:])).split()
     for n, u in STORES.items():
-        if len(sys.argv) > 1 and n not in sys.argv[1:]:
+        if only and not any(n.startswith(o) for o in only):
             continue
         summarize(n, u)
