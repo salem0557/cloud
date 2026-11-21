@@ -319,3 +319,24 @@ def test_real_devices_not_dropped():
     ]
     for t in keep:
         assert not deals.excluded(t), t
+
+
+FOOD = """<div class="tgme_widget_message" data-post="deals/20"><div class="tgme_widget_message_text">ببلاش
+* عرض زبدة غير مملحة بـ 1.00 ريال https://3rrood.com/bvPCrtxH
+* عرض كرواسون شوكولاتة https://3rrood.com/abTVqq</div></div>
+<div class="tgme_widget_message" data-post="deals/21"><div class="tgme_widget_message_text">شاشة سامسونج 55 بوصة TV بخصم 40% https://ty.gl/x1</div></div>
+<div class="tgme_widget_message" data-post="deals/22"><div class="tgme_widget_message_text">خصم قوي على المكيفات اليوم https://ty.gl/x2</div></div>"""
+
+
+def test_channel_ignores_keywords_inside_links(monkeypatch):
+    monkeypatch.setitem(deals.CONFIG, "telegram_channels", ["deals"])
+    class R:
+        status_code = 200
+        text = FOOD
+    class S:
+        def get(self, url, timeout):
+            return R()
+    sent = []
+    monkeypatch.setattr(deals, "send", lambda t, silent=False: sent.append(t) or True)
+    state = {"tg_seen": {"deals": 19}}
+    assert deals.scan_channels(state, S()) == 2 and "سامسونج" in sent[0] and "المكيفات" in sent[1]
