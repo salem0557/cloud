@@ -54,7 +54,7 @@
       "params": "language=en_AE",
       "label": "أمازون",
       "pages_per_run": 2,
-      "every_min": 15
+      "every_min": 0
     },
     "us": {
       "host": "www.amazon.com",
@@ -498,5 +498,39 @@
     "shell",
     "box"
   ],
-  "_note_floor_accessory_words": "إذا جات وحدة من هالكلمات قبل اسم الجهاز في العنوان (مثل: Controller for Xbox Series X) فهو إكسسوار وما نطبق عليه حد السعر"
+  "_note_floor_accessory_words": "إذا جات وحدة من هالكلمات قبل اسم الجهاز في العنوان (مثل: Controller for Xbox Series X) فهو إكسسوار وما نطبق عليه حد السعر",
+  "cross_store_pct": 35,
+  "_note_telegram": "أسماء قنوات تيليجرام العامة (بدون @). البوت يرسل لك منشوراتها الجديدة اللي فيها وحدة من telegram_keywords",
+  "telegram_channels": [],
+  "telegram_keywords": [
+    "iphone",
+    "آيفون",
+    "ايفون",
+    "macbook",
+    "ماك",
+    "ipad",
+    "ايباد",
+    "airpods",
+    "سامسونج",
+    "samsung",
+    "galaxy",
+    "playstation",
+    "ps5",
+    "بلايستيشن",
+    "xbox",
+    "nintendo",
+    "laptop",
+    "لابتوب",
+    "شاشة",
+    "monitor",
+    "tv",
+    "تلفزيون",
+    "rtx",
+    "dyson",
+    "خطأ",
+    "غلط",
+    "تسعير",
+    "glitch",
+    "price error"
+  ]
 }
