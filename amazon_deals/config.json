@@ -6,7 +6,7 @@
     "USD": 20
   },
   "discount_alert_pct": 45,
-  "history_drop_pct": 35,
+  "history_drop_pct": 25,
   "realert_hours": 24,
   "exclude_words": [
     "case",
@@ -369,6 +369,114 @@
     {
       "market": "mahally",
       "q": "اكس بوكس"
+    },
+    {
+      "market": "almanea",
+      "q": "sony headphones"
+    },
+    {
+      "market": "almanea",
+      "q": "jbl speaker"
+    },
+    {
+      "market": "almanea",
+      "q": "samsung tv"
+    },
+    {
+      "market": "almanea",
+      "q": "lg tv"
+    },
+    {
+      "market": "almanea",
+      "q": "dyson"
+    },
+    {
+      "market": "almanea",
+      "q": "projector"
+    },
+    {
+      "market": "almanea",
+      "q": "nintendo switch"
+    },
+    {
+      "market": "almanea",
+      "q": "camera"
+    },
+    {
+      "market": "almanea",
+      "q": "smart watch"
+    },
+    {
+      "market": "almanea",
+      "q": "refrigerator"
+    },
+    {
+      "market": "almanea",
+      "q": "washing machine"
+    },
+    {
+      "market": "mahally",
+      "q": "سماعة سوني"
+    },
+    {
+      "market": "mahally",
+      "q": "سماعات بلوتوث"
+    },
+    {
+      "market": "mahally",
+      "q": "ساعة ذكية"
+    },
+    {
+      "market": "mahally",
+      "q": "كاميرا"
+    },
+    {
+      "market": "mahally",
+      "q": "بروجكتر"
+    },
+    {
+      "market": "mahally",
+      "q": "نينتندو سويتش"
+    },
+    {
+      "market": "mahally",
+      "q": "جالكسي تاب"
+    },
+    {
+      "market": "mahally",
+      "q": "شاشة سامسونج"
+    },
+    {
+      "market": "mahally",
+      "q": "مكنسة روبوت"
+    },
+    {
+      "market": "mahally",
+      "q": "قيمنق"
+    },
+    {
+      "market": "sa",
+      "q": "robot vacuum"
+    },
+    {
+      "market": "sa",
+      "q": "projector"
+    },
+    {
+      "market": "sa",
+      "q": "smart watch"
+    },
+    {
+      "market": "sa",
+      "q": "jbl speaker"
+    },
+    {
+      "market": "sa",
+      "q": "bose headphones"
+    },
+    {
+      "market": "sa",
+      "q": "nintendo switch 2"
     }
   ],
   "floors": {
@@ -1138,7 +1246,7 @@
   "_note_market_deals": "♻️ مستعمل/مجدد أرخص used_deal_pct% من الجديد، و🔥 خصم ≥ verified_discount_pct% وأرخص 10%+ من متجر ثاني (نفس الموديل)",
   "trendyol_any_category": false,
   "flyers": {
-    "url": "https://d4donline.com/en/saudi-arabia/riyadh/offers",
+    "url": "",
     "stores": [
       "extra",
       "اكسترا",
@@ -1167,6 +1275,6 @@
       "zain",
       "nesto"
     ],
-    "_note": "نشرات العروض الأسبوعية من D4D (فيها إكسترا وجرير). نشرة جديدة لمتجر في القائمة = تنبيه صامت برابطها."
+    "_note": "موقوف بطلب سالم (النشرات = اللي يبون يسوقونه، مو التخفيضات المخفية). حط الرابط لو تبيه يرجع."
   }
 }
