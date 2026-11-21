@@ -163,7 +163,57 @@ def parse_almanea(page: str) -> list[dict]:
     return items
 
 
-PARSERS = {"amazon": parse_results, "almanea": parse_almanea}
+AR_MAP = [  # أسماء عربية شائعة في المتاجر الصغيرة → الإنجليزي اللي تفهمه القواعد
+    (r"آيفون|ايفون|أيفون", "iphone"), (r"ماك\s*بوك", "macbook"), (r"ايباد|آيباد|أيباد", "ipad"),
+    (r"اير\s*بودز|ايربودز", "airpods"), (r"برو\s*ماكس", "pro max"), (r"\bبرو\b", "pro"), (r"\bاير\b", "air"),
+    (r"\bماكس\b", "max"), (r"بلس", "plus"), (r"جالكسي|جالاكسي|قالكسي|galaxy", "galaxy"), (r"سامسونج", "samsung"),
+    (r"بلايستيشن|بلاي\s*ستيشن", "playstation"), (r"سوني", "sony"), (r"اكس\s*بوكس", "xbox"), (r"جهاز", "console"),
+    (r"(\d+)\s*(?:جيجا|قيقا|جيقا|gb)", r"\1gb"), (r"(\d+)\s*(?:تيرا|تيرابايت)", r"\1tb"),
+    (r"مكيف\s*سبليت|سبليت", "split air conditioner"), (r"مكيف\s*شباك|شباك", "window air conditioner"),
+    (r"شاشة|تلفزيون", "tv"), (r"بوصة|انش", "inch"), (r"لابتوب", "laptop"), (r"ساعة\s*ابل|ساعة\s*آبل", "apple watch"),
+    (r"الترا", "ultra"), (r"مستخدم", "used"),
+]
+
+
+def norm_title(title: str) -> str:
+    """lower + ترجمة الكلمات العربية الشائعة عشان القواعد (الحدود، المطابقة) تشتغل على العناوين العربية."""
+    t = title.lower()
+    if re.search(r"[\u0600-\u06FF]", t):
+        for pat, rep in AR_MAP:
+            t = re.sub(pat, rep, t)
+    return t
+
+
+def parse_mahally(page: str) -> list[dict]:
+    """محلي: المتصفح يرجّع JSON [[href, نص البطاقة]]. النص: الاسم المتجر التقييم (عدد) ... [قبل -N% ] السعر."""
+    try:
+        cards = json.loads(page)
+    except ValueError:
+        return []
+    items, seen = [], set()
+    for href, txt in cards:
+        href = href.split("?")[0]
+        if href in seen or "/products/" not in href:
+            continue
+        seen.add(href)
+        txt = re.sub(r"\s+", " ", txt).strip()
+        m = re.search(r"([\d,]+(?:\.\d+)?)\s*-(\d{1,2})%\s*([\d,]+(?:\.\d+)?)\s*$", txt) or \
+            re.search(r"()()([\d,]+(?:\.\d+)?)\s*$", txt)
+        if not m:
+            continue
+        price = float(m.group(3).replace(",", ""))
+        old = float(m.group(1).replace(",", "")) if m.group(1) else None
+        name = re.split(r"\s\d\.\d{2}\s\(\d+\)", txt)[0][:200]  # قبل التقييم (فيه اسم المتجر بالآخر)
+        if price <= 0 or not name:
+            continue
+        pid = href.strip("/").split("/")[-1]
+        items.append({"asin": pid, "title": name, "price": price,
+                      "list_price": old if old and old > price else None, "sponsored": False,
+                      "url": "https://mahally.com" + href})
+    return items
+
+
+PARSERS = {"amazon": parse_results, "almanea": parse_almanea, "mahally": parse_mahally}
 
 
 def is_blocked(page: str) -> bool:
@@ -177,6 +227,7 @@ def _has_word(t: str, words: list[str]) -> bool:
 
 
 def is_resale(title: str) -> bool:
+    title = norm_title(title)
     return _has_word(title.lower(), CONFIG["resale"]["words"])
 
 
@@ -195,7 +246,7 @@ def excluded(title: str) -> bool:
 
 
 def floor_hit(title: str, price: float, currency: str) -> float | None:
-    t = title.lower()
+    t = norm_title(title)
     factor = CONFIG["resale"]["floor_factor"] if is_resale(title) else 1.0
     for rule in CONFIG["floors"].get(currency, []):
         below = rule["below"] * factor
@@ -241,7 +292,7 @@ def evaluate(item: dict, currency: str, history: list[float], trust_list: bool =
 
 def model_key(title: str) -> str | None:
     """مفتاح موحّد لنفس المنتج في أي متجر (آيفون/ماك/سامسونج/PS5/AirPods). None = ما نعرف نطابقه."""
-    t = title.lower().replace("\u201d", '"').replace("''", '"')
+    t = norm_title(title).replace("\u201d", '"').replace("''", '"')
     if is_resale(title):
         return None
     # كلمة إكسسوار قبل اسم الجهاز ("Face Plates ... for PS5"، "Case for iPhone") = مو الجهاز نفسه.
@@ -440,6 +491,43 @@ def format_alert(item: dict, market: dict, reasons: list[str], season: dict | No
 
 # ---------- التشغيل ----------
 
+_browser = {}
+
+
+def fetch_browser(url: str) -> str | None:
+    """متصفح Chromium عادي (بدون تخفّي) للمتاجر اللي تحمّل منتجاتها بالجافاسكربت (محلي).
+    يرجّع JSON [[رابط المنتج, نص البطاقة]]."""
+    try:
+        if "page" not in _browser:
+            from playwright.sync_api import sync_playwright
+            _browser["pw"] = sync_playwright().start()
+            _browser["b"] = _browser["pw"].chromium.launch()
+            _browser["page"] = _browser["b"].new_page(locale="ar-SA")
+        page = _browser["page"]
+        page.goto(url, wait_until="domcontentloaded", timeout=45000)
+        page.wait_for_timeout(7000)
+        if re.search(r"Attention Required|Just a moment|التحقق البشري", page.title()):
+            return None
+        cards = page.eval_on_selector_all("a[href*='/products/']", """els => els.map(a => {
+            let n = a; for (let i = 0; i < 4 && n.parentElement; i++) { n = n.parentElement; if (n.innerText.length > 30) break; }
+            return [a.getAttribute('href'), n.innerText];
+        })""")
+        return json.dumps(cards, ensure_ascii=False)
+    except Exception as e:
+        print("browser error", type(e).__name__, str(e)[:200])
+        return None
+
+
+def close_browser() -> None:
+    try:
+        if "b" in _browser:
+            _browser["b"].close()
+            _browser["pw"].stop()
+    except Exception:
+        pass
+    _browser.clear()
+
+
 def fetch(session: requests.Session, url: str, retry: bool = True) -> str | None:
     try:
         r = session.get(url, timeout=25, headers={
@@ -590,7 +678,8 @@ def run() -> int:
         market = CONFIG["markets"][src["market"]]
         if market["host"] in blocked_hosts:  # أمازون رفضتنا: نوقف الطلب عليها لين التشغيلة الجاية
             continue
-        page = fetch(session, src.get("_url") or search_url(src))
+        url = src.get("_url") or search_url(src)
+        page = fetch_browser(url) if market.get("browser") else fetch(session, url)
         stats["pages"] += 1
         if page is None or is_blocked(page):
             stats["blocked"] += 1
@@ -643,6 +732,7 @@ def run() -> int:
                     if not rec or now - rec["ts"] > 48 * 3600 or it["price"] < rec["price"]:
                         models[mk][src["market"]] = {"price": it["price"], "ts": now}
 
+    close_browser()
     record_experiment(state, exp_name, exp_ok, exp_blocked)
     try:
         stats["alerts"] += scan_channels(state, session)

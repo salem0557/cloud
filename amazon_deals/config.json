@@ -85,6 +85,17 @@
       "every_min": 0,
       "trust_list_price": false,
       "_note": "trust_list_price=false: السعر المشطوب في المنيع مبالغ فيه غالباً، فالخصم لازم يتأكد من سجل الأسعار"
+    },
+    "mahally": {
+      "host": "mahally.com",
+      "currency": "SAR",
+      "label": "محلي",
+      "parser": "mahally",
+      "browser": true,
+      "search": "https://mahally.com/ar/browse/?query={q}",
+      "pages_per_run": 2,
+      "trust_list_price": false,
+      "_note": "متاجر صغيرة عبر سلة. يحتاج متصفح (Playwright) لأن المنتجات تنحمّل بالجافاسكربت."
     }
   },
   "searches": [
@@ -312,6 +323,50 @@
     {
       "market": "almanea",
       "q": "macbook pro"
+    },
+    {
+      "market": "mahally",
+      "q": "ايفون"
+    },
+    {
+      "market": "mahally",
+      "q": "ماك بوك"
+    },
+    {
+      "market": "mahally",
+      "q": "بلايستيشن 5"
+    },
+    {
+      "market": "mahally",
+      "q": "سامسونج جالكسي"
+    },
+    {
+      "market": "mahally",
+      "q": "ايباد"
+    },
+    {
+      "market": "mahally",
+      "q": "لابتوب"
+    },
+    {
+      "market": "mahally",
+      "q": "شاشة"
+    },
+    {
+      "market": "mahally",
+      "q": "مكيف سبليت"
+    },
+    {
+      "market": "mahally",
+      "q": "ساعة ابل"
+    },
+    {
+      "market": "mahally",
+      "q": "ايربودز"
+    },
+    {
+      "market": "mahally",
+      "q": "اكس بوكس"
     }
   ],
   "floors": {
@@ -580,7 +635,10 @@
       "open box",
       "like new",
       "مجدد",
-      "مستعمل"
+      "مستعمل",
+      "مستخدم",
+      "مستعمل نظيف",
+      "كسر زيرو"
     ],
     "bad_condition": [
       "acceptable",
@@ -698,7 +756,8 @@
       "to": "11-12",
       "extra_pages": {
         "sa": 1,
-        "almanea": 2
+        "almanea": 2,
+        "mahally": 1
       }
     },
     {
@@ -707,7 +766,8 @@
       "to": "12-02",
       "extra_pages": {
         "sa": 1,
-        "almanea": 2
+        "almanea": 2,
+        "mahally": 1
       }
     },
     {
@@ -715,7 +775,8 @@
       "from": "12-24",
       "to": "12-31",
       "extra_pages": {
-        "almanea": 1
+        "almanea": 1,
+        "mahally": 1
       }
     },
     {
@@ -724,7 +785,8 @@
       "to": "02-23",
       "extra_pages": {
         "sa": 1,
-        "almanea": 2
+        "almanea": 2,
+        "mahally": 1
       }
     },
     {
@@ -733,7 +795,8 @@
       "to": "2027-03-10",
       "extra_pages": {
         "sa": 1,
-        "almanea": 2
+        "almanea": 2,
+        "mahally": 1
       }
     },
     {
@@ -742,7 +805,8 @@
       "to": "07-17",
       "extra_pages": {
         "sa": 1,
-        "almanea": 1
+        "almanea": 1,
+        "mahally": 1
       }
     },
     {
@@ -750,7 +814,8 @@
       "from": "08-10",
       "to": "08-25",
       "extra_pages": {
-        "almanea": 1
+        "almanea": 1,
+        "mahally": 1
       }
     },
     {
@@ -759,7 +824,8 @@
       "to": "09-25",
       "extra_pages": {
         "sa": 1,
-        "almanea": 2
+        "almanea": 2,
+        "mahally": 1
       }
     }
   ],
