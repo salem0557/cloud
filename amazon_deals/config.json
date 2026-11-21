@@ -57,10 +57,16 @@
     "sa": {
       "host": "www.amazon.sa",
       "currency": "SAR",
-      "params": "language=en_AE",
+      "params": "",
       "label": "أمازون",
-      "pages_per_run": 2,
-      "every_min": 0
+      "pages_per_run": 3,
+      "every_min": 0,
+      "path_prefix": "/-/en",
+      "gap": [
+        20,
+        30
+      ],
+      "_note": "نتيجة التجربة (21 نوفمبر): رابط /-/en/ = 12 نجاح من 12، والفاصل 20-30 ث = 67%. ندمجهم."
     },
     "us": {
       "host": "www.amazon.com",
@@ -682,7 +688,7 @@
     "كمبيوتر",
     "pc"
   ],
-  "amazon_experiment": true,
+  "amazon_experiment": false,
   "_note_experiment": "true = كل تشغيلة تجرب طريقة مختلفة مع أمازون وتسجل الحظر (EXP في السجل). رجّعها false بعد ما نختار الأفضل.",
   "_note_seasons": "مواسم التخفيضات: البوت يفحص صفحات أكثر فيها. from/to = MM-DD كل سنة، أو YYYY-MM-DD لتاريخ يتغير (رمضان)",
   "seasons": [

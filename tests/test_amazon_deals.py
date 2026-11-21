@@ -76,16 +76,18 @@ def test_run_end_to_end(tmp_path, monkeypatch):
     deals.run()
     assert len(sent) == 1  # ما يكرر نفس التنبيه
     state = json.loads((tmp_path / "s.json").read_text())
-    assert state["cursors"]["sa"] == 4  # صفحتين أمازون كل تشغيلة
+    assert state["cursors"]["sa"] == 6  # 3 صفحات أمازون كل تشغيلة
 
 
 def test_pick_batch_rates():
     state = {}
     b = deals.pick_batch(state, 1000.0)
     markets = [x["market"] for x in b]
-    assert markets.count("sa") == 2 and markets.count("almanea") == 3 and "us" not in markets
+    assert markets.count("sa") == 3 and markets.count("almanea") == 3 and "us" not in markets
+    assert all(x["_gap"] == (20, 30) for x in b if x["market"] == "sa")
+    assert deals.search_url(next(x for x in b if x["market"] == "sa")).startswith("https://www.amazon.sa/-/en/s?k=")
     b2 = deals.pick_batch(state, 1300.0)
-    assert [x["market"] for x in b2].count("sa") == 2
+    assert [x["market"] for x in b2].count("sa") == 3
     assert b2[0]["q"] != b[0]["q"]  # تناوب على كلمات البحث
 
 
