@@ -185,8 +185,9 @@ def excluded(title: str) -> bool:
     # مجدد بحالة سيئة/مقبولة: ما نبيه
     if is_resale(title) and _has_word(t, CONFIG["resale"]["bad_condition"]):
         return True
-    # خدمات (تركيب/صيانة/ضمان) مو منتجات — في أي مكان بالعنوان
-    if _has_word(t, CONFIG.get("exclude_services", [])):
+    # خدمات (تركيب/صيانة/ضمان) مو منتجات — بس إذا في أول العنوان، لأن أجهزة كثيرة تكتب
+    # "... 2 Years Warranty" في آخر عنوانها وما نبي نفوّتها
+    if _has_word(t[:50], CONFIG.get("exclude_services", [])):
         return True
     # الإكسسوارات تبدأ عادة بـ "Case for MacBook..." والمنتج الحقيقي يذكر "Case" متأخر
     # (مثل Apple Watch ... Aluminium Case with Sport Band)، فنفحص أول العنوان بس.

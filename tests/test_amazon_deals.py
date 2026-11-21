@@ -303,3 +303,17 @@ def test_ps5_faceplates_not_a_console():
     assert deals.model_key("Apple AirPods Pro 2 Wireless Earbuds with MagSafe Charging Case (USB-C)") == "airpods-pro2"
     assert deals.model_key("PlayStation 5 Console Slim Disc with DualSense Wireless Controller") == "ps5-disc"
     assert deals.model_key("Silicone Case for Apple iPhone 16 Pro Max 256GB") is None
+
+
+def test_real_devices_not_dropped():
+    keep = [
+        "Samsung 65 Inch Crystal UHD 4K Smart TV, Black, 2 Years Warranty",
+        "Gree Pular 18000 BTU Split Air Conditioner, Inverter, Cold Only, 10 Years Compressor Warranty",
+        "Apple iPhone 16 Pro Max (256 GB) - Desert Titanium with AppleCare eligible",
+        "Sony PlayStation 5 Console Slim Disc Edition with DualSense Controller (KSA Version)",
+        "Apple AirPods Pro 2 Wireless Earbuds with MagSafe Charging Case (USB-C)",
+        "Apple Watch Ultra 2 GPS + Cellular 49mm Black Titanium Case with Black Ocean Band",
+        "ASUS ROG Strix G16 Gaming Laptop, RTX 4060, 16GB, 1TB SSD, Backlit Keyboard",
+    ]
+    for t in keep:
+        assert not deals.excluded(t), t
