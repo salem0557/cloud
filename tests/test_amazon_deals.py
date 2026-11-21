@@ -481,3 +481,11 @@ def test_brand_gate_safety_net():
     assert r and r[0].startswith("⚠️") and not any(x.startswith("🚨") for x in r)
     # إكسسوار رخيص جداً: ولا شي
     assert deals.evaluate(item("موجه هواء مكيف سبليت", 90.0), "SAR", [], trust_list=False, brand_first=True) == []
+
+
+def test_knockoff_misspelled():
+    t = "شبية ساعة ابل الترا من شركة انتك الالمانيه بضمان سنتين بلو ستور"
+    assert deals.excluded(t)
+    assert deals.evaluate(item(t, 159.0), "SAR", [], trust_list=False, brand_first=True) == []
+    assert deals.excluded("ايفون 17 نسخة طبق الاصل")
+    assert deals.excluded("إصلاح شاشة ايفون")
