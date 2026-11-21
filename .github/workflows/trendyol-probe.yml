@@ -1,0 +1,19 @@
+name: Trendyol browser probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install --quiet playwright && python -m playwright install --with-deps chromium
+      - run: python amazon_deals/probe_trendyol_browser.py
