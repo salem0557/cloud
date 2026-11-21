@@ -192,8 +192,11 @@ def floor_hit(title: str, price: float, currency: str) -> float | None:
     return None
 
 
-def evaluate(item: dict, currency: str, history: list[float]) -> list[str]:
-    """يرجع أسباب التنبيه (فاضية = ما فيه شي)."""
+def evaluate(item: dict, currency: str, history: list[float], trust_list: bool = True) -> list[str]:
+    """يرجع أسباب التنبيه (فاضية = ما فيه شي).
+
+    trust_list=False: المتجر يضخّم "السعر الأصلي"، فخصمه ما نصدقه إلا إذا السعر نزل فعلاً
+    عن الأسعار اللي شافها البوت بنفسه (10%+ تحت المتوسط)."""
     price = item["price"]
     if price < CONFIG["min_price"].get(currency, 0) or excluded(item["title"]):
         return []
@@ -207,7 +210,8 @@ def evaluate(item: dict, currency: str, history: list[float]) -> list[str]:
         if drop >= CONFIG["history_drop_pct"]:
             reasons.append(f"📉 نزل {drop:.0f}% عن متوسط سعره ({med:,.0f} {currency})")
     # المجدد سعره "الأصلي" المشطوب هو سعر الجديد، فالخصم الكبير عليه طبيعي ومو فرصة
-    if item["list_price"] and not is_resale(item["title"]):
+    real_drop = len(history) >= 3 and price <= statistics.median(history) * 0.9
+    if item["list_price"] and not is_resale(item["title"]) and (trust_list or real_drop):
         disc = (1 - price / item["list_price"]) * 100
         if disc >= CONFIG["discount_alert_pct"]:
             reasons.append(f"🔥 خصم {disc:.0f}% عن السعر الأصلي ({item['list_price']:,.0f} {currency})")
@@ -491,7 +495,7 @@ def run() -> int:
         for it in items:
             key = f"{src['market']}:{it['asin']}"
             hist = prices.get(key, [])
-            reasons = evaluate(it, market["currency"], hist)
+            reasons = evaluate(it, market["currency"], hist, market.get("trust_list_price", True))
             if not excluded(it["title"]):
                 cross = cross_store_reason(it, src["market"], models, now)
                 if cross:

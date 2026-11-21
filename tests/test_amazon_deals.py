@@ -216,3 +216,12 @@ def test_channels(monkeypatch):
     assert deals.scan_channels(state, S()) == 0 and state["tg_seen"]["deals"] == 11  # أول مرة: بس نحفظ المكان
     state["tg_seen"]["deals"] = 9
     assert deals.scan_channels(state, S()) == 1 and "iPhone 16" in sent[0] and "t.me/deals/11" in sent[0]
+
+
+def test_inflated_list_price_store():
+    tv = item("Samsung Smart TV 77 Inch 4K OLED, Tizen OS - QA77S90HAUXSA", 10099.0, 18999.0)
+    assert deals.evaluate(tv, "SAR", [], trust_list=False) == []                       # خصم وهمي بدون سجل
+    assert deals.evaluate(tv, "SAR", [10099, 10199, 10099], trust_list=False) == []    # نفس سعره المعتاد
+    r = deals.evaluate(tv, "SAR", [12999, 12999, 13499], trust_list=False)             # نزل فعلاً 22%
+    assert any("خصم" in x for x in r)
+    assert any("خصم" in x for x in deals.evaluate(tv, "SAR", []))                      # أمازون: نثق بالسعر المشطوب
