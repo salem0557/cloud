@@ -21,6 +21,14 @@ STORES = {
     "trendyol_en": "https://www.trendyol.com/en/sr?q=iphone",
     "trendyol_ar": "https://www.trendyol.com/ar/sr?q=iphone",
     "trendyol_home": "https://www.trendyol.com/en",
+    "new_virgin": "https://www.virginmegastore.sa/en/search?q=iphone",
+    "new_lulu": "https://www.luluhypermarket.com/en-sa/search?q=iphone",
+    "new_carrefour": "https://www.carrefourksa.com/mafsau/en/search?keyword=iphone",
+    "new_desertcart": "https://www.desertcart.sa/search?query=iphone",
+    "new_ubuy": "https://www.ubuy.com.sa/en/search/?q=iphone",
+    "new_clicflyer": "https://clicflyer.com/en/saudi-arabia/riyadh/offers",
+    "new_d4d": "https://d4donline.com/en/saudi-arabia/riyadh/offers",
+    "new_stc": "https://www.stc.com.sa/en/personal/devices/smartphones",
 }
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
 
