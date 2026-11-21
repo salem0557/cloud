@@ -883,7 +883,17 @@
     "حقيبة",
     "جلد",
     "سير",
-    "استيك"
+    "استيك",
+    "kit",
+    "window kit",
+    "hose",
+    "exhaust",
+    "vent",
+    "seal",
+    "side panels",
+    "panel",
+    "insulation",
+    "drain"
   ],
   "_note_floor_accessory_words": "إذا جات وحدة من هالكلمات قبل اسم الجهاز في العنوان (مثل: Controller for Xbox Series X) فهو إكسسوار وما نطبق عليه حد السعر",
   "cross_store_pct": 35,
@@ -1276,5 +1286,17 @@
       "nesto"
     ],
     "_note": "موقوف بطلب سالم (النشرات = اللي يبون يسوقونه، مو التخفيضات المخفية). حط الرابط لو تبيه يرجع."
-  }
+  },
+  "floor_accessory_anywhere": [
+    "window kit",
+    "side panel",
+    "side panels",
+    "window seal",
+    "seal kit",
+    "exhaust hose",
+    "hose adapter",
+    "replacement part",
+    "spare part",
+    "قطع غيار"
+  ]
 }

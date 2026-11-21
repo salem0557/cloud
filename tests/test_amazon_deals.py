@@ -575,3 +575,21 @@ def test_flyers(monkeypatch):
     assert deals.scan_flyers(state, S()) == 0            # أول مرة: نحفظ الموجود
     state["flyers_seen"].pop("https://d4donline.com/x/1")
     assert deals.scan_flyers(state, S()) == 1 and "eXtra" in sent[0] and "2026-11-30" in sent[0]
+
+
+AD_PREFIX = "Sponsored Sponsored You\u2019re seeing this ad based on the product\u2019s relevance to your search query. Let us know "
+
+
+def test_amazon_sponsored_ac_kits():
+    titles = ["4PCS Portable Air Conditioner Window Kit with Seal", "Air Conditioner Window Kit Waterproof UV",
+              "Window Air Conditioner Side Panels with Foam", "POENVFPO Upgraded Portable Air Conditioner Window Kit"]
+    page = "<html>" + "".join(card(f"B0AD{i:06d}", AD_PREFIX + t, "132.64") for i, t in enumerate(titles)) + "</html>"
+    items = deals.parse_results(page)
+    assert len(items) == 4
+    for it in items:
+        assert not it["title"].lower().startswith("sponsored"), it["title"]
+        assert it["sponsored"]
+        assert deals.evaluate(it, "SAR", []) == [], it["title"]
+    # حتى بدون علامة الإعلان: Window Kit = إكسسوار
+    assert deals.floor_hit("Portable Air Conditioner Window Kit AC Window Seal", 130.0, "SAR") is None
+    assert deals.floor_hit("LG Window Air Conditioner 18000 BTU Cold Only", 400.0, "SAR")
