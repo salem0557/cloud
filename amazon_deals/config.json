@@ -538,5 +538,7 @@
     "تسعير",
     "glitch",
     "price error"
-  ]
+  ],
+  "amazon_experiment": true,
+  "_note_experiment": "true = كل تشغيلة تجرب طريقة مختلفة مع أمازون وتسجل الحظر (EXP في السجل). رجّعها false بعد ما نختار الأفضل."
 }

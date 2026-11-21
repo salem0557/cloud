@@ -69,6 +69,7 @@ def test_run_end_to_end(tmp_path, monkeypatch):
     sent = []
     monkeypatch.setattr(deals, "send", lambda t: sent.append(t) or True)
     monkeypatch.delenv("DEALS_BOT_TOKEN", raising=False)
+    monkeypatch.setitem(deals.CONFIG, "amazon_experiment", False)
     deals.run()
     assert len(sent) == 1 and "MacBook" in sent[0]  # تنبيه وحيد ومو مكرر رغم 6 صفحات
     deals.run()
@@ -225,3 +226,18 @@ def test_inflated_list_price_store():
     r = deals.evaluate(tv, "SAR", [12999, 12999, 13499], trust_list=False)             # نزل فعلاً 22%
     assert any("خصم" in x for x in r)
     assert any("خصم" in x for x in deals.evaluate(tv, "SAR", []))                      # أمازون: نثق بالسعر المشطوب
+
+
+def test_experiment_rotates_and_records(tmp_path, monkeypatch):
+    monkeypatch.setattr(deals, "STATE_PATH", tmp_path / "s.json")
+    monkeypatch.setattr(deals.time, "sleep", lambda x: None)
+    monkeypatch.delenv("DEALS_BOT_TOKEN", raising=False)
+    monkeypatch.setitem(deals.CONFIG, "amazon_experiment", True)
+    monkeypatch.setitem(deals.CONFIG, "telegram_channels", [])
+    urls = []
+    monkeypatch.setattr(deals, "fetch", lambda s, u: urls.append(u) or None)
+    for _ in range(len(deals.EXPERIMENT)):
+        deals.run()
+    st = json.loads((tmp_path / "s.json").read_text())["exp"]["stats"]
+    assert set(st) == set(deals.EXPERIMENT) and all(v["blocked"] == 1 for v in st.values())
+    assert any("/-/en/s?k=" in u for u in urls) and any("bestsellers" in u for u in urls)
