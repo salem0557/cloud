@@ -56,6 +56,20 @@ def summarize(name: str, url: str) -> None:
         print("api-like urls:", *apis, sep="\n  ")
 
 
+def probe_country_page(url: str) -> None:
+    """صفحة اختيار الدولة: نطبع الروابط والنماذج اللي فيها السعودية عشان نعرف كيف تنختار."""
+    print(f"\n===== country page =====\n{url}")
+    r = requests.get(url, timeout=25, headers={"User-Agent": UA})
+    t = r.text
+    links = sorted(set(re.findall(r'href="([^"]*(?:sa|saudi|SA)[^"]*)"', t)))[:20]
+    print("links:", *links, sep="\n  ")
+    for m in re.finditer(r"(?i)(saudi|السعودية|\"SA\"|'SA')", t):
+        print("ctx:", re.sub(r"\s+", " ", t[max(0, m.start() - 200):m.start() + 200]))
+        break
+    print("forms:", re.findall(r"<form[^>]*>", t)[:5])
+    print("cookies set:", list(r.cookies.keys()))
+
+
 def probe_channel(ch: str) -> None:
     """قناة تيليجرام عامة: كم منشور ظاهر، تاريخ آخر منشور، ومثال."""
     print(f"\n===== tg:{ch} =====")
@@ -74,6 +88,8 @@ def probe_channel(ch: str) -> None:
 
 
 if __name__ == "__main__":
+    if "country" in (os.environ.get("PROBE_ONLY") or ""):
+        probe_country_page("https://www.trendyol.com/en/select-country?cb=%2Fen%2Fsr%3Fq%3Diphone")
     for ch in os.environ.get("PROBE_TG", "").split():
         probe_channel(ch)
     only = (os.environ.get("PROBE_ONLY") or " ".join(sys.argv[1:])).split()
