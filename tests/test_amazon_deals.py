@@ -441,3 +441,11 @@ def test_ipad_accessories_and_repairs_ignored():
                      ("تغيير شاشة ايباد برو | iPad Pro كيوتك ريبير | Q-TECH Repair", 1100.0)]:
         assert deals.evaluate(item(t, price), "SAR", [], trust_list=False) == [], t
     assert any("خطأ تسعير" in r for r in deals.evaluate(item("Apple iPad Pro 11-inch M4 256GB Wi-Fi", 900.0), "SAR", []))
+
+
+def test_tv_screen_protectors_ignored():
+    for t, price in [("واقي شاشة تلفزيون 65 بوصة مقاوم للخدوش والصدمات متجر قوة الشاشة لحماية شاشة التلفزيون", 278.0),
+                     ("واقي شاشة تلفزيون مسطح 65 بوصة سمارت كرييشنز - أكريليك شفاف 3 مم", 392.14),
+                     ("تعليقة جدارية لشاشة تلفزيون 65 بوصة", 120.0)]:
+        assert deals.evaluate(item(t, price), "SAR", [], trust_list=False) == [], t
+    assert any("خطأ تسعير" in r for r in deals.evaluate(item("شاشة سامسونج 65 بوصة سمارت 4K", 700.0), "SAR", [], trust_list=False))
