@@ -214,6 +214,106 @@ def evaluate(item: dict, currency: str, history: list[float]) -> list[str]:
     return reasons
 
 
+# ---------- مقارنة نفس الموديل بين المتاجر ----------
+
+def model_key(title: str) -> str | None:
+    """مفتاح موحّد لنفس المنتج في أي متجر (آيفون/ماك/سامسونج/PS5/AirPods). None = ما نعرف نطابقه."""
+    t = title.lower().replace("\u201d", '"').replace("''", '"')
+    if is_resale(title):
+        return None
+    st = re.search(r"\b(\d{3,4})\s*gb\b|\b(\d)\s*tb\b", t)
+    storage = (st.group(1) + "gb") if st and st.group(1) else (st.group(2) + "tb") if st else None
+    m = re.search(r"iphone\s*(\d{2})\s*(pro max|pro|plus|air|e)?\b", t)
+    if m and storage:
+        return f"iphone{m.group(1)}-{(m.group(2) or 'base').replace(' ', '')}-{storage}"
+    m = re.search(r"macbook\s*(air|pro)", t)
+    chip = re.search(r"\bm(\d)\s*(pro|max)?\b", t)
+    size = re.search(r"\b(13|14|15|16)(?:\.\d)?\s*(?:-?\s*inch|\"|in\b)", t)
+    if m and chip and size and storage:
+        return f"macbook{m.group(1)}-m{chip.group(1)}{chip.group(2) or ''}-{size.group(1)}-{storage}"
+    m = re.search(r"galaxy\s*(s\d{2})\s*(ultra|plus|\+|fe|edge)?", t)
+    if m and storage:
+        return f"galaxy{m.group(1)}-{(m.group(2) or 'base').replace('+', 'plus')}-{storage}"
+    if re.search(r"playstation\s*5|\bps5\b", t) and "console" in t:
+        ed = "pro" if re.search(r"\bpro\b", t) else "digital" if "digital" in t else "disc"
+        return f"ps5-{ed}"
+    m = re.search(r"airpods\s*(pro\s*\d?|max|\d)", t)
+    if m:
+        return "airpods-" + m.group(1).replace(" ", "")
+    return None
+
+
+def cross_store_reason(item: dict, market_name: str, models: dict, now: float) -> str | None:
+    key = model_key(item["title"])
+    if not key:
+        return None
+    pct_min = CONFIG.get("cross_store_pct", 35)
+    best = None
+    for other, rec in models.get(key, {}).items():
+        if other == market_name or now - rec["ts"] > 48 * 3600:
+            continue
+        cheaper = (1 - item["price"] / rec["price"]) * 100
+        if cheaper >= pct_min and (not best or cheaper > best[0]):
+            best = (cheaper, other, rec["price"])
+    if not best:
+        return None
+    label = CONFIG["markets"].get(best[1], {}).get("label", best[1])
+    return f"⚖️ أرخص {best[0]:.0f}% من نفس الموديل في {label} ({best[2]:,.0f})"
+
+
+# ---------- قنوات تيليجرام العامة ----------
+
+def parse_channel(page: str) -> list[tuple[int, str]]:
+    """صفحة t.me/s/<قناة>: يرجع [(رقم المنشور, النص)]."""
+    soup = BeautifulSoup(page, "html.parser")
+    out = []
+    for div in soup.select("div.tgme_widget_message[data-post]"):
+        try:
+            pid = int(div["data-post"].split("/")[-1])
+        except ValueError:
+            continue
+        txt = div.select_one(".tgme_widget_message_text")
+        if txt:
+            out.append((pid, txt.get_text("\n", strip=True)))
+    return out
+
+
+def scan_channels(state: dict, session: requests.Session) -> int:
+    chans = CONFIG.get("telegram_channels", [])
+    if not chans:
+        return 0
+    seen: dict = state.setdefault("tg_seen", {})
+    words = [w.lower() for w in CONFIG.get("telegram_keywords", [])]
+    sent = 0
+    for ch in chans:
+        ch = ch.lstrip("@").strip()
+        try:
+            r = session.get(f"https://t.me/s/{ch}", timeout=20)
+        except requests.RequestException:
+            continue
+        if r.status_code != 200:
+            print("telegram channel", ch, r.status_code)
+            continue
+        posts = parse_channel(r.text)
+        last = seen.get(ch)
+        if posts:
+            seen[ch] = max(p for p, _ in posts)
+        if last is None:  # أول مرة: نحفظ مكاننا بس، ما نغرقك بالقديم
+            print(f"قناة {ch}: بدأنا المتابعة ({len(posts)} منشور)")
+            continue
+        for pid, text in posts:
+            if pid <= last:
+                continue
+            low = text.lower()
+            if words and not any(w in low for w in words):
+                continue
+            msg = (f"📢 من قناة @{html.escape(ch)}\n{html.escape(text[:700])}\n"
+                   f'🔗 <a href="https://t.me/{ch}/{pid}">افتح المنشور</a>')
+            if send(msg):
+                sent += 1
+    return sent
+
+
 # ---------- الحالة ----------
 
 def load_state() -> dict:
@@ -349,6 +449,7 @@ def run() -> int:
     alerted: dict = state.setdefault("alerted", {})   # "sa:ASIN" -> {"price":, "ts":}
     stats: dict = state.setdefault("stats", {"day": "", "pages": 0, "blocked": 0, "items": 0, "alerts": 0})
     batch = pick_batch(state, time.time())
+    models: dict = state.setdefault("models", {})     # موديل -> {متجر: {"price":, "ts":}}
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if stats["day"] != today:
@@ -391,6 +492,10 @@ def run() -> int:
             key = f"{src['market']}:{it['asin']}"
             hist = prices.get(key, [])
             reasons = evaluate(it, market["currency"], hist)
+            if not excluded(it["title"]):
+                cross = cross_store_reason(it, src["market"], models, now)
+                if cross:
+                    reasons.append(cross)
             if reasons:
                 prev = alerted.get(key)
                 fresh = (not prev or now - prev["ts"] > CONFIG["realert_hours"] * 3600
@@ -402,6 +507,16 @@ def run() -> int:
             if not reasons:
                 hist = (hist + [it["price"]])[-HISTORY_KEEP:]
                 prices[key] = hist
+                mk = model_key(it["title"]) if not excluded(it["title"]) else None
+                if mk:  # أرخص سعر لهالموديل في هالمتجر (آخر 48 ساعة)
+                    rec = models.setdefault(mk, {}).get(src["market"])
+                    if not rec or now - rec["ts"] > 48 * 3600 or it["price"] < rec["price"]:
+                        models[mk][src["market"]] = {"price": it["price"], "ts": now}
+
+    try:
+        stats["alerts"] += scan_channels(state, session)
+    except Exception as e:  # القنوات إضافة: ما نخليها توقف الصيد
+        print("telegram channels error:", type(e).__name__, e)
 
     # نظافة: نحذف تنبيهات أقدم من أسبوع
     for k in [k for k, v in alerted.items() if now - v["ts"] > 7 * 86400]:

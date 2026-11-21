@@ -74,7 +74,7 @@ def test_run_end_to_end(tmp_path, monkeypatch):
     deals.run()
     assert len(sent) == 1  # ما يكرر نفس التنبيه
     state = json.loads((tmp_path / "s.json").read_text())
-    assert state["cursors"]["sa"] == 2  # التشغيلة الثانية خلال 15 دقيقة ما تفحص أمازون
+    assert state["cursors"]["sa"] == 4  # صفحتين أمازون كل تشغيلة
 
 
 def test_pick_batch_rates():
@@ -82,10 +82,9 @@ def test_pick_batch_rates():
     b = deals.pick_batch(state, 1000.0)
     markets = [x["market"] for x in b]
     assert markets.count("sa") == 2 and markets.count("almanea") == 3 and "us" not in markets
-    b2 = deals.pick_batch(state, 1000.0 + 300)      # بعد 5 دقائق: المنيع بس
-    assert {x["market"] for x in b2} == {"almanea"}
-    b3 = deals.pick_batch(state, 1000.0 + 900)      # بعد 15 دقيقة: أمازون ترجع
-    assert [x["market"] for x in b3].count("sa") == 2
+    b2 = deals.pick_batch(state, 1300.0)
+    assert [x["market"] for x in b2].count("sa") == 2
+    assert b2[0]["q"] != b[0]["q"]  # تناوب على كلمات البحث
 
 
 def item(title, price, list_price=None):
@@ -178,3 +177,42 @@ def test_parse_almanea():
     assert any("خطأ تسعير" in x for x in r)
     msg = deals.format_alert(items["IP16P"], deals.CONFIG["markets"]["almanea"], r)
     assert "المنيع" in msg and "almanea.sa/en/apple-iphone-16-pro" in msg
+
+
+def test_model_key_matches_across_stores():
+    a = deals.model_key("Apple iPhone 16 Pro Max (256 GB) - Desert Titanium")
+    b = deals.model_key("iPhone 16 Pro Max 256GB Natural Titanium")
+    assert a == b == "iphone16-promax-256gb"
+    assert deals.model_key("Apple iPhone 16 Pro (256 GB)") != a
+    assert deals.model_key("Amazon Renewed iPhone 16 Pro Max 256GB") is None
+    assert deals.model_key('Apple MacBook Air 13-inch M3 chip 16GB 512GB') == "macbookair-m3-13-512gb"
+    assert deals.model_key("PlayStation 5 Console Digital Edition Slim") == "ps5-digital"
+
+
+def test_cross_store_alert():
+    models = {"iphone16-promax-256gb": {"almanea": {"price": 5499.0, "ts": 1000.0}}}
+    it = {"title": "Apple iPhone 16 Pro Max (256 GB)", "price": 2999.0}
+    r = deals.cross_store_reason(it, "sa", models, 2000.0)
+    assert r and "المنيع" in r and "45%" in r
+    it["price"] = 5200.0
+    assert deals.cross_store_reason(it, "sa", models, 2000.0) is None
+
+
+CHANNEL = """<div class="tgme_widget_message" data-post="deals/10"><div class="tgme_widget_message_text">كفر جوال</div></div>
+<div class="tgme_widget_message" data-post="deals/11"><div class="tgme_widget_message_text">خطأ تسعير! iPhone 16 بـ 999</div></div>"""
+
+
+def test_channels(monkeypatch):
+    monkeypatch.setitem(deals.CONFIG, "telegram_channels", ["deals"])
+    class R:
+        status_code = 200
+        text = CHANNEL
+    class S:
+        def get(self, url, timeout):
+            return R()
+    sent = []
+    monkeypatch.setattr(deals, "send", lambda t: sent.append(t) or True)
+    state = {}
+    assert deals.scan_channels(state, S()) == 0 and state["tg_seen"]["deals"] == 11  # أول مرة: بس نحفظ المكان
+    state["tg_seen"]["deals"] = 9
+    assert deals.scan_channels(state, S()) == 1 and "iPhone 16" in sent[0] and "t.me/deals/11" in sent[0]
