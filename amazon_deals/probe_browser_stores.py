@@ -72,6 +72,23 @@ def mahally_search(page, q: str = "ايفون") -> None:
         page.wait_for_timeout(8000)
         print("after search:", page.url, "|", page.title()[:80],
               "| product links:", page.locator("a[href*='/products/']").count())
+    # بطاقات نتائج البحث: نص البطاقة كاملة (الاسم + السعر + السعر قبل الخصم)
+    page.goto("https://mahally.com/ar/browse/?query=%D8%A7%D9%8A%D9%81%D9%88%D9%86", wait_until="domcontentloaded", timeout=45000)
+    page.wait_for_timeout(7000)
+    cards = page.eval_on_selector_all("a[href*='/products/']", """els => els.slice(0, 40).map(a => {
+        let n = a; for (let i = 0; i < 4 && n.parentElement; i++) { n = n.parentElement; if (n.innerText.length > 30) break; }
+        return [a.getAttribute('href').split('?')[0], n.innerText.replace(/\\s+/g, ' ').slice(0, 200)];
+    })""")
+    seen = set()
+    for href, txt in cards:
+        if href in seen:
+            continue
+        seen.add(href)
+        print("  result:", href, "|", txt)
+        if len(seen) >= 8:
+            break
+    html = page.content()
+    print("has __NEXT_DATA__:", "__NEXT_DATA__" in html, "| algolia:", "algolia" in html.lower())
 
 
 def main() -> int:
