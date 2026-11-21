@@ -340,3 +340,22 @@ def test_channel_ignores_keywords_inside_links(monkeypatch):
     monkeypatch.setattr(deals, "send", lambda t, silent=False: sent.append(t) or True)
     state = {"tg_seen": {"deals": 19}}
     assert deals.scan_channels(state, S()) == 2 and "سامسونج" in sent[0] and "المكيفات" in sent[1]
+
+
+TY = """<div class="tgme_widget_message" data-post="d/30"><div class="tgme_widget_message_text">طقم حقائب سفر خصم 20% https://ty.gl/aa</div></div>
+<div class="tgme_widget_message" data-post="d/31"><div class="tgme_widget_message_text">جاكيت شتوي من تريندول خصم 65% https://ty.gl/bb</div></div>
+<div class="tgme_widget_message" data-post="d/32"><div class="tgme_widget_message_text">عطر ببلاش https://ty.gl/cc</div></div>"""
+
+
+def test_trendyol_strong_deals_any_category(monkeypatch):
+    monkeypatch.setitem(deals.CONFIG, "telegram_channels", ["d"])
+    class R:
+        status_code = 200
+        text = TY
+    class S:
+        def get(self, url, timeout):
+            return R()
+    sent = []
+    monkeypatch.setattr(deals, "send", lambda t, silent=False: sent.append(t) or True)
+    assert deals.scan_channels({"tg_seen": {"d": 29}}, S()) == 2
+    assert "65%" in sent[0] and "🛍️ تريندول" in sent[0] and "ببلاش" in sent[1]

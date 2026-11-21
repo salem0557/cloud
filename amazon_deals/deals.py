@@ -340,9 +340,16 @@ def scan_channels(state: dict, session: requests.Session) -> int:
             # العربي: جزء من الكلمة (الشاشة، المكيفات). الإنجليزي: كلمة كاملة (tv ما تطابق داخل كلمة ثانية)
             arabic = [w for w in words if re.search(r"[\u0600-\u06FF]", w)]
             latin = [w for w in words if w not in arabic]
-            if words and not (any(w in low for w in arabic) or _has_word(low, latin)):
+            hit = not words or any(w in low for w in arabic) or _has_word(low, latin)
+            # تريندول (روابط ty.gl): أي قسم، بشرط عرض قوي — خصم كبير أو "ببلاش"
+            if not hit and re.search(r"ty\.gl/|trendyol", text, re.I):
+                pcts = [int(x) for x in re.findall(r"(\d{2})\s*[%٪]", text)]
+                strong = CONFIG.get("trendyol_min_pct", 50)
+                hit = any(p >= strong for p in pcts) or any(w in text for w in ("ببلاش", "مجانا", "مجاناً", "خطأ تسعير"))
+            if not hit:
                 continue
-            msg = (f"📢 من قناة @{html.escape(ch)}\n{html.escape(text[:700])}\n"
+            tag = "🛍️ تريندول — " if re.search(r"ty\.gl/|trendyol", text, re.I) else ""
+            msg = (f"📢 {tag}من قناة @{html.escape(ch)}\n{html.escape(text[:700])}\n"
                    f'🔗 <a href="https://t.me/{ch}/{pid}">افتح المنشور</a>')
             if send(msg, silent=True):  # منشورات القنوات: إشعار صامت
                 sent += 1
