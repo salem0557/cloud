@@ -501,3 +501,20 @@ def test_copycat_titles_too_cheap_on_small_stores():
                deals.evaluate(item("ايربودز ماكس فضي متجر النخبة", 450.0), "SAR", [], trust_list=False, brand_first=True))
     # أمازون ما يتأثر: ماك بوك M4 بـ 500 (17%) يبقى ينبه
     assert any("خطأ تسعير" in r for r in deals.evaluate(item("Apple MacBook Pro 14 M4 chip 512GB", 500.0), "SAR", []))
+
+
+def test_market_verified_deals():
+    now = 2000.0
+    models = {"iphone16-promax-256gb": {"sa": {"price": 4999.0, "ts": 1000.0}, "almanea": {"price": 5199.0, "ts": 1000.0}}}
+    # مستعمل في محلي بـ 2,900 (أرخص 42% من الجديد) → ♻️
+    used = {"title": "ايفون 16 برو ماكس 256 جيجا مستعمل نظيف", "price": 2900.0, "list_price": None}
+    r = deals.market_deal_reasons(used, 2900.0, "mahally", models, now)
+    assert r and r[0].startswith("♻️") and "42%" in r[0]
+    # مستعمل بسعر عادي (أرخص 15%) → ولا شي
+    assert deals.market_deal_reasons(dict(used, price=4250.0), 4250.0, "mahally", models, now) == []
+    # جديد بخصم 30% وأرخص 15% من أمازون → 🔥 عرض مؤكد
+    new = {"title": "ابل ايفون 16 برو ماكس 256 جيجا", "price": 4249.0, "list_price": 6099.0}
+    r = deals.market_deal_reasons(new, 4249.0, "mahally", models, now)
+    assert r and r[0].startswith("🔥") and "عرض مؤكد" in r[0]
+    # خصم كبير بس السعر نفس السوق → ولا شي (الخصم وهمي)
+    assert deals.market_deal_reasons(dict(new, price=4950.0, list_price=8999.0), 4950.0, "mahally", models, now) == []
