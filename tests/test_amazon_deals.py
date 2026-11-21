@@ -433,3 +433,11 @@ def test_mahally_services_and_parts_ignored():
     assert any("خطأ تسعير" in x for x in r)
     r = deals.evaluate(item("ماك بوك برو M4 Pro 14 انش 512 جيجا", 1999.0), "SAR", [], trust_list=False)
     assert any("خطأ تسعير" in x for x in r)
+
+
+def test_ipad_accessories_and_repairs_ignored():
+    for t, price in [("ماجيك كيبورد ايباد برو و اير و A16 و الجيل العاشر - أسود بريم بوكس PREMBOX", 379.0),
+                     ("Lujain pencil pro| قلم ايباد برو lujain_pencil", 135.0),
+                     ("تغيير شاشة ايباد برو | iPad Pro كيوتك ريبير | Q-TECH Repair", 1100.0)]:
+        assert deals.evaluate(item(t, price), "SAR", [], trust_list=False) == [], t
+    assert any("خطأ تسعير" in r for r in deals.evaluate(item("Apple iPad Pro 11-inch M4 256GB Wi-Fi", 900.0), "SAR", []))

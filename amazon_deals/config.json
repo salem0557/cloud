@@ -730,7 +730,17 @@
     "motherboard",
     "logic board",
     "screen replacement",
-    "display assembly"
+    "display assembly",
+    "قلم",
+    "pencil",
+    "stylus",
+    "magic keyboard",
+    "ماجيك",
+    "folio",
+    "فوليو",
+    "smart keyboard",
+    "لوحة",
+    "هولدر"
   ],
   "_note_floor_accessory_words": "إذا جات وحدة من هالكلمات قبل اسم الجهاز في العنوان (مثل: Controller for Xbox Series X) فهو إكسسوار وما نطبق عليه حد السعر",
   "cross_store_pct": 35,
