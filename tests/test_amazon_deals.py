@@ -279,3 +279,13 @@ def test_seasons_and_priority(monkeypatch):
     msg = deals.format_alert(item("Apple iPhone 16 Pro 256GB", 999.0), deals.CONFIG["markets"]["sa"], ["x"],
                              deals.active_season(ts(2026, 11, 21)))
     assert "🗓️ موسم" in msg
+
+
+def test_services_excluded():
+    assert deals.excluded("Split Air Conditioner Installation - 1 Ton")
+    assert deals.excluded("AppleCare+ for MacBook Pro 14-inch")
+    assert deals.excluded("خدمة تركيب مكيف سبليت")
+    assert deals.evaluate(item("Split Air Conditioner Installation - 1 Ton", 220.0), "SAR", []) == []
+    assert not deals.excluded("Gree 18000 BTU Split Air Conditioner, Inverter, Cold Only")
+    assert not deals.excluded("LG Window Air Conditioner 18000 BTU, Easy to Install, Cold Only")
+    assert not deals.excluded("مكيف سبليت جري 18000 وحدة سهل التركيب")
