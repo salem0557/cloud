@@ -1,4 +1,4 @@
-name: Trendyol browser probe
+name: Browser stores probe
 
 on:
   workflow_dispatch:
@@ -17,3 +17,4 @@ jobs:
           python-version: "3.11"
       - run: pip install --quiet playwright && python -m playwright install --with-deps chromium
       - run: python amazon_deals/probe_trendyol_browser.py
+      - run: python amazon_deals/probe_browser_stores.py
