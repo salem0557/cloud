@@ -453,8 +453,8 @@ def search_url(src: dict) -> str:
     q = requests.utils.quote(src["q"])
     if m.get("search"):
         return m["search"].format(q=q)
-    extra = "&" + src["extra"] if src.get("extra") else ""
-    return f"https://{m['host']}/s?k={q}&{m['params']}{extra}"
+    parts = [f"k={q}"] + ([m["params"]] if m.get("params") else []) + ([src["extra"]] if src.get("extra") else [])
+    return f"https://{m['host']}{m.get('path_prefix', '')}/s?" + "&".join(parts)
 
 
 def active_season(now: float) -> dict | None:
@@ -481,7 +481,10 @@ def pick_batch(state: dict, now: float) -> list[dict]:
         if not n or now - last.get(name, 0) < m.get("every_min", 0) * 60 - 30:
             continue
         c = cursors.get(name, 0) % len(srcs)
-        per_market.append([srcs[(c + i) % len(srcs)] for i in range(n)])
+        picked = [srcs[(c + i) % len(srcs)] for i in range(n)]
+        if m.get("gap"):  # فاصل خاص قبل كل صفحة من هالمتجر (أمازون: 20-30 ث يقلل الحظر)
+            picked = [dict(x, _gap=tuple(m["gap"])) for x in picked]
+        per_market.append(picked)
         cursors[name] = (c + n) % len(srcs)
         last[name] = now
     # نخلط المتاجر: صفحة من هذا وصفحة من ذاك
