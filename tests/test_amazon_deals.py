@@ -551,3 +551,25 @@ def test_trendyol_non_electronics_off_by_default(monkeypatch):
     sent = []
     monkeypatch.setattr(deals, "send", lambda t, silent=False: sent.append(t) or True)
     assert deals.scan_channels({"tg_seen": {"d": 39}}, S()) == 1 and "Galaxy" in sent[0]
+
+
+D4D = ('<script type="application/ld+json">' + json.dumps({"@graph": [{"@type": "ItemList", "itemListElement": [
+    {"@type": "ListItem", "item": {"@type": "SaleEvent", "name": "eXtra", "description": "eXtra White Friday",
+                                   "url": "https://d4donline.com/x/1", "endDate": "2026-11-30T20:59:00+00:00"}},
+    {"@type": "ListItem", "item": {"@type": "SaleEvent", "name": "Tamimi Markets", "description": "groceries",
+                                   "url": "https://d4donline.com/x/2"}}]}]}) + '</script>')
+
+
+def test_flyers(monkeypatch):
+    class R:
+        status_code = 200
+        text = D4D
+    class S:
+        def get(self, url, timeout, headers=None):
+            return R()
+    sent = []
+    monkeypatch.setattr(deals, "send", lambda t, silent=False: sent.append(t) or True)
+    state = {}
+    assert deals.scan_flyers(state, S()) == 0            # أول مرة: نحفظ الموجود
+    state["flyers_seen"].pop("https://d4donline.com/x/1")
+    assert deals.scan_flyers(state, S()) == 1 and "eXtra" in sent[0] and "2026-11-30" in sent[0]

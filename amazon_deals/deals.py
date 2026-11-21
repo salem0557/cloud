@@ -496,6 +496,55 @@ def scan_channels(state: dict, session: requests.Session) -> int:
     return sent
 
 
+# ---------- نشرات العروض (D4D) ----------
+
+def parse_flyers(page: str) -> list[dict]:
+    """D4D: النشرات في JSON-LD كـ SaleEvent (اسم المتجر، الوصف، الرابط، التواريخ)."""
+    out = []
+    for m in re.finditer(r'<script[^>]+application/ld\+json[^>]*>(.*?)</script>', page, re.S):
+        try:
+            data = json.loads(m.group(1))
+        except ValueError:
+            continue
+        for d in _walk(data):
+            if d.get("@type") == "SaleEvent" and d.get("url"):
+                out.append({"store": str(d.get("name", "")), "desc": str(d.get("description", "")),
+                            "url": d["url"], "end": str(d.get("endDate", ""))[:10]})
+    return out
+
+
+def scan_flyers(state: dict, session: requests.Session) -> int:
+    cfg = CONFIG.get("flyers", {})
+    if not cfg.get("url"):
+        return 0
+    try:
+        r = session.get(cfg["url"], timeout=25, headers={"User-Agent": USER_AGENTS[0]})
+    except requests.RequestException:
+        return 0
+    if r.status_code != 200:
+        print("flyers", r.status_code)
+        return 0
+    seen: dict = state.setdefault("flyers_seen", {})
+    first_time = not seen
+    stores = [_ar_fold(x.lower()) for x in cfg.get("stores", [])]
+    sent = 0
+    for f in parse_flyers(r.text):
+        if f["url"] in seen:
+            continue
+        seen[f["url"]] = time.time()
+        name = _ar_fold(f["store"].lower())
+        if first_time or not any(s in name for s in stores):
+            continue  # أول مرة: نحفظ الموجود بس
+        msg = (f"🗞️ نشرة عروض جديدة: <b>{html.escape(f['store'])}</b>\n{html.escape(f['desc'][:200])}"
+               + (f"\n⏳ لين {f['end']}" if f["end"] else "") + f'\n🔗 <a href="{f["url"]}">افتح النشرة</a>')
+        if send(msg, silent=True):
+            sent += 1
+    print(f"flyers: {len(seen)} معروفة، {sent} جديدة انرسلت")
+    for k in [k for k, v in seen.items() if time.time() - v > 30 * 86400]:
+        del seen[k]
+    return sent
+
+
 # ---------- الحالة ----------
 
 def load_state() -> dict:
@@ -827,6 +876,10 @@ def run() -> int:
 
     close_browser()
     record_experiment(state, exp_name, exp_ok, exp_blocked)
+    try:
+        stats["alerts"] += scan_flyers(state, session)
+    except Exception as e:
+        print("flyers error:", type(e).__name__, e)
     try:
         stats["alerts"] += scan_channels(state, session)
     except Exception as e:  # القنوات إضافة: ما نخليها توقف الصيد

@@ -1136,5 +1136,37 @@
   "used_deal_pct": 35,
   "verified_discount_pct": 25,
   "_note_market_deals": "♻️ مستعمل/مجدد أرخص used_deal_pct% من الجديد، و🔥 خصم ≥ verified_discount_pct% وأرخص 10%+ من متجر ثاني (نفس الموديل)",
-  "trendyol_any_category": false
+  "trendyol_any_category": false,
+  "flyers": {
+    "url": "https://d4donline.com/en/saudi-arabia/riyadh/offers",
+    "stores": [
+      "extra",
+      "اكسترا",
+      "jarir",
+      "جرير",
+      "lulu",
+      "لولو",
+      "saco",
+      "ساكو",
+      "almanea",
+      "المنيع",
+      "virgin",
+      "فيرجن",
+      "carrefour",
+      "كارفور",
+      "panda",
+      "بنده",
+      "danube",
+      "الدانوب",
+      "sharaf",
+      "شرف",
+      "blackbox",
+      "بلاك بوكس",
+      "stc",
+      "mobily",
+      "zain",
+      "nesto"
+    ],
+    "_note": "نشرات العروض الأسبوعية من D4D (فيها إكسترا وجرير). نشرة جديدة لمتجر في القائمة = تنبيه صامت برابطها."
+  }
 }
