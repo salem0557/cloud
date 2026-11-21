@@ -239,6 +239,9 @@ def excluded(title: str) -> bool:
     # تقليد/شبيه/متوافق مع: مو الجهاز الأصلي (وين ما جات بالعنوان)
     if any(w in t for w in CONFIG.get("exclude_knockoffs", [])):
         return True
+    # خدمات صيانة بالعربي (محلي مليان مراكز صيانة): "خدمة فحص"، "تغيير بطارية"، "استبدال شاشة"...
+    if any(w in t for w in CONFIG.get("exclude_services_anywhere", [])):
+        return True
     # خدمات (تركيب/صيانة/ضمان) مو منتجات — بس إذا في أول العنوان، لأن أجهزة كثيرة تكتب
     # "... 2 Years Warranty" في آخر عنوانها وما نبي نفوّتها
     if _has_word(t[:50], CONFIG.get("exclude_services", [])):
@@ -253,6 +256,8 @@ def floor_hit(title: str, price: float, currency: str) -> float | None:
     factor = CONFIG["resale"]["floor_factor"] if is_resale(title) else 1.0
     for rule in CONFIG["floors"].get(currency, []):
         below = rule["below"] * factor
+        if rule.get("require_re") and not re.search(rule["require_re"], t):
+            continue  # مثلاً ماك بوك لازم يكون فيه معالج M (الأجهزة القديمة سعرها طبيعي يكون أقل)
         # كلمات كاملة: "65" ما تطابق "165Hz"، و"tv" ما تطابق جزء من كلمة ثانية
         hits = [re.search(rf"(?<![\w]){re.escape(w)}(?![\w])", t) for w in rule["match"]]
         if not all(hits) or price >= below:

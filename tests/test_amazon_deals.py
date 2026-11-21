@@ -406,3 +406,30 @@ def test_knockoff_phones_ignored():
     assert any("خطأ تسعير" in r for r in deals.evaluate(real, "SAR", [], trust_list=False))
     msg = deals.format_alert(real, deals.CONFIG["markets"]["mahally"], ["x"])
     assert "🇸🇦" in msg and "🇺🇸" not in msg
+
+
+MAHALLY_SERVICES = [
+    "خدمة فحص ماك بوك برو MacBook Pro kiwik",
+    "تغيير بطارية ماك بوك اير | MacBook Air كيوتك ريبير | Q-TECH Repair",
+    "استبدال شاشة ماك بوك برو A1706 - A1708 أصلية مؤسسة مؤشر التقنية - مركز صيانة الحاسب",
+    "خدمة تنظيف ماك بوك برو MacBook Pro kiwik",
+    "سوفت وير ماك بوك برو | Macbook Pro كيوتك ريبير | Q-TECH Repair",
+    "بطارية ماك بوك برو A1425 مع التركيب وضمان 6 أشهر مؤسسة مؤشر التقنية",
+    "شاحن ماك بوك برو 60W 2012 ابل 13 انش 60W MAGSAFE POWER ADAPTER ايزون | iZONE",
+    "ترقية سعة ماك بوك برو | MacBook Pro كيوتك ريبير | Q-TECH Repair",
+    "محول USB C الى HDMI 4K 30Hz متوافق مع ايباد 10/برو 6/اير 5/ميني 6، ماك بوك برو، سامسونج S23 الترا",
+    "اصلاح مذربورد ماك بوك برو A2141 مؤسسة مؤشر التقنية - مركز صيانة الحاسب",
+    "تغيير تتش بار ماك بوك برو MacBook Pro A2338 kiwik",
+]
+
+
+def test_mahally_services_and_parts_ignored():
+    for t in MAHALLY_SERVICES:
+        assert deals.evaluate(item(t, 99.0), "SAR", [], trust_list=False) == [], t
+    # ماك بوك قديم (i5) بسعر طبيعي: مو خطأ تسعير
+    assert deals.evaluate(item("لابتوب ماك بوك اير اي فايف همسات الابداع", 1250.0), "SAR", [], trust_list=False) == []
+    # ماك بوك حديث بسعر غلط: ينبه
+    r = deals.evaluate(item("Apple MacBook Air 13-inch M3 chip 16GB 512GB", 1250.0), "SAR", [])
+    assert any("خطأ تسعير" in x for x in r)
+    r = deals.evaluate(item("ماك بوك برو M4 Pro 14 انش 512 جيجا", 1999.0), "SAR", [], trust_list=False)
+    assert any("خطأ تسعير" in x for x in r)

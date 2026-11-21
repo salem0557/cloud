@@ -377,13 +377,15 @@
         "match": [
           "macbook pro"
         ],
-        "below": 3000
+        "below": 3000,
+        "require_re": "\\bm[1-5]\\b|\\bm[1-5]\\s*(pro|max)\\b"
       },
       {
         "match": [
           "macbook air"
         ],
-        "below": 1800
+        "below": 1800,
+        "require_re": "\\bm[1-5]\\b|\\bm[1-5]\\s*(pro|max)\\b"
       },
       {
         "match": [
@@ -588,13 +590,15 @@
         "match": [
           "macbook pro"
         ],
-        "below": 800
+        "below": 800,
+        "require_re": "\\bm[1-5]\\b|\\bm[1-5]\\s*(pro|max)\\b"
       },
       {
         "match": [
           "macbook air"
         ],
-        "below": 450
+        "below": 450,
+        "require_re": "\\bm[1-5]\\b|\\bm[1-5]\\s*(pro|max)\\b"
       },
       {
         "match": [
@@ -710,7 +714,23 @@
     "حامل",
     "لاصق",
     "استيكر",
-    "سماعة"
+    "سماعة",
+    "بطارية",
+    "محول",
+    "موزع",
+    "كيبورد",
+    "لوحة مفاتيح",
+    "ماوس",
+    "قطعة",
+    "كابل",
+    "وصلة",
+    "لاصقة",
+    "keyboard",
+    "trackpad",
+    "motherboard",
+    "logic board",
+    "screen replacement",
+    "display assembly"
   ],
   "_note_floor_accessory_words": "إذا جات وحدة من هالكلمات قبل اسم الجهاز في العنوان (مثل: Controller for Xbox Series X) فهو إكسسوار وما نطبق عليه حد السعر",
   "cross_store_pct": 35,
@@ -917,5 +937,24 @@
     "متوافق كلياً",
     "متوافق كليا",
     "متوافق مع جرابات"
+  ],
+  "exclude_services_anywhere": [
+    "خدمة",
+    "فحص",
+    "تغيير",
+    "استبدال",
+    "اصلاح",
+    "إصلاح",
+    "صيانة",
+    "ترقية",
+    "سوفت وير",
+    "سوفتوير",
+    "تنظيف",
+    "برمجة",
+    "تفليش",
+    "تصليح",
+    "فك وتركيب",
+    "مع التركيب",
+    "قطع غيار"
   ]
 }
