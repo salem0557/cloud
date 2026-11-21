@@ -1,6 +1,8 @@
 import json
 import os
 
+import pytest
+
 os.environ["DEALS_DRY"] = "1"
 
 from amazon_deals import deals  # noqa: E402
@@ -359,3 +361,26 @@ def test_trendyol_strong_deals_any_category(monkeypatch):
     monkeypatch.setattr(deals, "send", lambda t, silent=False: sent.append(t) or True)
     assert deals.scan_channels({"tg_seen": {"d": 29}}, S()) == 2
     assert "65%" in sent[0] and "🛍️ تريندول" in sent[0] and "ببلاش" in sent[1]
+
+
+MAHALLY = json.dumps([
+    ["/ar/products/1633394969/1588772393/?q=1", "ايفون 15 عادي 128 جيجا مستعمل مضمون متجر وجهتك الاولى 5.00 (3) ادفع بالتقسيط 2357.5 -15% 1999"],
+    ["/ar/products/1444699754/215132508/", "ايفون 17 برو ماكس 256 جيجا ميكانيزم الكترونيات 4.93 (14) 1411"],
+    ["/ar/products/784538497/93268365/", "ايفون 16 عادي 128 قيقا الخليفي للاتصالات 5.00 (15) ادفع بالتقسيط 3099"],
+], ensure_ascii=False)
+
+
+def test_parse_mahally_and_arabic_rules():
+    items = {i["asin"]: i for i in deals.parse_mahally(MAHALLY)}
+    used = items["1588772393"]
+    assert used["price"] == 1999 and used["list_price"] == 2357.5 and deals.is_resale(used["title"])
+    assert used["url"] == "https://mahally.com/ar/products/1633394969/1588772393/"
+    pm = items["215132508"]
+    assert deals.model_key(pm["title"]) == "iphone17-promax-256gb"
+    assert any("خطأ تسعير" in r for r in deals.evaluate(pm, "SAR", [], trust_list=False))
+    assert deals.evaluate(items["93268365"], "SAR", [], trust_list=False) == []
+
+
+@pytest.fixture(autouse=True)
+def _no_real_browser(monkeypatch):
+    monkeypatch.setattr(deals, "fetch_browser", lambda url: None)
