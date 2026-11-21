@@ -38,10 +38,16 @@ def mahally_search(page, q: str = "ايفون") -> None:
     print("home:", page.url, "|", page.title()[:80])
     hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.getAttribute('href'))")
     print("sample links:", [h for h in hrefs if h and ("search" in h or "product" in h or "/p/" in h)][:12])
-    box = page.locator("input[type=search], input[placeholder*='بحث'], input[name*=search], input[name=q]")
-    print("search inputs:", box.count())
+    # بطاقات المنتجات في الرئيسية: نشوف شكل النص والسعر
+    cards = page.locator("a[href*='/products/']")
+    print("product links on home:", cards.count())
+    for t in cards.all_inner_texts()[:6]:
+        print("  card:", re.sub(r"\s+", " ", t)[:160])
+    box = page.locator("input[type=search]:visible, input[placeholder*='بحث']:visible, input[name=q]:visible")
+    print("visible search inputs:", box.count())
     if box.count():
-        box.first.fill(q)
+        box.first.click()
+        box.first.fill(q, timeout=10000)
         box.first.press("Enter")
         page.wait_for_timeout(8000)
         print("after search:", page.url, "|", page.title()[:80])
