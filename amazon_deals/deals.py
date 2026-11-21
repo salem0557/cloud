@@ -241,6 +241,9 @@ def is_resale(title: str) -> bool:
 
 def excluded(title: str) -> bool:
     t = _ar_fold(title.lower())  # "شبية" = "شبيه"، "إصلاح" = "اصلاح" ...
+    # تجار يبيعون تقليد باسم الأصلي (اسم المتجر يجي بآخر عنوان محلي)
+    if _has_word(t, CONFIG.get("blocked_sellers", [])):
+        return True
     # مجدد بحالة سيئة/مقبولة: ما نبيه
     if is_resale(title) and _has_word(t, CONFIG["resale"]["bad_condition"]):
         return True
@@ -307,6 +310,8 @@ def evaluate(item: dict, currency: str, history: list[float], trust_list: bool =
         return []
     reasons = []
     floor = floor_hit(item["title"], price, currency)
+    if floor and brand_first and price < floor * CONFIG.get("too_cheap_ratio", 0.2):
+        floor = None  # متاجر صغيرة: أرخص من 20% من سعر الجهاز = تقليد ينسخ اسم الأصلي، مو خطأ تسعير
     if floor and brand_first and not starts_with_brand(item["title"]):
         # متاجر صغيرة: العنوان ما يبدأ بماركة. الإكسسوارات عادة أرخص بكثير من الجهاز، فلو السعر
         # قريب من سعر الجهاز (≥ 40% من الحد) نرسله صامت للتأكد بدل ما يضيع.
