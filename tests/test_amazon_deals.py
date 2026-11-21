@@ -465,3 +465,19 @@ def test_mahally_brand_first_gate():
     for t in real:
         assert deals.starts_with_brand(t), t
     assert any("خطأ تسعير" in r for r in deals.evaluate(item(real[0], 900.0), "SAR", [], trust_list=False, brand_first=True))
+
+
+def test_brand_gate_tolerates_typos_and_promo_words():
+    for t in ["ايفوون 17 برو ماكس 256 جيجا", "سامسنج جالكسي S25 الترا", "أبل ايفون 16 برو",
+              "🔥عرض خاص ايفون 17 برو ماكس 256 جيجا", "جوال سامسونج جالكسي S24", "إيفون ١٧ برو"]:
+        assert deals.starts_with_brand(t), t
+    for t in ["موجه هواء مكيف سبليت", "ريموت مكيف سبليت سامسونج", "واقي شاشة تلفزيون 65 بوصة"]:
+        assert not deals.starts_with_brand(t), t
+
+
+def test_brand_gate_safety_net():
+    # ما يبدأ بماركة لكن السعر قريب من سعر الجهاز: تنبيه "تأكد" (مو 🚨)
+    r = deals.evaluate(item("للبيع ايفون 17 برو ماكس 256 جيجا", 1500.0), "SAR", [], trust_list=False, brand_first=True)
+    assert r and r[0].startswith("⚠️") and not any(x.startswith("🚨") for x in r)
+    # إكسسوار رخيص جداً: ولا شي
+    assert deals.evaluate(item("موجه هواء مكيف سبليت", 90.0), "SAR", [], trust_list=False, brand_first=True) == []

@@ -170,15 +170,22 @@ AR_MAP = [  # أسماء عربية شائعة في المتاجر الصغير�
     (r"بلايستيشن|بلاي\s*ستيشن", "playstation"), (r"سوني", "sony"), (r"اكس\s*بوكس", "xbox"), (r"جهاز", "console"),
     (r"(\d+)\s*(?:جيجا|قيقا|جيقا|gb)", r"\1gb"), (r"(\d+)\s*(?:تيرا|تيرابايت)", r"\1tb"),
     (r"مكيف\s*سبليت|سبليت", "split air conditioner"), (r"مكيف\s*شباك|شباك", "window air conditioner"),
-    (r"شاشة|تلفزيون", "tv"), (r"بوصة|انش", "inch"), (r"لابتوب", "laptop"), (r"ساعة\s*ابل|ساعة\s*آبل", "apple watch"),
+    (r"شاشة|شاشه|تلفزيون", "tv"), (r"بوصة|انش", "inch"), (r"لابتوب", "laptop"), (r"ساعة\s*ابل|ساعه\s*ابل|ساعة\s*آبل", "apple watch"),
     (r"الترا", "ultra"), (r"مستخدم", "used"),
 ]
+
+
+def _ar_fold(w: str) -> str:
+    """توحيد الكتابة العربية: الهمزات، التاء المربوطة، الألف المقصورة، التطويل والتشكيل."""
+    w = re.sub(r"[\u064B-\u0652\u0640]", "", w)
+    return w.translate(str.maketrans("أإآٱةى", "ااااهي"))
 
 
 def norm_title(title: str) -> str:
     """lower + ترجمة الكلمات العربية الشائعة عشان القواعد (الحدود، المطابقة) تشتغل على العناوين العربية."""
     t = title.lower()
     if re.search(r"[\u0600-\u06FF]", t):
+        t = _ar_fold(t)  # إيفون/أيفون → ايفون، شاشة → شاشه ... قبل الترجمة
         for pat, rep in AR_MAP:
             t = re.sub(pat, rep, t)
     return t
@@ -223,7 +230,8 @@ def is_blocked(page: str) -> bool:
 # ---------- قواعد الكشف ----------
 
 def _has_word(t: str, words: list[str]) -> bool:
-    return any(re.search(rf"(?<!\w){re.escape(w)}(?!\w)", t) for w in words)
+    t = _ar_fold(t)  # "تعليقة" في القائمة تطابق "تعليقه" بعد التوحيد
+    return any(re.search(rf"(?<!\w){re.escape(_ar_fold(w))}(?!\w)", t) for w in words)
 
 
 def is_resale(title: str) -> bool:
@@ -271,10 +279,21 @@ def floor_hit(title: str, price: float, currency: str) -> float | None:
 
 
 def starts_with_brand(title: str) -> bool:
-    """أول كلمة بالعنوان ماركة أو اسم جهاز (بعد الترجمة) — المنتج نفسه، مو "واقي/ريموت/موجه هواء لـ..."."""
-    t = re.sub(r"^[^\w\u0600-\u06FF]+", "", norm_title(title))
-    first = re.split(r"[\s\-|،,:(]+", t, maxsplit=1)[0]
-    return first in set(CONFIG.get("brand_first_words", []))
+    """أول كلمة حقيقية بالعنوان (بعد كلمات الدعاية مثل عرض/خصم/🔥) ماركة أو جهاز — يسامح خطأ حرف واحد
+    (ايفوون، سامسنج). يعني المنتج نفسه، مو "واقي/ريموت/موجه هواء لـ..."."""
+    import difflib
+    brands = [_ar_fold(b) for b in CONFIG.get("brand_first_words", [])]
+    fillers = {_ar_fold(f) for f in CONFIG.get("brand_fillers", [])}
+    words = [w for w in re.split(r"[^\w\u0600-\u06FF]+", _ar_fold(norm_title(title))) if w]
+    for w in words[:3]:
+        if w in fillers:
+            continue
+        if w in brands:
+            return True
+        if len(w) >= 4 and difflib.get_close_matches(w, [b for b in brands if len(b) >= 4], n=1, cutoff=0.8):
+            return True
+        return False
+    return False
 
 
 def evaluate(item: dict, currency: str, history: list[float], trust_list: bool = True,
@@ -289,7 +308,11 @@ def evaluate(item: dict, currency: str, history: list[float], trust_list: bool =
     reasons = []
     floor = floor_hit(item["title"], price, currency)
     if floor and brand_first and not starts_with_brand(item["title"]):
-        floor = None  # متاجر صغيرة: خطأ التسعير لازم يكون لمنتج عنوانه يبدأ بالماركة/الجهاز
+        # متاجر صغيرة: العنوان ما يبدأ بماركة. الإكسسوارات عادة أرخص بكثير من الجهاز، فلو السعر
+        # قريب من سعر الجهاز (≥ 40% من الحد) نرسله صامت للتأكد بدل ما يضيع.
+        if price >= floor * CONFIG.get("brand_gate_min_ratio", 0.4):
+            reasons.append(f"⚠️ تأكد من العنوان — سعر منخفض ({floor:,.0f} {currency} حد الجهاز) والعنوان ما يبدأ بماركة")
+        floor = None
     if floor:
         reasons.append(f"🚨 أقل من الحد الطبيعي ({floor:,.0f} {currency}) — احتمال خطأ تسعير")
     if len(history) >= 3:
