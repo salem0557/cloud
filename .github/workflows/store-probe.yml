@@ -7,6 +7,10 @@ on:
         description: "أسماء المتاجر (مثلاً: mahally jarir) — فاضي = الكل"
         required: false
         default: ""
+      tg:
+        description: "قنوات تيليجرام للفحص (بدون @)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -24,3 +28,4 @@ jobs:
       - run: python amazon_deals/probe_stores.py
         env:
           PROBE_ONLY: ${{ inputs.only }}
+          PROBE_TG: ${{ inputs.tg }}
