@@ -241,3 +241,10 @@ def test_experiment_rotates_and_records(tmp_path, monkeypatch):
     st = json.loads((tmp_path / "s.json").read_text())["exp"]["stats"]
     assert set(st) == set(deals.EXPERIMENT) and all(v["blocked"] == 1 for v in st.values())
     assert any("/-/en/s?k=" in u for u in urls) and any("bestsellers" in u for u in urls)
+
+
+def test_new_categories_floors():
+    assert deals.floor_hit("Gree 18000 BTU Split Air Conditioner, Inverter, Cold Only", 650.0, "SAR")
+    assert deals.floor_hit("Replacement Remote Control for Split Air Conditioner", 50.0, "SAR") is None
+    assert deals.floor_hit("AMD Ryzen 7 7800X3D 8-Core Desktop Processor", 300.0, "SAR")
+    assert deals.floor_hit("Thermalright CPU Cooler for AMD Ryzen 7 / Intel Core i7", 120.0, "SAR") is None
