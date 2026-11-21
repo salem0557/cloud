@@ -84,7 +84,8 @@
       "pages_per_run": 3,
       "every_min": 0,
       "trust_list_price": false,
-      "_note": "trust_list_price=false: السعر المشطوب في المنيع مبالغ فيه غالباً، فالخصم لازم يتأكد من سجل الأسعار"
+      "_note": "trust_list_price=false: السعر المشطوب في المنيع مبالغ فيه غالباً، فالخصم لازم يتأكد من سجل الأسعار",
+      "flag": "🇸🇦"
     },
     "mahally": {
       "host": "mahally.com",
@@ -95,7 +96,8 @@
       "search": "https://mahally.com/ar/browse/?query={q}",
       "pages_per_run": 2,
       "trust_list_price": false,
-      "_note": "متاجر صغيرة عبر سلة. يحتاج متصفح (Playwright) لأن المنتجات تنحمّل بالجافاسكربت."
+      "_note": "متاجر صغيرة عبر سلة. يحتاج متصفح (Playwright) لأن المنتجات تنحمّل بالجافاسكربت.",
+      "flag": "🇸🇦"
     }
   },
   "searches": [
@@ -697,7 +699,19 @@
     "faceplates",
     "plates",
     "panels",
-    "skins"
+    "skins",
+    "كفر",
+    "كفرات",
+    "غطاء",
+    "جراب",
+    "حماية",
+    "شاحن",
+    "سلك",
+    "ستاند",
+    "حامل",
+    "لاصق",
+    "استيكر",
+    "سماعة"
   ],
   "_note_floor_accessory_words": "إذا جات وحدة من هالكلمات قبل اسم الجهاز في العنوان (مثل: Controller for Xbox Series X) فهو إكسسوار وما نطبق عليه حد السعر",
   "cross_store_pct": 35,
@@ -876,5 +890,33 @@
   "cross_store_max_pct": 75,
   "trendyol_min_pct": 60,
   "_note_trendyol": "تريندول من القنوات (غير الإلكترونيات): توصل إذا الخصم ≥ trendyol_min_pct والسعر قبل الخصم ≥ trendyol_min_old_price، أو إذا فيها خطأ تسعير",
-  "trendyol_min_old_price": 150
+  "trendyol_min_old_price": 150,
+  "exclude_knockoffs": [
+    "شبيه",
+    "شبيهة",
+    "نسخة",
+    "نسخه",
+    "كوبي",
+    "تقليد",
+    "طبق الأصل",
+    "طبق الاصل",
+    "ماستر",
+    "هاي كوبي",
+    "فيرست",
+    "يشبه",
+    "clone",
+    "replica",
+    "copy",
+    "high copy",
+    "first copy",
+    "master copy",
+    "dupe",
+    "oale",
+    "hotwav",
+    "sumsung",
+    "متوافق مع كفرات",
+    "متوافق كلياً",
+    "متوافق كليا",
+    "متوافق مع جرابات"
+  ]
 }

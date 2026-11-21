@@ -236,6 +236,9 @@ def excluded(title: str) -> bool:
     # مجدد بحالة سيئة/مقبولة: ما نبيه
     if is_resale(title) and _has_word(t, CONFIG["resale"]["bad_condition"]):
         return True
+    # تقليد/شبيه/متوافق مع: مو الجهاز الأصلي (وين ما جات بالعنوان)
+    if any(w in t for w in CONFIG.get("exclude_knockoffs", [])):
+        return True
     # خدمات (تركيب/صيانة/ضمان) مو منتجات — بس إذا في أول العنوان، لأن أجهزة كثيرة تكتب
     # "... 2 Years Warranty" في آخر عنوانها وما نبي نفوّتها
     if _has_word(t[:50], CONFIG.get("exclude_services", [])):
@@ -482,7 +485,7 @@ def discover_chat(token: str) -> str | None:
 
 def format_alert(item: dict, market: dict, reasons: list[str], season: dict | None = None) -> str:
     cur = market["currency"]
-    flag = "🇸🇦" if market["host"].endswith(".sa") else "🇺🇸" if market["host"].endswith(".com") else "🌍"
+    flag = market.get("flag") or ("🇸🇦" if market["host"].endswith(".sa") else "🇺🇸" if market["host"].endswith(".com") else "🌍")
     flag = f"{flag} {market.get('label', 'أمازون')}"
     url = item.get("url") or f"https://{market['host']}/dp/{item['asin']}"
     tag = "♻️ <b>مجدد / Resale</b>\n" if is_resale(item["title"]) else ""
