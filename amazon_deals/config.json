@@ -241,9 +241,15 @@
       },
       {
         "match": [
-          "galaxy s2"
+          "galaxy s25"
         ],
-        "below": 1200
+        "below": 1400
+      },
+      {
+        "match": [
+          "galaxy s24"
+        ],
+        "below": 1000
       },
       {
         "match": [
@@ -280,18 +286,6 @@
       },
       {
         "match": [
-          "rtx 40"
-        ],
-        "below": 1000
-      },
-      {
-        "match": [
-          "rtx 50"
-        ],
-        "below": 1200
-      },
-      {
-        "match": [
           "rtx",
           "laptop"
         ],
@@ -310,6 +304,42 @@
           "drone"
         ],
         "below": 600
+      },
+      {
+        "match": [
+          "rtx 4070"
+        ],
+        "below": 1200
+      },
+      {
+        "match": [
+          "rtx 4080"
+        ],
+        "below": 1200
+      },
+      {
+        "match": [
+          "rtx 4090"
+        ],
+        "below": 1200
+      },
+      {
+        "match": [
+          "rtx 5070"
+        ],
+        "below": 1200
+      },
+      {
+        "match": [
+          "rtx 5080"
+        ],
+        "below": 1200
+      },
+      {
+        "match": [
+          "rtx 5090"
+        ],
+        "below": 1200
       }
     ],
     "USD": [

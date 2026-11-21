@@ -137,3 +137,13 @@ def test_stops_on_block(tmp_path, monkeypatch):
     monkeypatch.delenv("DEALS_BOT_TOKEN", raising=False)
     deals.run()
     assert len(calls) == 1  # كل الصفحات الأولى من نفس الموقع: يوقف بعد أول رفض
+
+
+def test_whole_word_floor_match():
+    # تنبيه غلط حقيقي: شاشة 165Hz انحسبت تلفزيون 65 بوصة
+    t = ("GAMEON Epic Series 27 Inch Fast IPS Gaming Monitor, FHD 1080p 165Hz Computer Monitor, "
+         "0.5ms, 300 Nits, HDR, HDMI 2.1, Adaptive Sync, Built-in Speakers, Ideal for PS5 & Xbox, Smart TV Box")
+    assert deals.floor_hit(t, 429.0, "SAR") is None
+    assert deals.floor_hit("Samsung 65 Inch Crystal UHD 4K Smart TV", 500.0, "SAR")
+    assert deals.floor_hit("ASUS TUF Gaming GeForce RTX 4070 Super 12GB Graphics Card", 600.0, "SAR")
+    assert deals.floor_hit("Samsung Galaxy S25 Ultra 5G, 256GB", 900.0, "SAR")

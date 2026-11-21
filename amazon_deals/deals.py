@@ -127,10 +127,12 @@ def floor_hit(title: str, price: float, currency: str) -> float | None:
     factor = CONFIG["resale"]["floor_factor"] if is_resale(title) else 1.0
     for rule in CONFIG["floors"].get(currency, []):
         below = rule["below"] * factor
-        if not all(w in t for w in rule["match"]) or price >= below:
+        # كلمات كاملة: "65" ما تطابق "165Hz"، و"tv" ما تطابق جزء من كلمة ثانية
+        hits = [re.search(rf"(?<![\w]){re.escape(w)}(?![\w])", t) for w in rule["match"]]
+        if not all(hits) or price >= below:
             continue
         # "Controller for Xbox Series X" / "Battery Pack (Xbox Series X)": الإكسسوار يجي قبل اسم الجهاز
-        head = t[:max(t.find(w) for w in rule["match"])]
+        head = t[:max(h.start() for h in hits)]
         if _has_word(head, CONFIG.get("floor_accessory_words", [])):
             continue
         return below
