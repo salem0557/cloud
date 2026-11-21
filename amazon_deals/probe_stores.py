@@ -18,6 +18,9 @@ STORES = {
     "mahally_home": "https://mahally.com/ar/",
     "mahally_search": "https://mahally.com/ar/search?q=iphone",
     "mahally_search2": "https://mahally.com/ar/products?search=iphone",
+    "trendyol_en": "https://www.trendyol.com/en/sr?q=iphone",
+    "trendyol_ar": "https://www.trendyol.com/ar/sr?q=iphone",
+    "trendyol_home": "https://www.trendyol.com/en",
 }
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
 
