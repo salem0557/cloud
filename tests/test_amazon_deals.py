@@ -593,3 +593,11 @@ def test_amazon_sponsored_ac_kits():
     # حتى بدون علامة الإعلان: Window Kit = إكسسوار
     assert deals.floor_hit("Portable Air Conditioner Window Kit AC Window Seal", 130.0, "SAR") is None
     assert deals.floor_hit("LG Window Air Conditioner 18000 BTU Cold Only", 400.0, "SAR")
+
+
+def test_gaming_monitor_not_console():
+    t = ("GAMEON Epic Series 24 Inch Fast IPS Gaming Monitor, FHD 1080p 165Hz Computer Monitor, 0.5ms MPRT, HDR400, "
+         "HDMI 2.1, Adaptive Sync, Built-in Speakers, Ideal for PS5 Console & Xbox Series X")
+    assert deals.floor_hit(t, 349.0, "SAR") is None
+    assert deals.floor_hit("Sony PlayStation 5 Slim Console Disc Edition", 500.0, "SAR")
+    assert deals.floor_hit("Xbox Series X 1TB Console", 500.0, "SAR")

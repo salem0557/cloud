@@ -561,27 +561,127 @@
           "playstation 5",
           "console"
         ],
-        "below": 900
+        "below": 900,
+        "not_if": [
+          "monitor",
+          "شاشة كمبيوتر",
+          "headset",
+          "headphones",
+          "controller",
+          "gamepad",
+          "chair",
+          "desk",
+          "speaker",
+          "soundbar",
+          "keyboard",
+          "mouse",
+          "router",
+          "capture card",
+          "ssd",
+          "hard drive",
+          "storage",
+          "game",
+          "games",
+          "لعبة",
+          "تلفزيون",
+          "projector",
+          "tv"
+        ]
       },
       {
         "match": [
           "ps5",
           "console"
         ],
-        "below": 900
+        "below": 900,
+        "not_if": [
+          "monitor",
+          "شاشة كمبيوتر",
+          "headset",
+          "headphones",
+          "controller",
+          "gamepad",
+          "chair",
+          "desk",
+          "speaker",
+          "soundbar",
+          "keyboard",
+          "mouse",
+          "router",
+          "capture card",
+          "ssd",
+          "hard drive",
+          "storage",
+          "game",
+          "games",
+          "لعبة",
+          "تلفزيون",
+          "projector",
+          "tv"
+        ]
       },
       {
         "match": [
           "xbox series x"
         ],
-        "below": 900
+        "below": 900,
+        "not_if": [
+          "monitor",
+          "شاشة كمبيوتر",
+          "headset",
+          "headphones",
+          "controller",
+          "gamepad",
+          "chair",
+          "desk",
+          "speaker",
+          "soundbar",
+          "keyboard",
+          "mouse",
+          "router",
+          "capture card",
+          "ssd",
+          "hard drive",
+          "storage",
+          "game",
+          "games",
+          "لعبة",
+          "تلفزيون",
+          "projector",
+          "tv"
+        ]
       },
       {
         "match": [
           "nintendo switch",
           "console"
         ],
-        "below": 500
+        "below": 500,
+        "not_if": [
+          "monitor",
+          "شاشة كمبيوتر",
+          "headset",
+          "headphones",
+          "controller",
+          "gamepad",
+          "chair",
+          "desk",
+          "speaker",
+          "soundbar",
+          "keyboard",
+          "mouse",
+          "router",
+          "capture card",
+          "ssd",
+          "hard drive",
+          "storage",
+          "game",
+          "games",
+          "لعبة",
+          "تلفزيون",
+          "projector",
+          "tv"
+        ]
       },
       {
         "match": [
@@ -595,7 +695,14 @@
           "65",
           "tv"
         ],
-        "below": 900
+        "below": 900,
+        "not_if": [
+          "monitor",
+          "projector",
+          "screen protector",
+          "mount",
+          "stand"
+        ]
       },
       {
         "match": [
@@ -691,7 +798,32 @@
           "playstation 5",
           "pro"
         ],
-        "below": 1500
+        "below": 1500,
+        "not_if": [
+          "monitor",
+          "شاشة كمبيوتر",
+          "headset",
+          "headphones",
+          "controller",
+          "gamepad",
+          "chair",
+          "desk",
+          "speaker",
+          "soundbar",
+          "keyboard",
+          "mouse",
+          "router",
+          "capture card",
+          "ssd",
+          "hard drive",
+          "storage",
+          "game",
+          "games",
+          "لعبة",
+          "تلفزيون",
+          "projector",
+          "tv"
+        ]
       }
     ],
     "USD": [
@@ -726,7 +858,32 @@
           "playstation 5",
           "console"
         ],
-        "below": 250
+        "below": 250,
+        "not_if": [
+          "monitor",
+          "شاشة كمبيوتر",
+          "headset",
+          "headphones",
+          "controller",
+          "gamepad",
+          "chair",
+          "desk",
+          "speaker",
+          "soundbar",
+          "keyboard",
+          "mouse",
+          "router",
+          "capture card",
+          "ssd",
+          "hard drive",
+          "storage",
+          "game",
+          "games",
+          "لعبة",
+          "تلفزيون",
+          "projector",
+          "tv"
+        ]
       },
       {
         "match": [

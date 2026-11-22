@@ -287,6 +287,9 @@ def floor_hit(title: str, price: float, currency: str) -> float | None:
         # قطع وملحقات واضحة وين ما جات ("Portable Air Conditioner Window Kit")
         if _has_word(t, CONFIG.get("floor_accessory_anywhere", [])):
             continue
+        # منتج من نوع ثاني يذكر الجهاز ("Gaming Monitor ... for PS5 & Xbox Series X")
+        if _has_word(t, rule.get("not_if", [])):
+            continue
         # "Controller for Xbox Series X" / "Battery Pack (Xbox Series X)": الإكسسوار يجي قبل اسم الجهاز
         head = t[:max(h.start() for h in hits)]
         if _has_word(head, CONFIG.get("floor_accessory_words", [])):
