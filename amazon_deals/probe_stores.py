@@ -63,6 +63,16 @@ def summarize(name: str, url: str) -> None:
         s = max(0, m.start() - 400)
         print("snippet:", re.sub(r"\s+", " ", t[s:m.start() + 400]))
     # روابط API ظاهرة في الصفحة (تساعد نعرف من وين تجي الأسعار)
+    # أشكال أسعار ثانية + روابط منتجات (لمتاجر مثل ديزرت كارت)
+    print("SR/﷼/AED counts:", len(re.findall(r"\bSR\b", t)), t.count("﷼"), len(re.findall(r"\bSAR\s?\d", t)))
+    prods = sorted(set(re.findall(r'href="(/products/[^"?]+)', t)))[:5]
+    print("product links:", len(set(re.findall(r'href="(/products/[^"?]+)', t))), prods)
+    i = t.find("/products/")
+    if i > 0:
+        print("around first product:", re.sub(r"<[^>]+>", " | ", t[i - 200:i + 1500])[:1200])
+    for key in ("__NUXT__", "window.__INITIAL_STATE__", "__APOLLO_STATE__", "application/json"):
+        if key in t:
+            print("has", key)
     apis = sorted(set(re.findall(r"https?://[a-z0-9.\-]+/(?:api|search|v\d)[^\"'\s<>]{0,80}", t)))[:10]
     if apis:
         print("api-like urls:", *apis, sep="\n  ")
