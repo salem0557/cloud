@@ -29,6 +29,10 @@ STORES = {
     "new_clicflyer": "https://clicflyer.com/en/saudi-arabia/riyadh/offers",
     "new_d4d": "https://d4donline.com/en/saudi-arabia/riyadh/offers",
     "new_stc": "https://www.stc.com.sa/en/personal/devices/smartphones",
+    "pc_newegg": "https://www.newegg.com/global/sa-en/p/pl?d=rtx+4070",
+    "pc_desertcart": "https://www.desertcart.com.sa/category/electronics/computers/components",
+    "pc_desertcart_search": "https://www.desertcart.com.sa/search?query=rtx%204070",
+    "pc_opensooq": "https://sa.opensooq.com/en/computers-and-laptops/computer-parts-and-components",
 }
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
 
