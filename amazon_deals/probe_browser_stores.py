@@ -91,14 +91,40 @@ def mahally_search(page, q: str = "ايفون") -> None:
     print("has __NEXT_DATA__:", "__NEXT_DATA__" in html, "| algolia:", "algolia" in html.lower())
 
 
+def desertcart(page) -> None:
+    """ديزرت كارت: الأسعار تنحمّل بالجافاسكربت. نطبع شكل روابط المنتجات ونص البطاقات."""
+    print("\n===== desertcart =====")
+    page.goto("https://www.desertcart.com.sa/search?query=rtx%204070", wait_until="domcontentloaded", timeout=45000)
+    page.wait_for_timeout(9000)
+    print("url:", page.url, "| title:", page.title()[:80])
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.getAttribute('href'))")
+    prod = [h for h in hrefs if h and ("/products/" in h or "/p/" in h)]
+    print("product-like links:", len(prod), prod[:5])
+    sel = "a[href*='/products/']" if any("/products/" in h for h in prod) else "a[href*='/p/']"
+    cards = page.eval_on_selector_all(sel, """els => els.slice(0, 30).map(a => {
+        let n = a; for (let i = 0; i < 5 && n.parentElement; i++) { n = n.parentElement; if (/SAR|ر\\.س|﷼/.test(n.innerText) && n.innerText.length > 40) break; }
+        return [a.getAttribute('href').split('?')[0], n.innerText.replace(/\\s+/g, ' ').slice(0, 220)];
+    })""")
+    seen = set()
+    for h, t in cards:
+        if h in seen:
+            continue
+        seen.add(h)
+        print("  card:", h, "|", t)
+        if len(seen) >= 8:
+            break
+    body = re.sub(r"\s+", " ", page.inner_text("body"))
+    print("SAR count:", body.count("SAR"), "| sample:", body[:300])
+
+
 def main() -> int:
     with sync_playwright() as p:
         b = p.chromium.launch()
         page = b.new_page(locale="ar-SA")
         try:
-            mahally_search(page)
+            desertcart(page)
         except Exception as e:
-            print("mahally ERROR", type(e).__name__, str(e)[:200])
+            print("desertcart ERROR", type(e).__name__, str(e)[:200])
         b.close()
     return 0
 
