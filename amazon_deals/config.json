@@ -98,6 +98,17 @@
       "_note": "متاجر صغيرة عبر سلة. يحتاج متصفح (Playwright) لأن المنتجات تنحمّل بالجافاسكربت.",
       "flag": "🇸🇦",
       "floor_requires_brand": true
+    },
+    "opensooq": {
+      "host": "sa.opensooq.com",
+      "currency": "SAR",
+      "label": "السوق المفتوح",
+      "flag": "🇸🇦",
+      "parser": "opensooq",
+      "search": "https://sa.opensooq.com/en/computers-and-laptops/computer-parts-and-components?page={q}",
+      "pages_per_run": 2,
+      "trust_list_price": false,
+      "_note": "إعلانات أفراد (قطع كمبيوتر ولابتوبات، أغلبها مستعمل). نقرأ أحدث الإعلانات من صفحات الأقسام."
     }
   },
   "searches": [
@@ -477,6 +488,18 @@
     {
       "market": "sa",
       "q": "nintendo switch 2"
+    },
+    {
+      "market": "opensooq",
+      "q": "1"
+    },
+    {
+      "market": "opensooq",
+      "q": "2"
+    },
+    {
+      "market": "opensooq",
+      "q": "3"
     }
   ],
   "floors": {
@@ -865,6 +888,48 @@
           "standard edition",
           "ultimate edition"
         ]
+      },
+      {
+        "match": [
+          "rtx 3060"
+        ],
+        "below": 600
+      },
+      {
+        "match": [
+          "rtx 3070"
+        ],
+        "below": 800
+      },
+      {
+        "match": [
+          "rtx 3080"
+        ],
+        "below": 1100
+      },
+      {
+        "match": [
+          "rtx 3090"
+        ],
+        "below": 1500
+      },
+      {
+        "match": [
+          "rtx 4060"
+        ],
+        "below": 800
+      },
+      {
+        "match": [
+          "rx 7800"
+        ],
+        "below": 1000
+      },
+      {
+        "match": [
+          "rx 7900"
+        ],
+        "below": 1500
       }
     ],
     "USD": [

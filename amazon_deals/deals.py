@@ -225,7 +225,35 @@ def parse_mahally(page: str) -> list[dict]:
     return items
 
 
-PARSERS = {"amazon": parse_results, "almanea": parse_almanea, "mahally": parse_mahally}
+def parse_opensooq(page: str) -> list[dict]:
+    """السوق المفتوح: الإعلانات في JSON-LD (Product: name, url, offers.price). أغلبها مستعمل من أفراد."""
+    items, seen = [], set()
+    for m in re.finditer(r'<script[^>]+application/ld\+json[^>]*>(.*?)</script>', page, re.S):
+        try:
+            data = json.loads(m.group(1))
+        except ValueError:
+            continue
+        for d in _walk(data):
+            if d.get("@type") != "Product" or not d.get("url"):
+                continue
+            offer = d.get("offers") or {}
+            try:
+                price = float(str(offer.get("price", "0")).replace(",", ""))
+            except ValueError:
+                continue
+            name = re.sub(r"\s+", " ", str(d.get("name", ""))).strip()
+            pid = d["url"].rstrip("/").split("/")[-1]
+            if price <= 0 or not name or pid in seen:
+                continue
+            seen.add(pid)
+            if not is_resale(name):
+                name += " - مستعمل"  # إعلانات أفراد: نعاملها كمستعمل (حدود وتنبيهات المستعمل)
+            items.append({"asin": pid, "title": name[:200], "price": price, "list_price": None,
+                          "sponsored": False, "url": d["url"]})
+    return items
+
+
+PARSERS = {"amazon": parse_results, "almanea": parse_almanea, "mahally": parse_mahally, "opensooq": parse_opensooq}
 
 
 def is_blocked(page: str) -> bool:
