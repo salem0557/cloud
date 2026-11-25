@@ -611,3 +611,21 @@ def test_console_games_not_consoles():
     assert deals.floor_hit("Xbox Series X 1TB Console", 500.0, "SAR")
     assert deals.floor_hit("Microsoft Xbox Series X Console 1TB Digital Edition", 500.0, "SAR")
     assert deals.floor_hit("Sony PlayStation 5 Slim Console Digital Edition", 500.0, "SAR")
+
+
+OPENSOOQ = ('<script type="application/ld+json">' + json.dumps({"@graph": [{"@type": "ItemList", "itemListElement": [
+    {"@type": "ListItem", "item": {"@type": "Product", "url": "https://sa.opensooq.com/en/search/290586124",
+                                   "name": "كرت 980 نضيف وشبه الجديد", "offers": {"@type": "Offer", "price": "400"}}},
+    {"@type": "ListItem", "item": {"@type": "Product", "url": "https://sa.opensooq.com/en/search/290000001",
+                                   "name": "RTX 4070 Super ASUS TUF", "offers": {"@type": "Offer", "price": "650"}}},
+]}]}, ensure_ascii=False) + '</script>')
+
+
+def test_parse_opensooq_used_pc_parts():
+    items = {i["asin"]: i for i in deals.parse_opensooq(OPENSOOQ)}
+    assert items["290586124"]["price"] == 400 and deals.is_resale(items["290586124"]["title"])
+    gpu = items["290000001"]
+    assert gpu["url"].endswith("/290000001")
+    # كرت 4070 مستعمل بـ 650: أقل من حد المستعمل (1200 × 0.6 = 720) → 🚨
+    assert any("خطأ تسعير" in r for r in deals.evaluate(gpu, "SAR", [], trust_list=False))
+    assert deals.evaluate(dict(gpu, price=1500.0), "SAR", [], trust_list=False) == []
