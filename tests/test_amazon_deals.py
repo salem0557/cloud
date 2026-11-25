@@ -601,3 +601,13 @@ def test_gaming_monitor_not_console():
     assert deals.floor_hit(t, 349.0, "SAR") is None
     assert deals.floor_hit("Sony PlayStation 5 Slim Console Disc Edition", 500.0, "SAR")
     assert deals.floor_hit("Xbox Series X 1TB Console", 500.0, "SAR")
+
+
+def test_console_games_not_consoles():
+    for t in ["Assassin\u2019s Creed Black Flag Resynced - Launch Edition - [Xbox Series X] 9 July 2026",
+              "EA SPORTS FC 26 Standard Edition (PS5) Console Exclusive Bonus",
+              "Call of Duty Black Ops 7 - Xbox Series X"]:
+        assert deals.floor_hit(t, 269.33, "SAR") is None, t
+    assert deals.floor_hit("Xbox Series X 1TB Console", 500.0, "SAR")
+    assert deals.floor_hit("Microsoft Xbox Series X Console 1TB Digital Edition", 500.0, "SAR")
+    assert deals.floor_hit("Sony PlayStation 5 Slim Console Digital Edition", 500.0, "SAR")
