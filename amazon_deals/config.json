@@ -585,7 +585,15 @@
           "لعبة",
           "تلفزيون",
           "projector",
-          "tv"
+          "tv",
+          "[xbox",
+          "[ps5",
+          "[playstation",
+          "[nintendo",
+          "launch edition",
+          "deluxe edition",
+          "standard edition",
+          "ultimate edition"
         ]
       },
       {
@@ -617,12 +625,21 @@
           "لعبة",
           "تلفزيون",
           "projector",
-          "tv"
+          "tv",
+          "[xbox",
+          "[ps5",
+          "[playstation",
+          "[nintendo",
+          "launch edition",
+          "deluxe edition",
+          "standard edition",
+          "ultimate edition"
         ]
       },
       {
         "match": [
-          "xbox series x"
+          "xbox series x",
+          "console"
         ],
         "below": 900,
         "not_if": [
@@ -648,7 +665,15 @@
           "لعبة",
           "تلفزيون",
           "projector",
-          "tv"
+          "tv",
+          "[xbox",
+          "[ps5",
+          "[playstation",
+          "[nintendo",
+          "launch edition",
+          "deluxe edition",
+          "standard edition",
+          "ultimate edition"
         ]
       },
       {
@@ -680,7 +705,15 @@
           "لعبة",
           "تلفزيون",
           "projector",
-          "tv"
+          "tv",
+          "[xbox",
+          "[ps5",
+          "[playstation",
+          "[nintendo",
+          "launch edition",
+          "deluxe edition",
+          "standard edition",
+          "ultimate edition"
         ]
       },
       {
@@ -822,7 +855,15 @@
           "لعبة",
           "تلفزيون",
           "projector",
-          "tv"
+          "tv",
+          "[xbox",
+          "[ps5",
+          "[playstation",
+          "[nintendo",
+          "launch edition",
+          "deluxe edition",
+          "standard edition",
+          "ultimate edition"
         ]
       }
     ],
@@ -882,7 +923,15 @@
           "لعبة",
           "تلفزيون",
           "projector",
-          "tv"
+          "tv",
+          "[xbox",
+          "[ps5",
+          "[playstation",
+          "[nintendo",
+          "launch edition",
+          "deluxe edition",
+          "standard edition",
+          "ultimate edition"
         ]
       },
       {
