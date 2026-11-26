@@ -658,3 +658,15 @@ def test_no_repeat_same_deal_and_channel_dupes(tmp_path, monkeypatch):
             return R()
     sent.clear()
     assert deals.scan_channels({"tg_seen": {"a": 1, "b": 1}}, S()) == 1
+
+
+def test_opensooq_used_fair_prices():
+    assert "rtx 3060" in deals.norm_title("كرت 3060 نظيف")
+    assert "rtx 4070 super" in deals.norm_title("كرت شاشه 4070 سوبر ASUS")
+    assert "rtx 3080" in deals.norm_title("ار تي اكس 3080 للبيع")
+    r = deals.used_fair_reason("كرت 3060 نظيف - مستعمل", 500.0)       # المعتاد 800 → أرخص 38%
+    assert r and r.startswith("♻️") and "38%" in r
+    assert deals.used_fair_reason("كرت 3060 نظيف - مستعمل", 750.0) is None   # سعر عادي
+    r = deals.used_fair_reason("RTX 4070 Super Gigabyte - مستعمل", 1300.0)   # يطابق 4070 super (1950) مو 4070
+    assert r and "4070 SUPER" in r
+    assert deals.used_fair_reason("كيبورد قيمنق - مستعمل", 50.0) is None

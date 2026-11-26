@@ -177,6 +177,11 @@ AR_MAP = [  # أسماء عربية شائعة في المتاجر الصغير�
     (r"مكيف\s*سبليت|سبليت", "split air conditioner"), (r"مكيف\s*شباك|شباك", "window air conditioner"),
     (r"شاشة|شاشه|تلفزيون", "tv"), (r"بوصة|انش", "inch"), (r"لابتوب", "laptop"), (r"ساعة\s*ابل|ساعه\s*ابل|ساعة\s*آبل", "apple watch"),
     (r"الترا", "ultra"), (r"مستخدم", "used"),
+    # كروت الشاشة: "كرت 3060"، "كرت شاشه 4070 سوبر"، "ار تي اكس 3080"، "rtx3070ti"
+    (r"(?:ار\s*تي\s*اكس|rtx)\s*(\d{4})", r"rtx \1"),
+    (r"(?:كرت|كارت)\s*(?:شاشه|شاشة|tv)?\s*(?:rtx\s*)?((?:20|30|40|50)[5-9]0)\b", r"rtx \1"),
+    (r"(?:كرت|كارت)\s*(?:شاشه|شاشة|tv)?\s*(?:rx\s*)?((?:6|7|9)[0-9]00)\b", r"rx \1"),
+    (r"(?:جي\s*تي\s*اكس|gtx)\s*(\d{3,4})", r"gtx \1"), (r"سوبر", "super"), (r"\bتي\s*اي\b", "ti"),
 ]
 
 
@@ -414,6 +419,21 @@ def model_key(title: str, allow_resale: bool = False) -> str | None:
     m = re.search(r"airpods\s*(pro\s*\d?|max|\d)", t)
     if m:
         return "airpods-" + m.group(1).replace(" ", "")
+    return None
+
+
+def used_fair_reason(title: str, price: float) -> str | None:
+    """مستعمل (إعلانات أفراد): نقارن بسعر المستعمل المعتاد للقطعة (جدول used_fair_prices)."""
+    t = norm_title(title)
+    best = None
+    for key, fair in CONFIG.get("used_fair_prices", {}).items():
+        if re.search(rf"(?<!\w){re.escape(key)}(?!\w)", t) and (not best or len(key) > len(best[0])):
+            best = (key, fair)  # الأطول أدق: "rtx 4070 super" قبل "rtx 4070"
+    if not best:
+        return None
+    cheaper = (1 - price / best[1]) * 100
+    if CONFIG.get("used_fair_pct", 30) <= cheaper <= 75:  # أكثر من 75% = غالباً قطعة ثانية/غلط في الإعلان
+        return f"♻️ مستعمل أرخص {cheaper:.0f}% من سعره المعتاد ({best[1]:,.0f} {best[0].upper()})"
     return None
 
 
@@ -899,6 +919,10 @@ def run() -> int:
                 cross = cross_store_reason(ev, src["market"], models, now)
                 if cross:
                     reasons.append(cross)
+                if market.get("used_fair") and not any(r.startswith("🚨") for r in reasons):
+                    uf = used_fair_reason(it["title"], ev["price"])
+                    if uf:
+                        reasons.append(uf)
                 else:
                     reasons += [r for r in market_deal_reasons(it, ev["price"], src["market"], models, now)
                                 if r not in reasons]
