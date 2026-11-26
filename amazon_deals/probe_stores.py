@@ -33,6 +33,11 @@ STORES = {
     "pc_desertcart": "https://www.desertcart.com.sa/category/electronics/computers/components",
     "pc_desertcart_search": "https://www.desertcart.com.sa/search?query=rtx%204070",
     "pc_opensooq": "https://sa.opensooq.com/en/computers-and-laptops/computer-parts-and-components",
+    "cpn_almowafir": "https://almowafir.com/en/store/amazon/",
+    "cpn_everysaving": "https://www.everysavingksa.com/coupons/amazon.sa",
+    "cpn_alcoupon": "https://saudi.alcoupon.com/en/discount-codes/amazon-saudi-arabia",
+    "cpn_sahseh": "https://www.sahseh.co/stores/en-amazon?id=465",
+    "cpn_clicflyer": "https://clicflyer.com/coupons/en/saudi-arabia/codes/amazon-1607",
 }
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
 
@@ -63,6 +68,9 @@ def summarize(name: str, url: str) -> None:
         s = max(0, m.start() - 400)
         print("snippet:", re.sub(r"\s+", " ", t[s:m.start() + 400]))
     # روابط API ظاهرة في الصفحة (تساعد نعرف من وين تجي الأسعار)
+    # أكواد خصم ظاهرة (حروف كبيرة/أرقام 3-15) قرب كلمة code/كود
+    codes = re.findall(r'(?:data-code|data-clipboard-text|code)["\'=:\s>]+([A-Z0-9]{3,15})\b', t)
+    print("codes-like:", sorted(set(codes))[:15])
     # أشكال أسعار ثانية + روابط منتجات (لمتاجر مثل ديزرت كارت)
     print("SR/﷼/AED counts:", len(re.findall(r"\bSR\b", t)), t.count("﷼"), len(re.findall(r"\bSAR\s?\d", t)))
     prods = sorted(set(re.findall(r'href="(/products/[^"?]+)', t)))[:5]
