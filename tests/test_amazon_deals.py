@@ -629,3 +629,32 @@ def test_parse_opensooq_used_pc_parts():
     # كرت 4070 مستعمل بـ 650: أقل من حد المستعمل (1200 × 0.6 = 720) → 🚨
     assert any("خطأ تسعير" in r for r in deals.evaluate(gpu, "SAR", [], trust_list=False))
     assert deals.evaluate(dict(gpu, price=1500.0), "SAR", [], trust_list=False) == []
+
+
+def test_no_repeat_same_deal_and_channel_dupes(tmp_path, monkeypatch):
+    monkeypatch.setattr(deals, "STATE_PATH", tmp_path / "s.json")
+    monkeypatch.setattr(deals.time, "sleep", lambda x: None)
+    monkeypatch.delenv("DEALS_BOT_TOKEN", raising=False)
+    monkeypatch.setitem(deals.CONFIG, "amazon_experiment", False)
+    monkeypatch.setitem(deals.CONFIG, "telegram_channels", [])
+    monkeypatch.setattr(deals, "active_season", lambda now: None)
+    # نفس الماك بوك برقمين مختلفين (بائعين) بنفس السعر → تنبيه واحد
+    page = "<html>" + card("B0MAC00001", "Apple 2024 MacBook Pro Laptop with M4 chip, 14-inch", "1,000.00") + \
+        card("B0MAC00002", "Apple 2024 MacBook Pro Laptop with M4 chip, 14-inch", "1,000.00") + "</html>"
+    monkeypatch.setattr(deals, "fetch", lambda s, u: page)
+    sent = []
+    monkeypatch.setattr(deals, "send", lambda t, silent=False: sent.append(t) or True)
+    deals.run(); deals.run(); deals.run()
+    assert sum("MacBook" in t for t in sent) == 1
+    # نفس المنشور في قناتين → مرة وحدة
+    monkeypatch.setitem(deals.CONFIG, "telegram_channels", ["a", "b"])
+    post = ('<div class="tgme_widget_message" data-post="x/5"><div class="tgme_widget_message_text">'
+            'سماعة سوني XM5 بخصم 40% https://ty.gl/aaa</div></div>')
+    class R:
+        status_code = 200
+        text = post
+    class S:
+        def get(self, url, timeout):
+            return R()
+    sent.clear()
+    assert deals.scan_channels({"tg_seen": {"a": 1, "b": 1}}, S()) == 1

@@ -529,6 +529,12 @@ def scan_channels(state: dict, session: requests.Session) -> int:
                     any(w in text for w in ("خطأ تسعير", "غلط تسعير"))
             if not hit:
                 continue
+            # نفس العرض منشور في أكثر من قناة (أو مكرر بنفس القناة): بصمة النص بدون روابط/رموز
+            fp = re.sub(r"\W+", "", _ar_fold(re.sub(r"https?://\S+", "", text.lower())))[:160]
+            fps: dict = state.setdefault("tg_fp", {})
+            if fp in fps and time.time() - fps[fp] < 3 * 86400:
+                continue
+            fps[fp] = time.time()
             tag = "🛍️ تريندول — " if re.search(r"ty\.gl/|trendyol", text, re.I) else ""
             msg = (f"📢 {tag}من قناة @{html.escape(ch)}\n{html.escape(text[:700])}\n"
                    f'🔗 <a href="https://t.me/{ch}/{pid}">افتح المنشور</a>')
@@ -897,13 +903,15 @@ def run() -> int:
                     reasons += [r for r in market_deal_reasons(it, ev["price"], src["market"], models, now)
                                 if r not in reasons]
             if reasons:
-                prev = alerted.get(key)
+                # نفس العرض ما يتكرر: بالرقم، أو بالاسم+السعر (نفس الإعلان من بائع/رقم ثاني)
+                tkey = "t:" + re.sub(r"\W+", " ", _ar_fold(norm_title(it["title"])))[:70] + f":{round(it['price'])}"
+                prev = alerted.get(key) or alerted.get(tkey)
                 fresh = (not prev or now - prev["ts"] > CONFIG["realert_hours"] * 3600
-                         or it["price"] < prev["price"] * 0.95)
+                         or it["price"] < prev["price"] * 0.95)  # يرجع بس إذا نزل 5% زيادة
                 # 🚨 خطأ تسعير = إشعار بصوت، باقي العروض = إشعار صامت
                 loud = any(r.startswith("🚨") for r in reasons)
                 if fresh and send(format_alert(it, market, reasons, season), silent=not loud):
-                    alerted[key] = {"price": it["price"], "ts": now}
+                    alerted[key] = alerted[tkey] = {"price": it["price"], "ts": now}
                     stats["alerts"] += 1
             # لا نخلي سعر الخطأ يخرب المتوسط
             if not reasons:
@@ -927,7 +935,7 @@ def run() -> int:
         print("telegram channels error:", type(e).__name__, e)
 
     # نظافة: نحذف تنبيهات أقدم من أسبوع
-    for k in [k for k, v in alerted.items() if now - v["ts"] > 7 * 86400]:
+    for k in [k for k, v in alerted.items() if now - v["ts"] > 30 * 86400]:
         del alerted[k]
     save_state(state)
     return 0
