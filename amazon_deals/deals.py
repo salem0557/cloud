@@ -612,6 +612,98 @@ def scan_flyers(state: dict, session: requests.Session) -> int:
     return sent
 
 
+# ---------- أوامر تيليجرام: /find ----------
+
+FIND_MARKETS = ["sa", "almanea", "mahally"]
+
+
+def find_matches(query: str, items: list[dict]) -> list[dict]:
+    """نتائج تطابق المنتج المطلوب: كل كلمات البحث موجودة، ومو إكسسوار/خدمة/تقليد."""
+    q = [w for w in re.split(r"\s+", _ar_fold(norm_title(query))) if w]
+    out = []
+    for it in items:
+        if excluded(it["title"]):
+            continue
+        t = _ar_fold(norm_title(it["title"]))
+        pos = [t.find(w) for w in q]
+        if not q or any(p < 0 for p in pos):
+            continue
+        head = t[:min(pos)]  # "Case for iPhone 16" = الكفر قبل اسم المنتج
+        if _has_word(head, CONFIG.get("floor_accessory_words", []) + CONFIG.get("model_accessory_words", [])):
+            continue
+        if _has_word(t, CONFIG.get("floor_accessory_anywhere", [])):
+            continue
+        out.append(it)
+    return out
+
+
+def find_product(query: str, session: requests.Session) -> list[tuple[str, dict]]:
+    """يدوّر على المنتج في كل المتاجر الشغالة ويرجع النتائج المطابقة مرتبة من الأرخص."""
+    results = []
+    for name in FIND_MARKETS:
+        m = CONFIG["markets"].get(name)
+        if not m:
+            continue
+        url = search_url({"market": name, "q": query})
+        page = fetch_browser(url) if m.get("browser") else fetch(session, url)
+        if not page or is_blocked(page):
+            print(f"/find {name}: ما قدرنا نفتح الصفحة")
+            continue
+        items = find_matches(query, PARSERS[m.get("parser", "amazon")](page))
+        results += [(name, it) for it in items]
+        time.sleep(random.uniform(*m.get("gap", (2, 4))))
+    results.sort(key=lambda x: x[1]["price"] - (x[1].get("coupon") or 0))
+    return results
+
+
+def format_find(query: str, results: list[tuple[str, dict]]) -> str:
+    if not results:
+        return (f"🔍 <b>{html.escape(query)}</b>\nما لقيت نتائج مطابقة الحين (أو المتاجر رفضت الطلب). "
+                "جرّب اسم أدق، مثلاً: /find airpods pro 2")
+    lines = [f"🔍 أرخص أسعار <b>{html.escape(query)}</b>:"]
+    for i, (name, it) in enumerate(results[:CONFIG.get("find_top", 5)], 1):
+        m = CONFIG["markets"][name]
+        url = it.get("url") or f"https://{m['host']}/dp/{it['asin']}"
+        price = it["price"] - (it.get("coupon") or 0)
+        extra = f" (بعد كوبون {it['coupon']:,.0f})" if it.get("coupon") else ""
+        tag = " ♻️" if is_resale(it["title"]) else ""
+        lines.append(f"{i}. <b>{price:,.0f} ر.س</b>{extra} — {m.get('label', name)}{tag}\n"
+                     f'   <a href="{url}">{html.escape(it["title"][:80])}</a>')
+    stores = sorted({CONFIG["markets"][n].get("label", n) for n, _ in results})
+    lines.append(f"📊 {len(results)} نتيجة من: {'، '.join(stores)}")
+    return "\n".join(lines)
+
+
+def handle_commands(state: dict, session: requests.Session) -> int:
+    """يقرأ رسايلك للبوت (getUpdates) وينفّذ الأوامر. يرد على صاحب البوت بس (DEALS_CHAT_ID)."""
+    token, chat = os.environ.get("DEALS_BOT_TOKEN"), os.environ.get("DEALS_CHAT_ID")
+    if not token or not chat:
+        return 0
+    try:
+        r = session.get(f"https://api.telegram.org/bot{token}/getUpdates", timeout=20,
+                        params={"offset": state.get("tg_offset", 0) + 1, "timeout": 0}).json()
+    except Exception as e:
+        print("getUpdates failed:", type(e).__name__)
+        return 0
+    done = 0
+    for upd in r.get("result", []):
+        state["tg_offset"] = max(state.get("tg_offset", 0), upd.get("update_id", 0))
+        msg = upd.get("message") or {}
+        if str((msg.get("chat") or {}).get("id")) != str(chat):
+            continue  # أحد غيرك كتب للبوت: نتجاهله
+        text = (msg.get("text") or "").strip()
+        m = re.match(r"^(?:/find|/بحث|بحث|ابحث|دور)\s+(.+)$", text, re.I | re.S)
+        if m:
+            query = m.group(1).strip()[:60]
+            send(f"⏳ أدوّر على <b>{html.escape(query)}</b> في كل المتاجر...", silent=True)
+            send(format_find(query, find_product(query, session)))
+            done += 1
+        elif text.lower() in ("/start", "/help", "مساعدة"):
+            send("الأوامر:\n/find اسم المنتج — أرخص سعر له في أمازون والمنيع ومحلي\n"
+                 "مثال: /find ps5 slim  أو  ابحث ايفون 16 برو 256", silent=True)
+    return done
+
+
 # ---------- الحالة ----------
 
 def load_state() -> dict:
@@ -874,6 +966,10 @@ def run() -> int:
 
     now = time.time()
     session = requests.Session()
+    try:
+        handle_commands(state, session)  # أوامرك (/find) أول شي عشان الرد يكون أسرع
+    except Exception as e:
+        print("commands error:", type(e).__name__, e)
     blocked_hosts: set[str] = set()
     exp_name = apply_experiment(state, batch)
     exp_ok = exp_blocked = 0

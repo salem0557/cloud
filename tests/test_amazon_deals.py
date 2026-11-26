@@ -670,3 +670,37 @@ def test_opensooq_used_fair_prices():
     r = deals.used_fair_reason("RTX 4070 Super Gigabyte - مستعمل", 1300.0)   # يطابق 4070 super (1950) مو 4070
     assert r and "4070 SUPER" in r
     assert deals.used_fair_reason("كيبورد قيمنق - مستعمل", 50.0) is None
+
+
+def test_find_command(monkeypatch):
+    page = "<html>" + "".join([
+        card("B0AP000001", "Apple AirPods Pro 2 Wireless Earbuds with MagSafe Charging Case (USB-C)", "749.00"),
+        card("B0AP000002", "Silicone Case for Apple AirPods Pro 2", "29.00"),
+        card("B0AP000003", "Apple AirPods Pro 2 (Renewed)", "599.00"),
+        card("B0XX000004", "Sony WF-1000XM5 Earbuds", "699.00"),
+    ]) + "</html>"
+    monkeypatch.setattr(deals, "FIND_MARKETS", ["sa"])
+    monkeypatch.setattr(deals, "fetch", lambda s, u: page)
+    monkeypatch.setattr(deals.time, "sleep", lambda x: None)
+    res = deals.find_product("airpods pro 2", None)
+    assert [it["asin"] for _, it in res] == ["B0AP000003", "B0AP000001"]   # الأرخص أول، والكفر والسوني برا
+    msg = deals.format_find("airpods pro 2", res)
+    assert "599" in msg and "♻️" in msg and "أمازون" in msg
+    # الأمر من تيليجرام: يرد على صاحب البوت بس
+    monkeypatch.setenv("DEALS_BOT_TOKEN", "x")
+    monkeypatch.setenv("DEALS_CHAT_ID", "42")
+    updates = {"result": [
+        {"update_id": 10, "message": {"chat": {"id": 42}, "text": "/find airpods pro 2"}},
+        {"update_id": 11, "message": {"chat": {"id": 99}, "text": "/find airpods pro 2"}},
+    ]}
+    class R:
+        def json(self):
+            return updates
+    class S:
+        def get(self, url, timeout, params=None):
+            return R()
+    sent = []
+    monkeypatch.setattr(deals, "send", lambda t, silent=False: sent.append(t) or True)
+    state = {}
+    assert deals.handle_commands(state, S()) == 1 and state["tg_offset"] == 11
+    assert "أرخص أسعار" in sent[-1]
