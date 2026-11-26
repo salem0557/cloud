@@ -65,7 +65,8 @@
         20,
         30
       ],
-      "_note": "نتيجة التجربة (21 نوفمبر): رابط /-/en/ = 12 نجاح من 12، والفاصل 20-30 ث = 67%. ندمجهم."
+      "_note": "نتيجة التجربة (21 نوفمبر): رابط /-/en/ = 12 نجاح من 12، والفاصل 20-30 ث = 67%. ندمجهم.",
+      "coupon_store": "amazon"
     },
     "us": {
       "host": "www.amazon.com",
@@ -1653,5 +1654,60 @@
     "playstation 5": 1400,
     "xbox series x": 1300,
     "nintendo switch": 700
-  }
+  },
+  "coupon_sites": {
+    "amazon": [
+      "https://almowafir.com/en/store/amazon/",
+      "https://saudi.alcoupon.com/en/discount-codes/amazon-saudi-arabia",
+      "https://www.sahseh.co/stores/en-amazon?id=465"
+    ],
+    "noon": [
+      "https://almowafir.com/en/store/noon/",
+      "https://saudi.alcoupon.com/en/discount-codes/noon"
+    ],
+    "extra": [
+      "https://almowafir.com/en/store/extra/",
+      "https://saudi.alcoupon.com/en/discount-codes/extra-stores"
+    ],
+    "jarir": [
+      "https://almowafir.com/en/store/jarir/",
+      "https://saudi.alcoupon.com/en/discount-codes/jarir-bookstore"
+    ],
+    "namshi": [
+      "https://almowafir.com/en/store/namshi/",
+      "https://saudi.alcoupon.com/en/discount-codes/namshi"
+    ]
+  },
+  "coupon_labels": {
+    "amazon": "أمازون",
+    "noon": "نون",
+    "extra": "إكسترا",
+    "jarir": "جرير",
+    "namshi": "نمشي"
+  },
+  "coupon_aliases": {
+    "amazon": [
+      "amazon",
+      "امازون",
+      "أمازون"
+    ],
+    "noon": [
+      "noon",
+      "نون"
+    ],
+    "extra": [
+      "extra",
+      "اكسترا",
+      "إكسترا"
+    ],
+    "jarir": [
+      "jarir",
+      "جرير"
+    ],
+    "namshi": [
+      "namshi",
+      "نمشي"
+    ]
+  },
+  "coupon_refresh_hours": 6
 }

@@ -612,6 +612,74 @@ def scan_flyers(state: dict, session: requests.Session) -> int:
     return sent
 
 
+# ---------- أكواد الخصم (مواقع الكوبونات السعودية) ----------
+
+_NOT_CODES = {"KSA", "SAR", "USD", "AED", "VIP", "APP", "FAQ", "PDF", "NEW", "OFF", "FREE", "CODE", "COUPON", "AMAZON",
+              "NOON", "EXTRA", "SALE", "BEST", "HTML", "HTTP", "HTTPS", "JSON", "UTC", "GMT", "TOP", "LED", "USB"}
+
+
+def extract_codes(page: str) -> dict[str, str]:
+    """يطلع أكواد الخصم من صفحة موقع كوبونات: {الكود: وصف قصير}. يتعرف على الكود اللي جنب كلمة code/كود."""
+    text = html.unescape(re.sub(r"<[^>]+>", " ", page))
+    text = re.sub(r"\s+", " ", text)
+    found: dict[str, str] = {}
+    pats = [r"\bCode\s+([A-Z0-9]{3,15})\b",                       # جدول الموفر: Code | NEW20
+            r"(?:coupon|code|كود|كوبون)\s*[:(\[\"']*\s*\(?([A-Z][A-Z0-9]{2,14})\)?",
+            r"\(([A-Z][A-Z0-9]{2,14})\)"]                        # الكوبون: (NEW20)
+    for pat in pats:
+        for m in re.finditer(pat, text, re.I if "coupon" in pat else 0):
+            code = m.group(1).upper()
+            if code in _NOT_CODES or code.isdigit() or not re.search(r"[A-Z]", code) or re.fullmatch(r"20\d\d", code):
+                continue
+            if not re.search(r"\d", code) and len(code) < 4:
+                continue
+            if code not in found:
+                ctx = text[max(0, m.start() - 60): m.end() + 90]
+                pct = re.search(r"(\d{1,2})\s*%", ctx)
+                cap = re.search(r"(?:up to|max(?:imum)? discount|حتى)\s*(?:SAR\s*)?(\d{2,4})", ctx, re.I)
+                found[code] = (f"{pct.group(1)}%" if pct else "") + (f" حتى {cap.group(1)} ر.س" if cap else "")
+    return found
+
+
+def collect_codes(store: str, session: requests.Session) -> list[dict]:
+    """يجمع أكواد متجر من كل مواقع الكوبونات ويرتبها حسب كم موقع ذكر الكود."""
+    agg: dict[str, dict] = {}
+    for url in CONFIG.get("coupon_sites", {}).get(store, []):
+        try:
+            r = session.get(url, timeout=25, headers={"User-Agent": USER_AGENTS[0]})
+        except requests.RequestException:
+            continue
+        if r.status_code != 200 or is_blocked(r.text):
+            continue
+        site = url.split("/")[2].replace("www.", "")
+        for code, desc in extract_codes(r.text).items():
+            a = agg.setdefault(code, {"code": code, "desc": "", "sites": set()})
+            a["sites"].add(site)
+            if len(desc) > len(a["desc"]):
+                a["desc"] = desc
+    out = sorted(agg.values(), key=lambda a: (-len(a["sites"]), a["code"]))
+    return [dict(a, sites=sorted(a["sites"])) for a in out]
+
+
+def cached_codes(state: dict, store: str, session: requests.Session) -> list[dict]:
+    c = state.setdefault("coupons", {}).get(store)
+    if not c or time.time() - c["ts"] > CONFIG.get("coupon_refresh_hours", 6) * 3600:
+        c = {"ts": time.time(), "codes": collect_codes(store, session)}
+        state["coupons"][store] = c
+    return c["codes"]
+
+
+def format_codes(store: str, codes: list[dict]) -> str:
+    label = CONFIG.get("coupon_labels", {}).get(store, store)
+    if not codes:
+        return f"🎟️ ما لقيت أكواد لـ {html.escape(label)} الحين."
+    lines = [f"🎟️ أكواد خصم <b>{html.escape(label)}</b> (مرتبة حسب كم موقع ذكرها):"]
+    for a in codes[:8]:
+        lines.append(f"• <code>{a['code']}</code> {html.escape(a['desc'])} — {len(a['sites'])} موقع")
+    lines.append("⚠️ ما جربتها عند الدفع؛ بعضها لأول طلب أو لبطاقات بنوك معينة.")
+    return "\n".join(lines)
+
+
 # ---------- أوامر تيليجرام: /find ----------
 
 FIND_MARKETS = ["sa", "almanea", "mahally"]
@@ -698,9 +766,15 @@ def handle_commands(state: dict, session: requests.Session) -> int:
             send(f"⏳ أدوّر على <b>{html.escape(query)}</b> في كل المتاجر...", silent=True)
             send(format_find(query, find_product(query, session)))
             done += 1
+        elif re.match(r"^(?:/codes|/اكواد|اكواد|كود|كوبون)(?:\s+(\S+))?$", text, re.I):
+            arg = (re.match(r"^\S+\s*(.*)$", text).group(1) or "amazon").strip().lower()
+            store = next((k for k, v in CONFIG.get("coupon_aliases", {}).items() if arg in v), arg)
+            send(format_codes(store, cached_codes(state, store, session)))
+            done += 1
         elif text.lower() in ("/start", "/help", "مساعدة"):
             send("الأوامر:\n/find اسم المنتج — أرخص سعر له في أمازون والمنيع ومحلي\n"
-                 "مثال: /find ps5 slim  أو  ابحث ايفون 16 برو 256", silent=True)
+                 "مثال: /find ps5 slim  أو  ابحث ايفون 16 برو 256\n"
+                 "/codes amazon — أكواد الخصم (amazon, noon, extra, jarir, namshi)", silent=True)
     return done
 
 
@@ -1030,7 +1104,14 @@ def run() -> int:
                          or it["price"] < prev["price"] * 0.95)  # يرجع بس إذا نزل 5% زيادة
                 # 🚨 خطأ تسعير = إشعار بصوت، باقي العروض = إشعار صامت
                 loud = any(r.startswith("🚨") for r in reasons)
-                if fresh and send(format_alert(it, market, reasons, season), silent=not loud):
+                msg = format_alert(it, market, reasons, season)
+                cstore = market.get("coupon_store")
+                if fresh and cstore:
+                    top = [a for a in cached_codes(state, cstore, session) if len(a["sites"]) >= 2][:2]
+                    if top:
+                        msg += "\n🎟️ أكواد ممكن تزيد الخصم: " + "، ".join(
+                            f"<code>{a['code']}</code> {html.escape(a['desc'])}" for a in top)
+                if fresh and send(msg, silent=not loud):
                     alerted[key] = alerted[tkey] = {"price": it["price"], "ts": now}
                     stats["alerts"] += 1
             # لا نخلي سعر الخطأ يخرب المتوسط
