@@ -394,6 +394,7 @@ def test_parse_mahally_and_arabic_rules():
 @pytest.fixture(autouse=True)
 def _no_real_browser(monkeypatch):
     monkeypatch.setattr(deals, "fetch_browser", lambda url: None)
+    monkeypatch.setattr(deals, "cached_codes", lambda state, store, session: [])  # لا نفتح مواقع الكوبونات
 
 
 def test_knockoff_phones_ignored():
@@ -704,3 +705,29 @@ def test_find_command(monkeypatch):
     state = {}
     assert deals.handle_commands(state, S()) == 1 and state["tg_offset"] == 11
     assert "أرخص أسعار" in sent[-1]
+
+
+ALMOWAFIR = ('<div>Amazon Saudi Arabia First Order Promo Code: Extra 20% Off</div><table><tr><td>Code</td><td>NEW20</td></tr>'
+             '<tr><td>Discount</td><td>20%</td></tr><tr><td>Max Discount</td><td>30 SAR</td></tr></table>'
+             '<p>Riyad Bank card code: <b>RB25</b> 25% up to 150</p> <span>KSA 2026</span>')
+ALCOUPON = ('<p>Use the Amazon coupon <strong>(NEW20)</strong> to get <strong>20% off up to SAR 30</strong></p>'
+            '<p>White Friday code <strong>(SUPER20)</strong> 10% off</p>')
+
+
+def test_extract_and_collect_codes(monkeypatch):
+    a = deals.extract_codes(ALMOWAFIR)
+    assert "NEW20" in a and "RB25" in a and "KSA" not in a and "2026" not in a
+    b = deals.extract_codes(ALCOUPON)
+    assert set(b) >= {"NEW20", "SUPER20"} and "20%" in b["NEW20"]
+    pages = {"https://almowafir.com/x": ALMOWAFIR, "https://saudi.alcoupon.com/y": ALCOUPON}
+    monkeypatch.setitem(deals.CONFIG, "coupon_sites", {"amazon": list(pages)})
+    class R:
+        def __init__(self, t):
+            self.text, self.status_code = t, 200
+    class S:
+        def get(self, url, timeout, headers=None):
+            return R(pages[url])
+    codes = deals.collect_codes("amazon", S())
+    assert codes[0]["code"] == "NEW20" and len(codes[0]["sites"]) == 2
+    msg = deals.format_codes("amazon", codes)
+    assert "NEW20" in msg and "2 موقع" in msg and "ما جربتها" in msg
