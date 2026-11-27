@@ -130,7 +130,25 @@ def probe_channel(ch: str) -> None:
         print("  •", re.sub(r"<[^>]+>|\s+", " ", t)[:160])
 
 
+def probe_app_sites() -> None:
+    """بنية صفحة iGeeksBlog (تطبيقات صارت مجانية) وعناوين RSS دونانم هابر."""
+    r = requests.get("https://www.igeeksblog.com/paid-iphone-apps-gone-free/", timeout=30, headers={"User-Agent": UA})
+    t = r.text
+    print("igeeks", r.status_code, len(t), "modified:", re.findall(r'"dateModified":"([^"]+)"', t)[:2])
+    for m in list(re.finditer(r"apps\.apple\.com/[^\"\s]*", t))[:4]:
+        print("---\n", re.sub(r"\s+", " ", t[m.start() - 900:m.start() + 150]))
+    for h in re.findall(r"<h[23][^>]*>(.*?)</h[23]>", t, re.S)[:25]:
+        print("H:", re.sub(r"<[^>]+>|\s+", " ", h).strip()[:120])
+    d = requests.get("https://www.donanimhaber.com/rss/tum/", timeout=30, headers={"User-Agent": UA}).text
+    print("dh items:", d.count("<item>"))
+    for it in re.findall(r"<item>(.*?)</item>", d, re.S)[:6]:
+        print("ITEM:", re.sub(r"\s+", " ", it)[:400])
+
+
 if __name__ == "__main__":
+    if "appsites" in (os.environ.get("PROBE_ONLY") or ""):
+        probe_app_sites()
+        sys.exit()
     if "country" in (os.environ.get("PROBE_ONLY") or ""):
         probe_country_page("https://www.trendyol.com/en/select-country?cb=%2Fen%2Fsr%3Fq%3Diphone")
     for ch in os.environ.get("PROBE_TG", "").split():
