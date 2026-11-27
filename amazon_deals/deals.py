@@ -769,6 +769,92 @@ def scan_paid_apps(state: dict, session: requests.Session) -> int:
     return sent
 
 
+def parse_app_posts(page: str) -> list[dict]:
+    """قناة عروض تطبيقات (t.me/s/...): [{pid, text, date, app_id}] — app_id من رابط App Store لو موجود."""
+    soup = BeautifulSoup(page, "html.parser")
+    out = []
+    for div in soup.select("div.tgme_widget_message[data-post]"):
+        try:
+            pid = int(div["data-post"].split("/")[-1])
+        except ValueError:
+            continue
+        txt = div.select_one(".tgme_widget_message_text")
+        if not txt:
+            continue
+        links = " ".join(a.get("href", "") for a in txt.select("a[href]"))
+        m = re.search(r"apps\.apple\.com/[^\s\"]*?id(\d{6,})|itunes\.apple\.com/[^\s\"]*?id(\d{6,})", links)
+        t = div.select_one("time[datetime]")
+        text = re.sub(r"[ \t]+", " ", txt.get_text(" ")).strip()
+        out.append({"pid": pid, "text": text, "date": t["datetime"][:10] if t else "",
+                    "app_id": (m.group(1) or m.group(2)) if m else None})
+    return out
+
+
+def app_deal_posts(session: requests.Session) -> list[dict]:
+    """آخر منشورات قنوات عروض التطبيقات (تطبيقات/اشتراكات مجانية أو مخفضة لفترة محدودة)."""
+    cfg = CONFIG.get("app_deals", {})
+    cutoff = time.strftime("%Y-%m-%d", time.gmtime(time.time() - cfg.get("days", 7) * 86400))
+    posts = []
+    for ch in cfg.get("channels", []):
+        try:
+            r = session.get(f"https://t.me/s/{ch}", timeout=20)
+        except requests.RequestException:
+            continue
+        if r.status_code == 200:
+            for p in parse_app_posts(r.text):
+                if p["date"] >= cutoff:
+                    posts.append({**p, "ch": ch})
+    posts.sort(key=lambda p: (p["date"], p["pid"]), reverse=True)
+    return posts[:cfg.get("max_posts", 8)]
+
+
+def discover_tr(state: dict, session: requests.Session) -> list[dict]:
+    """اكتشاف: أشهر تطبيقات المتجر التركي، وأي اشتراك فيها أرخص بكثير من السعودي. مخزّن 24 ساعة."""
+    cfg = CONFIG.get("app_deals", {})
+    cache = state.get("tr_discover") or {}
+    if cache and time.time() - cache.get("ts", 0) < cfg.get("discover_cache_hours", 24) * 3600:
+        return cache["rows"]
+    try:
+        feed = session.get(f"https://rss.applemarketingtools.com/api/v2/tr/apps/top-free/50/apps.json",
+                           timeout=20).json()["feed"]["results"]
+    except Exception as e:
+        print("tr discover error:", type(e).__name__)
+        return cache.get("rows", [])
+    known = set(CONFIG.get("app_subs", {}).get("apps", {}).values())
+    rows = []
+    for a in feed[:cfg.get("discover_top", 20)]:
+        if a["id"] in known:
+            continue
+        subs = [r for r in compare_subs(state, session, a["id"]) if r["cheaper"] is not None]
+        best = max(subs, key=lambda r: r["cheaper"], default=None)
+        if best and best["cheaper"] >= cfg.get("discover_min_pct", 30):
+            rows.append({"app": a["name"], "id": a["id"], **best})
+        time.sleep(0.5)
+    rows.sort(key=lambda r: r["cheaper"], reverse=True)
+    state["tr_discover"] = {"ts": time.time(), "rows": rows}
+    return rows
+
+
+def format_app_deals(posts: list[dict], disc: list[dict]) -> str:
+    lines = ["📢 <b>آخر عروض التطبيقات</b> (مجانية/مخفضة لفترة محدودة):"]
+    for p in posts:
+        txt = re.sub(r"^(?:FREE IAP|FREE|SALE)?[\s❗💥🔹✨]*", "", p["text"]).split("✨")[0].strip()
+        link = (f"https://apps.apple.com/tr/app/id{p['app_id']}" if p["app_id"]
+                else f"https://t.me/{p['ch']}/{p['pid']}")
+        lines.append(f"• {html.escape(txt[:150])}\n  🔗 <a href=\"{link}\">افتح</a> ({p['date']})")
+    if not posts:
+        lines.append("• ما فيه منشورات جديدة هالأسبوع.")
+    lines.append("\n🇹🇷 <b>اكتشافات من أشهر تطبيقات المتجر التركي</b> (اشتراك أرخص من السعودي):")
+    for r in disc[:10]:
+        lines.append(f"• <b>{html.escape(r['app'])}</b> — {html.escape(r['name'])}: "
+                     f"🇸🇦 {r['sa']:,.2f} | 🇹🇷 {r['tr_sar']:,.2f} ⬇️ {r['cheaper']}%\n"
+                     f"  🔗 <a href=\"https://apps.apple.com/tr/app/id{r['id']}\">صفحة التطبيق</a>")
+    if not disc:
+        lines.append("• ما لقيت فرق كبير اليوم.")
+    lines.append("💡 للتفاصيل: /app اسم التطبيق")
+    return "\n".join(lines)
+
+
 # ---------- أكواد الخصم (مواقع الكوبونات السعودية) ----------
 
 _NOT_CODES = {"KSA", "SAR", "USD", "AED", "VIP", "APP", "FAQ", "PDF", "NEW", "OFF", "FREE", "CODE", "COUPON", "AMAZON",
@@ -928,6 +1014,10 @@ def handle_commands(state: dict, session: requests.Session) -> int:
             store = next((k for k, v in CONFIG.get("coupon_aliases", {}).items() if arg in v), arg)
             send(format_codes(store, cached_codes(state, store, session)))
             done += 1
+        elif re.match(r"^(?:/app|/تطبيق|تطبيق|اشتراك|عروض تطبيقات)(?:\s+(?:deals|عروض|جديد|new))?$", text, re.I):
+            send("⏳ أجمع عروض التطبيقات وأقارن أشهر تطبيقات المتجر التركي...", silent=True)
+            send(format_app_deals(app_deal_posts(session), discover_tr(state, session)))
+            done += 1
         elif re.match(r"^(?:/app|/تطبيق|تطبيق|اشتراك)\s+(.+)$", text, re.I | re.S):
             term = re.match(r"^\S+\s+(.+)$", text, re.S).group(1).strip()[:60]
             app = find_app(session, term)
@@ -940,7 +1030,8 @@ def handle_commands(state: dict, session: requests.Session) -> int:
             send("الأوامر:\n/find اسم المنتج — أرخص سعر له في أمازون والمنيع ومحلي\n"
                  "مثال: /find ps5 slim  أو  ابحث ايفون 16 برو 256\n"
                  "/codes amazon — أكواد الخصم (amazon, noon, extra, jarir, namshi)\n"
-                 "/app google one — أسعار اشتراكات التطبيق 🇸🇦 مقابل 🇹🇷", silent=True)
+                 "/app google one — أسعار اشتراكات التطبيق 🇸🇦 مقابل 🇹🇷\n"
+                 "/app — عروض التطبيقات الجديدة + اكتشافات المتجر التركي", silent=True)
     return done
 
 

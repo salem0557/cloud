@@ -1734,5 +1734,15 @@
   },
   "fx_fallback": {
     "TRY": 0.09
+  },
+  "app_deals": {
+    "channels": [
+      "AppStoreDeals"
+    ],
+    "days": 7,
+    "max_posts": 8,
+    "discover_top": 20,
+    "discover_min_pct": 30,
+    "discover_cache_hours": 24
   }
 }

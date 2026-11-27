@@ -766,3 +766,30 @@ def test_app_store_subscriptions(monkeypatch):
     pages["sa"] = _iap_page([("100 GB Month", "SAR 4.99"), ("Google AI Pro (5 TB)", "SAR 79.99")])
     state["subs_last"] = 0
     assert deals.scan_subscriptions(state, None) == 1 and "100 GB Month" in sent[0] and "50%" in sent[0]
+
+
+def test_app_deal_posts_parse_and_discover(monkeypatch):
+    page = ('<div class="tgme_widget_message" data-post="AppStoreDeals/880">'
+            '<div class="tgme_widget_message_text">FREE IAP ❗ CatchSlide “Pro Lifetime” in-app purchase is now free '
+            '(was $24.99) ✨ Capture <a href="https://apps.apple.com/us/app/catchslide/id123456789">link</a></div>'
+            '<time datetime="2026-11-22T01:25:18+00:00"></time></div>')
+    posts = deals.parse_app_posts(page)
+    assert posts[0]["app_id"] == "123456789" and posts[0]["date"] == "2026-11-22"
+    posts[0]["ch"] = "AppStoreDeals"
+    rows = [{"app": "VPN X", "id": "9", "name": "Yearly", "sa": 100.0, "tr": 500.0, "tr_sar": 37.0, "cheaper": 63}]
+    msg = deals.format_app_deals(posts, rows)
+    assert "CatchSlide" in msg and "apps.apple.com/tr/app/id123456789" in msg and "63%" in msg
+
+
+def test_discover_tr_keeps_big_gaps(monkeypatch):
+    class R:
+        def json(self):
+            return {"feed": {"results": [{"id": "1", "name": "A"}, {"id": "2", "name": "B"}]}}
+    monkeypatch.setattr(deals.time, "sleep", lambda *_: None)
+    monkeypatch.setitem(deals.CONFIG, "app_deals", {"discover_min_pct": 30})
+    monkeypatch.setattr(deals, "compare_subs", lambda st, s, i: [
+        {"name": "Pro", "sa": 50.0, "tr": 1.0, "tr_sar": 40.0 if i == "1" else 20.0,
+         "cheaper": 20 if i == "1" else 60}])
+    sess = type("S", (), {"get": lambda self, *a, **k: R()})()
+    rows = deals.discover_tr({}, sess)
+    assert [r["app"] for r in rows] == ["B"]
