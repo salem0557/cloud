@@ -29,6 +29,19 @@ for app_id in ("1451784328",):
                 print("PATH", path, "keys", list(d)[:10])
                 print(json.dumps(d, ensure_ascii=False)[:2500])
                 break
+        top = data["data"][0]["data"]
+        print("top keys:", list(top)[:30])
+        sm = top.get("shelfMapping") or {}
+        print("shelfMapping keys:", list(sm)[:40])
+        for k, v in sm.items():
+            if "purchase" in k.lower() or "iap" in k.lower():
+                print("SHELF", k, json.dumps(v, ensure_ascii=False)[:3000])
+        raw = m.group(1)
+        for kw in ("In-App", "Purchases", "Premium", "Google One"):
+            j = raw.find(kw)
+            if j > 0:
+                print(f"ctx {kw}:", raw[max(0, j - 200):j + 600].replace("\n", " "))
+        print("money-like:", sorted(set(re.findall(r'"([^"]{0,25}\d+[.,]\d{2}[^"]{0,15})"', raw)))[:25])
         # أي نص فيه سعر بالعملة
         prices = sorted(set(re.findall(r'"(?:price|priceFormatted|text|subtitle)":"([^"]{0,40}(?:SAR|ر\.س|TL|₺|TRY)[^"]{0,20})"', m.group(1))))
         print("price strings:", prices[:20])
