@@ -395,6 +395,8 @@ def test_parse_mahally_and_arabic_rules():
 def _no_real_browser(monkeypatch):
     monkeypatch.setattr(deals, "fetch_browser", lambda url: None)
     monkeypatch.setattr(deals, "cached_codes", lambda state, store, session: [])  # لا نفتح مواقع الكوبونات
+    monkeypatch.setitem(deals.CONFIG, "app_subs", {})
+    monkeypatch.setitem(deals.CONFIG, "paid_apps", {})
 
 
 def test_knockoff_phones_ignored():
@@ -731,3 +733,36 @@ def test_extract_and_collect_codes(monkeypatch):
     assert codes[0]["code"] == "NEW20" and len(codes[0]["sites"]) == 2
     msg = deals.format_codes("amazon", codes)
     assert "NEW20" in msg and "2 موقع" in msg and "ما جربتها" in msg
+
+
+def _iap_page(pairs):
+    data = {"data": [{"data": {"shelfMapping": {"information": {"items": [
+        {"$kind": "Annotation", "title": "In-App Purchases", "summary": "Yes",
+         "items": [{"$kind": "textPair", "leadingText": n, "trailingText": p} for n, p in pairs]}]}}}}]}
+    return '<script type="application/json" id="serialized-server-data">' + json.dumps(data, ensure_ascii=False) + "</script>"
+
+
+def test_app_store_subscriptions(monkeypatch):
+    assert deals._num("₺3.649,99") == 3649.99 and deals._num("₺84,99") == 84.99
+    assert deals._num("SAR 7.99") == 7.99 and deals._num("1,099.00") == 1099.0
+    tr = _iap_page([("100 GB Month", "₺84,99"), ("100 GB Month", "₺84,99"), ("Google AI Pro (5 TB)", "₺539,99")])
+    sa = _iap_page([("100 GB Month", "SAR 9.99"), ("Google AI Pro (5 TB)", "SAR 79.99")])
+    assert deals.parse_iap(tr) == {"100 GB Month": 84.99, "Google AI Pro (5 TB)": 539.99}
+    pages = {"sa": sa, "tr": tr}
+    monkeypatch.setattr(deals, "app_page", lambda s, aid, cc: pages[cc])
+    monkeypatch.setattr(deals, "fx_rate", lambda st, s, cur="TRY": 0.1)
+    rows = {r["name"]: r for r in deals.compare_subs({}, None, "1")}
+    assert rows["100 GB Month"]["tr_sar"] == 8.5 and rows["100 GB Month"]["cheaper"] == 15
+    assert rows["Google AI Pro (5 TB)"]["cheaper"] == 32
+    msg = deals.format_subs("Google One", list(rows.values()))
+    assert "🇹🇷" in msg and "⬇️" in msg and "حساب تركي" in msg
+    # مراقبة: عرض بلاك فرايدي على اشتراك → تنبيه
+    monkeypatch.setitem(deals.CONFIG, "app_subs", {"apps": {"Google One": "1"}, "every_hours": 0, "drop_pct": 15})
+    monkeypatch.setattr(deals.time, "sleep", lambda x: None)
+    sent = []
+    monkeypatch.setattr(deals, "send", lambda t, silent=False: sent.append(t) or True)
+    state = {}
+    assert deals.scan_subscriptions(state, None) == 0
+    pages["sa"] = _iap_page([("100 GB Month", "SAR 4.99"), ("Google AI Pro (5 TB)", "SAR 79.99")])
+    state["subs_last"] = 0
+    assert deals.scan_subscriptions(state, None) == 1 and "100 GB Month" in sent[0] and "50%" in sent[0]
