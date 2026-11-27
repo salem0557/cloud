@@ -33,9 +33,9 @@ for app_id in ("1451784328",):
         print("top keys:", list(top)[:30])
         sm = top.get("shelfMapping") or {}
         print("shelfMapping keys:", list(sm)[:40])
-        for k, v in sm.items():
-            if "purchase" in k.lower() or "iap" in k.lower():
-                print("SHELF", k, json.dumps(v, ensure_ascii=False)[:3000])
+        info = json.dumps(sm.get("information", {}), ensure_ascii=False)
+        i = info.find("In-App")
+        print("INFORMATION shelf around In-App:", info[max(0, i - 300): i + 2500] if i >= 0 else info[:1500])
         raw = m.group(1)
         for kw in ("In-App", "Purchases", "Premium", "Google One"):
             j = raw.find(kw)
