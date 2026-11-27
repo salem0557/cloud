@@ -793,3 +793,27 @@ def test_discover_tr_keeps_big_gaps(monkeypatch):
     sess = type("S", (), {"get": lambda self, *a, **k: R()})()
     rows = deals.discover_tr({}, sess)
     assert [r["app"] for r in rows] == ["B"]
+
+
+def test_igeeks_parse_sections():
+    box = ('<!-- WP-Appbox (Version: 4.5.13 // Store: appstore // ID: {id}) --><div class="appdetails">'
+           '<a href="https://apps.apple.com/us/app/x/id{id}" class="apptitle" aria-label="x">{t}</a></div><!-- /WP-Appbox -->')
+    page = (box.format(id="6764855583", t="CrestWall") + '<h2>Today&#8217;s Apps Gone Free</h2>'
+            + box.format(id="1214814153", t="Beat Bugs: Sing-Along") + '<h2>Today&#8217;s Apps on SALE</h2>'
+            + box.format(id="1111111111", t="Sale App") + '<h2>How to Claim Free App Offers</h2>'
+            + box.format(id="2222222222", t="Footer"))
+    items = deals.parse_igeeks(page)
+    assert [(i["id"], i["section"]) for i in items] == [("1214814153", "free"), ("1111111111", "sale")]
+    msg = deals.format_app_deals([], [], [{**items[0], "tr_price": 0.0, "tr_fmt": "Ücretsiz", "name": "Beat Bugs"}],
+                                 [{"title": "Spotify Premium 3 ay ücretsiz", "link": "https://x"}])
+    assert "Beat Bugs" in msg and "مجاني الحين" in msg and "Spotify Premium" in msg
+
+
+def test_turkish_news_filter(monkeypatch):
+    rss = ("<item><title>Spotify Premium abonelik 3 ay ücretsiz</title><link>https://a</link></item>"
+           "<item><title>A101 marketler ucuza iPhone Duo satıyor</title><link>https://b</link></item>"
+           "<item><title>Bellek krizi büyüyor</title><link>https://c</link></item>")
+    monkeypatch.setitem(deals.CONFIG, "app_deals", {"tr_news_feeds": ["u"], "tr_news_need": ["ücretsiz"],
+                                                     "tr_news_topic": ["abonelik", "spotify"]})
+    sess = type("S", (), {"get": lambda self, *a, **k: type("R", (), {"text": rss})()})()
+    assert [n["link"] for n in deals.turkish_news(sess)] == ["https://a"]
