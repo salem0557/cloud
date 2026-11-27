@@ -612,6 +612,163 @@ def scan_flyers(state: dict, session: requests.Session) -> int:
     return sent
 
 
+# ---------- App Store: الاشتراكات (السعودية مقابل تركيا) والتطبيقات المدفوعة ----------
+
+def _num(txt: str) -> float | None:
+    """'₺3.649,99' / 'SAR 7.99' / '1,099.00' → رقم. الفاصل الأخير هو الكسور."""
+    t = re.sub(r"[^\d.,]", "", txt or "")
+    if not t:
+        return None
+    if "," in t and "." in t:
+        dec = "," if t.rfind(",") > t.rfind(".") else "."
+        t = t.replace("." if dec == "," else ",", "").replace(dec, ".")
+    elif "," in t:
+        t = t.replace(",", ".") if len(t.split(",")[-1]) == 2 else t.replace(",", "")
+    elif t.count(".") > 1 or (t.count(".") == 1 and len(t.split(".")[-1]) == 3):
+        t = t.replace(".", "")
+    try:
+        return float(t)
+    except ValueError:
+        return None
+
+
+def parse_iap(page: str) -> dict[str, float]:
+    """صفحة التطبيق في App Store → {اسم الاشتراك: أقل سعر}. من Annotation 'In-App Purchases' (textPair)."""
+    m = re.search(r'id="serialized-server-data"[^>]*>(.*?)</script>', page, re.S)
+    if not m:
+        return {}
+    try:
+        data = json.loads(m.group(1))
+    except ValueError:
+        return {}
+    out: dict[str, float] = {}
+    for d in _walk(data):
+        if d.get("$kind") == "Annotation" and "purchase" in str(d.get("title", "")).lower():
+            for it in d.get("items") or []:
+                if it.get("$kind") == "textPair":
+                    name, price = str(it.get("leadingText", "")).strip(), _num(it.get("trailingText", ""))
+                    if name and price:
+                        out[name] = min(price, out.get(name, price))
+    return out
+
+
+def app_page(session: requests.Session, app_id: str, cc: str) -> str | None:
+    try:
+        r = session.get(f"https://apps.apple.com/{cc}/app/id{app_id}", timeout=25,
+                        headers={"User-Agent": USER_AGENTS[0], "Accept-Language": "en-US,en;q=0.9"})
+    except requests.RequestException:
+        return None
+    return r.content.decode("utf-8", "replace") if r.status_code == 200 else None
+
+
+def fx_rate(state: dict, session: requests.Session, cur: str = "TRY") -> float:
+    """سعر صرف العملة مقابل الريال (open.er-api.com المجاني)، مخزّن 12 ساعة؛ لو فشل نستخدم config."""
+    fx = state.setdefault("fx", {})
+    c = fx.get(cur)
+    if c and time.time() - c["ts"] < 12 * 3600:
+        return c["rate"]
+    try:
+        r = session.get(f"https://open.er-api.com/v6/latest/{cur}", timeout=20).json()
+        rate = float(r["rates"]["SAR"])
+        fx[cur] = {"rate": rate, "ts": time.time()}
+        return rate
+    except Exception:
+        return CONFIG.get("fx_fallback", {}).get(cur, 0.09)
+
+
+def find_app(session: requests.Session, term: str) -> dict | None:
+    try:
+        r = session.get("https://itunes.apple.com/search", timeout=20,
+                        params={"term": term, "country": "sa", "entity": "software", "limit": 1}).json()
+    except Exception:
+        return None
+    res = r.get("results") or []
+    return res[0] if res else None
+
+
+def compare_subs(state: dict, session: requests.Session, app_id: str) -> list[dict]:
+    """اشتراكات التطبيق: سعرها في السعودية وتركيا (بالريال) ونسبة الفرق."""
+    sa, tr = parse_iap(app_page(session, app_id, "sa") or ""), parse_iap(app_page(session, app_id, "tr") or "")
+    rate = fx_rate(state, session, "TRY")
+    rows = []
+    for name in sorted(set(sa) | set(tr), key=lambda n: sa.get(n, 1e9)):
+        s_, t_ = sa.get(name), tr.get(name)
+        t_sar = round(t_ * rate, 2) if t_ else None
+        cheaper = round((1 - t_sar / s_) * 100) if s_ and t_sar else None
+        rows.append({"name": name, "sa": s_, "tr": t_, "tr_sar": t_sar, "cheaper": cheaper})
+    return rows
+
+
+def format_subs(app_name: str, rows: list[dict]) -> str:
+    if not rows:
+        return f"📱 <b>{html.escape(app_name)}</b>: ما لقيت اشتراكات ظاهرة في صفحته."
+    lines = [f"📱 اشتراكات <b>{html.escape(app_name)}</b> (🇸🇦 مقابل 🇹🇷 بالريال):"]
+    for r in rows[:12]:
+        sa = f"{r['sa']:,.2f}" if r["sa"] else "—"
+        tr = f"{r['tr_sar']:,.2f}" if r["tr_sar"] else "—"
+        tag = f" ⬇️ {r['cheaper']}%" if r["cheaper"] and r["cheaper"] > 0 else ""
+        lines.append(f"• {html.escape(r['name'])}: 🇸🇦 {sa} | 🇹🇷 {tr}{tag}")
+    lines.append("⚠️ الشراء من المتجر التركي يحتاج حساب تركي برصيد تركي، وأبل ممكن توقف الحسابات المخالفة.")
+    return "\n".join(lines)
+
+
+def scan_subscriptions(state: dict, session: requests.Session) -> int:
+    """كل few ساعات: اشتراكات التطبيقات المتابَعة. اشتراك نزل سعره (عرض بلاك فرايدي مثلاً) = تنبيه."""
+    cfg = CONFIG.get("app_subs", {})
+    last = state.get("subs_last", 0)
+    if not cfg.get("apps") or time.time() - last < cfg.get("every_hours", 6) * 3600:
+        return 0
+    state["subs_last"] = time.time()
+    seen: dict = state.setdefault("subs_prices", {})
+    sent = 0
+    for name, app_id in cfg["apps"].items():
+        for cc in ("sa", "tr"):
+            cur = parse_iap(app_page(session, app_id, cc) or "")
+            for item, price in cur.items():
+                key = f"{app_id}:{cc}:{item}"
+                prev = seen.get(key)
+                seen[key] = min(price, prev) if prev else price
+                if prev and price <= prev * (1 - cfg.get("drop_pct", 15) / 100):
+                    unit = "ر.س" if cc == "sa" else "₺"
+                    msg = (f"📱🔥 عرض اشتراك: <b>{html.escape(name)}</b> — {html.escape(item)}\n"
+                           f"{'🇸🇦' if cc == 'sa' else '🇹🇷'} {price:,.2f} {unit} بدل {prev:,.2f} "
+                           f"(أرخص {(1 - price / prev) * 100:.0f}%)\n"
+                           f'🔗 <a href="https://apps.apple.com/{cc}/app/id{app_id}">صفحة التطبيق</a>')
+                    if send(msg, silent=True):
+                        sent += 1
+            time.sleep(1)
+    return sent
+
+
+def scan_paid_apps(state: dict, session: requests.Session) -> int:
+    """أعلى التطبيقات المدفوعة في المتجر السعودي: صار مجاني أو نزل 50%+ = تنبيه."""
+    cfg = CONFIG.get("paid_apps", {})
+    if not cfg.get("enabled") or time.time() - state.get("paid_last", 0) < cfg.get("every_hours", 3) * 3600:
+        return 0
+    state["paid_last"] = time.time()
+    try:
+        feed = session.get(f"https://rss.applemarketingtools.com/api/v2/sa/apps/top-paid/{cfg.get('top', 100)}/apps.json",
+                           timeout=20).json()
+        ids = [x["id"] for x in feed["feed"]["results"]]
+        look = session.get("https://itunes.apple.com/lookup", timeout=25,
+                           params={"id": ",".join(ids), "country": "sa"}).json()
+    except Exception as e:
+        print("paid apps error:", type(e).__name__)
+        return 0
+    seen: dict = state.setdefault("paid_prices", {})
+    sent = 0
+    for a in look.get("results", []):
+        aid, price = str(a.get("trackId")), float(a.get("price") or 0)
+        prev = seen.get(aid)
+        seen[aid] = price
+        if prev and prev > 0 and (price == 0 or price <= prev * 0.5):
+            what = "صار <b>مجاني</b> 🆓" if price == 0 else f"نزل لـ {price:,.2f} ر.س بدل {prev:,.2f}"
+            if send(f"📱 {html.escape(a.get('trackName', ''))} {what}\n"
+                    f'🔗 <a href="{a.get("trackViewUrl", "")}">افتحه في App Store</a>', silent=True):
+                sent += 1
+    return sent
+
+
 # ---------- أكواد الخصم (مواقع الكوبونات السعودية) ----------
 
 _NOT_CODES = {"KSA", "SAR", "USD", "AED", "VIP", "APP", "FAQ", "PDF", "NEW", "OFF", "FREE", "CODE", "COUPON", "AMAZON",
@@ -771,10 +928,19 @@ def handle_commands(state: dict, session: requests.Session) -> int:
             store = next((k for k, v in CONFIG.get("coupon_aliases", {}).items() if arg in v), arg)
             send(format_codes(store, cached_codes(state, store, session)))
             done += 1
+        elif re.match(r"^(?:/app|/تطبيق|تطبيق|اشتراك)\s+(.+)$", text, re.I | re.S):
+            term = re.match(r"^\S+\s+(.+)$", text, re.S).group(1).strip()[:60]
+            app = find_app(session, term)
+            if not app:
+                send(f"📱 ما لقيت تطبيق باسم {html.escape(term)}")
+            else:
+                send(format_subs(app["trackName"], compare_subs(state, session, str(app["trackId"]))))
+            done += 1
         elif text.lower() in ("/start", "/help", "مساعدة"):
             send("الأوامر:\n/find اسم المنتج — أرخص سعر له في أمازون والمنيع ومحلي\n"
                  "مثال: /find ps5 slim  أو  ابحث ايفون 16 برو 256\n"
-                 "/codes amazon — أكواد الخصم (amazon, noon, extra, jarir, namshi)", silent=True)
+                 "/codes amazon — أكواد الخصم (amazon, noon, extra, jarir, namshi)\n"
+                 "/app google one — أسعار اشتراكات التطبيق 🇸🇦 مقابل 🇹🇷", silent=True)
     return done
 
 
@@ -1126,6 +1292,11 @@ def run() -> int:
 
     close_browser()
     record_experiment(state, exp_name, exp_ok, exp_blocked)
+    for fn in (scan_subscriptions, scan_paid_apps):
+        try:
+            stats["alerts"] += fn(state, session)
+        except Exception as e:
+            print(fn.__name__, "error:", type(e).__name__, e)
     try:
         stats["alerts"] += scan_flyers(state, session)
     except Exception as e:

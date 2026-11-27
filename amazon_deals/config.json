@@ -1709,5 +1709,30 @@
       "نمشي"
     ]
   },
-  "coupon_refresh_hours": 6
+  "coupon_refresh_hours": 6,
+  "app_subs": {
+    "every_hours": 6,
+    "drop_pct": 15,
+    "_note": "اشتراكات التطبيقات المتابَعة (اسم: رقم التطبيق في App Store). نزول سعر أي اشتراك بالسعودية أو تركيا = تنبيه.",
+    "apps": {
+      "Google One": "1451784328",
+      "YouTube": "544007664",
+      "Spotify": "324684580",
+      "Netflix": "363590051",
+      "ChatGPT": "6448311069",
+      "Duolingo": "570060128",
+      "Canva": "897446215",
+      "CapCut": "1500855883",
+      "Telegram": "686449807",
+      "Snapchat": "447188370"
+    }
+  },
+  "paid_apps": {
+    "enabled": true,
+    "every_hours": 3,
+    "top": 100
+  },
+  "fx_fallback": {
+    "TRY": 0.09
+  }
 }
