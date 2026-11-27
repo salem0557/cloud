@@ -1743,6 +1743,34 @@
     "max_posts": 8,
     "discover_top": 20,
     "discover_min_pct": 30,
-    "discover_cache_hours": 24
+    "discover_cache_hours": 24,
+    "igeeks_url": "https://www.igeeksblog.com/paid-iphone-apps-gone-free/",
+    "tr_news_feeds": [
+      "https://www.donanimhaber.com/rss/tum/"
+    ],
+    "tr_news_need": [
+      "ücretsiz",
+      "indirim",
+      "bedava",
+      "kampanya",
+      "%"
+    ],
+    "tr_news_topic": [
+      "app store",
+      "ios",
+      "uygulama",
+      "abonelik",
+      "oyun",
+      "spotify",
+      "youtube",
+      "netflix",
+      "icloud",
+      "apple one",
+      "apple music",
+      "chatgpt",
+      "game pass",
+      "playstation plus",
+      "disney"
+    ]
   }
 }

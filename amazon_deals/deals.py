@@ -808,6 +808,73 @@ def app_deal_posts(session: requests.Session) -> list[dict]:
     return posts[:cfg.get("max_posts", 8)]
 
 
+def parse_igeeks(page: str) -> list[dict]:
+    """iGeeksBlog 'Today's Apps Gone Free': [{id, title, section}] — section: free أو sale حسب العنوان اللي فوقه."""
+    heads = [(m.start(), re.sub(r"<[^>]+>", "", m.group(1)).lower())
+             for m in re.finditer(r"<h2[^>]*>(.*?)</h2>", page, re.S)]
+    out, seen = [], set()
+    for m in re.finditer(r"WP-Appbox \(Version: [^)]*ID: (\d{6,})\)(.*?)<!-- /WP-Appbox -->", page, re.S):
+        sec = next((h for pos, h in reversed(heads) if pos < m.start()), "")
+        section = "free" if "gone free" in sec else "sale" if "sale" in sec else None
+        if not section or m.group(1) in seen:
+            continue
+        seen.add(m.group(1))
+        t = re.search(r'class="apptitle"[^>]*>([^<]+)</a>', m.group(2))
+        out.append({"id": m.group(1), "title": html.unescape(t.group(1)).strip() if t else m.group(1),
+                    "section": section})
+    return out
+
+
+def tr_lookup(session: requests.Session, ids: list[str]) -> dict[str, dict]:
+    """سعر التطبيق الحالي في المتجر التركي (iTunes lookup) — نتأكد إن العرض شغال في تركيا."""
+    if not ids:
+        return {}
+    try:
+        r = session.get("https://itunes.apple.com/lookup", timeout=25,
+                        params={"id": ",".join(ids[:150]), "country": "tr"}).json()
+    except Exception:
+        return {}
+    return {str(a["trackId"]): a for a in r.get("results", []) if a.get("trackId")}
+
+
+def igeeks_deals(session: requests.Session) -> list[dict]:
+    url = CONFIG.get("app_deals", {}).get("igeeks_url")
+    if not url:
+        return []
+    try:
+        r = session.get(url, timeout=25)
+    except requests.RequestException:
+        return []
+    items = parse_igeeks(r.text) if r.status_code == 200 else []
+    tr = tr_lookup(session, [i["id"] for i in items])
+    out = []
+    for i in items:
+        a = tr.get(i["id"])
+        if not a:
+            continue  # مو موجود في المتجر التركي
+        out.append({**i, "tr_price": float(a.get("price") or 0), "tr_fmt": a.get("formattedPrice", ""),
+                    "name": a.get("trackName", i["title"])})
+    return out
+
+
+def turkish_news(session: requests.Session) -> list[dict]:
+    """أخبار تركية (DonanımHaber RSS) عن تطبيقات/اشتراكات مجانية أو مخفضة."""
+    cfg = CONFIG.get("app_deals", {})
+    out = []
+    for url in cfg.get("tr_news_feeds", []):
+        try:
+            r = session.get(url, timeout=25)
+        except requests.RequestException:
+            continue
+        for it in re.findall(r"<item>(.*?)</item>", r.text, re.S):
+            title = html.unescape(re.sub(r"<!\[CDATA\[|\]\]>", "", (re.search(r"<title>(.*?)</title>", it, re.S) or [None, ""])[1])).strip()
+            link = (re.search(r"<link>(.*?)</link>", it, re.S) or [None, ""])[1].strip()
+            low = title.lower()
+            if any(w in low for w in cfg.get("tr_news_need", [])) and any(w in low for w in cfg.get("tr_news_topic", [])):
+                out.append({"title": title, "link": link})
+    return out[:6]
+
+
 def discover_tr(state: dict, session: requests.Session) -> list[dict]:
     """اكتشاف: أشهر تطبيقات المتجر التركي، وأي اشتراك فيها أرخص بكثير من السعودي. مخزّن 24 ساعة."""
     cfg = CONFIG.get("app_deals", {})
@@ -835,7 +902,8 @@ def discover_tr(state: dict, session: requests.Session) -> list[dict]:
     return rows
 
 
-def format_app_deals(posts: list[dict], disc: list[dict]) -> str:
+def format_app_deals(posts: list[dict], disc: list[dict], ig: list[dict] | None = None,
+                     news: list[dict] | None = None) -> str:
     lines = ["📢 <b>آخر عروض التطبيقات</b> (مجانية/مخفضة لفترة محدودة):"]
     for p in posts:
         txt = re.sub(r"^(?:FREE IAP|FREE|SALE)?[\s❗💥🔹✨]*", "", p["text"]).split("✨")[0].strip()
@@ -844,6 +912,17 @@ def format_app_deals(posts: list[dict], disc: list[dict]) -> str:
         lines.append(f"• {html.escape(txt[:150])}\n  🔗 <a href=\"{link}\">افتح</a> ({p['date']})")
     if not posts:
         lines.append("• ما فيه منشورات جديدة هالأسبوع.")
+    free = [i for i in ig or [] if i["section"] == "free" and i["tr_price"] == 0]
+    sale = [i for i in ig or [] if i["section"] == "sale"]
+    if free or sale:
+        lines.append("\n🆓 <b>صارت مجانية/مخفضة اليوم</b> (متأكد منها في المتجر التركي):")
+        for i in (free + sale)[:10]:
+            tag = "مجاني الحين" if i["tr_price"] == 0 else f"🇹🇷 {html.escape(i['tr_fmt'])}"
+            lines.append(f"• <a href=\"https://apps.apple.com/tr/app/id{i['id']}\">{html.escape(i['name'][:60])}</a> — {tag}")
+    if news:
+        lines.append("\n📰 <b>أخبار تركية عن عروض التطبيقات والاشتراكات</b>:")
+        for n in news:
+            lines.append(f"• <a href=\"{html.escape(n['link'])}\">{html.escape(n['title'][:120])}</a>")
     lines.append("\n🇹🇷 <b>اكتشافات من أشهر تطبيقات المتجر التركي</b> (اشتراك أرخص من السعودي):")
     for r in disc[:10]:
         lines.append(f"• <b>{html.escape(r['app'])}</b> — {html.escape(r['name'])}: "
@@ -1016,7 +1095,8 @@ def handle_commands(state: dict, session: requests.Session) -> int:
             done += 1
         elif re.match(r"^(?:/app|/تطبيق|تطبيق|اشتراك|عروض تطبيقات)(?:\s+(?:deals|عروض|جديد|new))?$", text, re.I):
             send("⏳ أجمع عروض التطبيقات وأقارن أشهر تطبيقات المتجر التركي...", silent=True)
-            send(format_app_deals(app_deal_posts(session), discover_tr(state, session)))
+            send(format_app_deals(app_deal_posts(session), discover_tr(state, session),
+                                  igeeks_deals(session), turkish_news(session)))
             done += 1
         elif re.match(r"^(?:/app|/تطبيق|تطبيق|اشتراك)\s+(.+)$", text, re.I | re.S):
             term = re.match(r"^\S+\s+(.+)$", text, re.S).group(1).strip()[:60]

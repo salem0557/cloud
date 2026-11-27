@@ -36,6 +36,16 @@ STORES = {
     "app_reddit_rss": "https://www.reddit.com/r/AppHookup/new/.rss",
     "app_reddit_json": "https://www.reddit.com/r/AppHookup/new.json?limit=10",
     "app_oldreddit": "https://old.reddit.com/r/AppHookup/new/",
+    "app_iosnoops": "https://www.iosnoops.com/",
+    "app_iosnoops_free": "https://www.iosnoops.com/iphone-ipad-apps-gone-free/",
+    "app_appsliced": "https://appsliced.co/apps/iphone?sort=latest&price=free&cat=0&page=1",
+    "app_9to5toys_feed": "https://9to5toys.com/guides/apps-games/feed/",
+    "app_9to5toys_tag": "https://9to5toys.com/guides/ios/feed/",
+    "app_igeeks": "https://www.igeeksblog.com/ios-apps-price-drop/",
+    "app_appspree": "https://appspree.com/",
+    "app_donanimhaber": "https://www.donanimhaber.com/rss/tum/",
+    "app_stacksocial": "https://www.stacksocial.com/collections/apps-software",
+    "app_appadvice": "https://appadvice.com/apps-gone-free",
     "cpn_almowafir": "https://almowafir.com/en/store/amazon/",
     "cpn_everysaving": "https://www.everysavingksa.com/coupons/amazon.sa",
     "cpn_alcoupon": "https://saudi.alcoupon.com/en/discount-codes/amazon-saudi-arabia",
@@ -120,7 +130,25 @@ def probe_channel(ch: str) -> None:
         print("  •", re.sub(r"<[^>]+>|\s+", " ", t)[:160])
 
 
+def probe_app_sites() -> None:
+    """بنية صفحة iGeeksBlog (تطبيقات صارت مجانية) وعناوين RSS دونانم هابر."""
+    r = requests.get("https://www.igeeksblog.com/paid-iphone-apps-gone-free/", timeout=30, headers={"User-Agent": UA})
+    t = r.text
+    print("igeeks", r.status_code, len(t), "modified:", re.findall(r'"dateModified":"([^"]+)"', t)[:2])
+    for m in list(re.finditer(r"apps\.apple\.com/[^\"\s]*", t))[:4]:
+        print("---\n", re.sub(r"\s+", " ", t[m.start() - 900:m.start() + 150]))
+    for h in re.findall(r"<h[23][^>]*>(.*?)</h[23]>", t, re.S)[:25]:
+        print("H:", re.sub(r"<[^>]+>|\s+", " ", h).strip()[:120])
+    d = requests.get("https://www.donanimhaber.com/rss/tum/", timeout=30, headers={"User-Agent": UA}).text
+    print("dh items:", d.count("<item>"))
+    for it in re.findall(r"<item>(.*?)</item>", d, re.S)[:6]:
+        print("ITEM:", re.sub(r"\s+", " ", it)[:400])
+
+
 if __name__ == "__main__":
+    if "appsites" in (os.environ.get("PROBE_ONLY") or ""):
+        probe_app_sites()
+        sys.exit()
     if "country" in (os.environ.get("PROBE_ONLY") or ""):
         probe_country_page("https://www.trendyol.com/en/select-country?cb=%2Fen%2Fsr%3Fq%3Diphone")
     for ch in os.environ.get("PROBE_TG", "").split():
